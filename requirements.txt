@@ -1,0 +1,8 @@
+# Runtime dependencies for fishrl (kept in sync with pyproject.toml).
+numpy>=1.24
+pettingzoo>=1.24
+gymnasium>=0.29
+torch>=2.2
+
+# Dev / tests (optional): uncomment or `pip install pytest`
+# pytest>=7

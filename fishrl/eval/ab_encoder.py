@@ -61,6 +61,14 @@ def _log(msg: str) -> None:
     print(msg, flush=True)          # flush so progress shows live even when piped
 
 
+def _free(model) -> None:
+    """Drop a critic and release its CUDA blocks so 3 encoders x N seeds of fits
+    don't accumulate / fragment the allocator across the run."""
+    del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
 # ── data collection ───────────────────────────────────────────────────────────
 def _collect(label, seed, n_games, act_fn, guesser, max_decisions=2000):
     """Collect ``n_games`` and return the decided (god, y) plus per-decision inputs
@@ -87,20 +95,33 @@ def _reference_agent(iters, seed, device):
 
 
 # ── fit / eval ────────────────────────────────────────────────────────────────
-def _fit(encoder, gx, gy, device, steps):
+# Data (god, y) stays on CPU; minibatches are moved to the device. On-policy splits
+# are ~40x larger than random ones (>100k transitions), and a full-batch forward
+# through the attention encoder materializes an O(B * tokens^2) attention tensor —
+# minibatching is what keeps that off the 12 GiB ceiling.
+def _fit(encoder, gx, gy, device, steps, batch=4096):
     c = PrivilegedCritic(encoder=encoder).to(device)
     opt = torch.optim.Adam(c.parameters(), lr=2e-3)
-    ones = torch.ones_like(gy)
+    M = gx.shape[0]
+    rng = np.random.default_rng(0)
     for _ in range(steps):
-        loss = outcome_bce(c(gx), gy, ones)
+        idx = torch.from_numpy(rng.integers(0, M, size=min(batch, M)))
+        xb, yb = gx[idx].to(device), gy[idx].to(device)
+        loss = outcome_bce(c(xb), yb, torch.ones_like(yb))
         opt.zero_grad(); loss.backward(); opt.step()
     return c
 
 
-def _brier_acc(c, hx, hy):
+def _brier_acc(c, hx, hy, device, batch=4096):
+    se = correct = 0.0
+    n = hx.shape[0]
     with torch.no_grad():
-        p = torch.sigmoid(c(hx))
-    return float(((p - hy) ** 2).mean()), float(((p > 0.5).float() == hy).float().mean())
+        for s in range(0, n, batch):
+            p = torch.sigmoid(c(hx[s:s + batch].to(device))).cpu()
+            yb = hy[s:s + batch]
+            se += float(((p - yb) ** 2).sum())
+            correct += float(((p > 0.5).float() == yb).float().sum())
+    return se / n, correct / n
 
 
 def _cpu_ms_per_decision(encoder, sample, reps=300):
@@ -132,8 +153,8 @@ def _cpu_ms_per_decision(encoder, sample, reps=300):
 
 # ── learning curve (replaces the meaningless "can it overfit 3k points" test) ──
 def _learning_curve(train, holdout, device, steps, fractions=(0.1, 0.25, 0.5, 1.0)):
-    gx, gy = train["god"].to(device), train["y_p1"].to(device)
-    hx, hy = holdout["god"].to(device), holdout["y_p1"].to(device)
+    gx, gy = train["god"], train["y_p1"]                 # CPU; _fit moves minibatches
+    hx, hy = holdout["god"], holdout["y_p1"]
     M = gx.shape[0]
     _log("\n=== generalization vs data budget (held-out Brier; lower better) ===")
     header = "frac     n_train  " + "  ".join(f"{e:>9s}" for e in ENCODERS)
@@ -143,8 +164,9 @@ def _learning_curve(train, holdout, device, steps, fractions=(0.1, 0.25, 0.5, 1.
         row = []
         for enc in ENCODERS:
             c = _fit(enc, gx[:n], gy[:n], device, steps)
-            brier, _ = _brier_acc(c, hx, hy)
+            brier, _ = _brier_acc(c, hx, hy, device)
             row.append(brier)
+            _free(c)
         _log(f"{f:<8.2f} {n:<8d} " + "  ".join(f"{b:9.4f}" for b in row))
 
 
@@ -201,13 +223,14 @@ def main():
         hold = _collect("holdout", seed=si * 7919 + 104729, n_games=args.holdout_games,
                         act_fn=act, guesser=guesser)
         last_holdout = hold
-        gx, gy = train["god"].to(device), train["y_p1"].to(device)
-        hx, hy = hold["god"].to(device), hold["y_p1"].to(device)
+        gx, gy = train["god"], train["y_p1"]             # CPU; _fit moves minibatches
+        hx, hy = hold["god"], hold["y_p1"]
         for enc in encoders:
             c = _fit(enc, gx, gy, device, args.steps)
-            brier, acc = _brier_acc(c, hx, hy)
+            brier, acc = _brier_acc(c, hx, hy, device)
             briers[enc].append(brier); accs[enc].append(acc)
             _log(f"  [seed {si}] {enc:9s} holdout_brier {brier:.4f}  acc {acc:.4f}")
+            _free(c)
 
     # CPU latency is seed-independent (architecture, not data) — measure once.
     _log("\n[timing] CPU ms/decision (guesser+actor+critic, batch=1)...")

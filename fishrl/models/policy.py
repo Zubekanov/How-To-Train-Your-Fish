@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as Fn
 
-from fishrl.models.entity_encoder import EntityEncoder, layout_from_slots
+from fishrl.models.entity_encoder import build_entity_encoder, layout_from_slots
 from fishrl.models.mlp import make_mlp
 from fishrl.obs.encoder import OBS_DIM, SLOTS
 from fishrl.obs import vocab as V
@@ -32,12 +32,9 @@ def masked_log_softmax(logits: torch.Tensor, mask: torch.Tensor) -> torch.Tensor
 class MaskedActor(nn.Module):
     def __init__(self, hidden=(256, 256), encoder: str = "flat"):
         super().__init__()
-        if encoder == "entity":
-            self.enc = EntityEncoder(*layout_from_slots(SLOTS), ACTOR_IN)
-            self.net = make_mlp(self.enc.enc_dim, A.N, hidden)
-        else:
-            self.enc = None
-            self.net = make_mlp(ACTOR_IN, A.N, hidden)
+        self.enc = build_entity_encoder(encoder, *layout_from_slots(SLOTS), ACTOR_IN)
+        in_dim = self.enc.enc_dim if self.enc is not None else ACTOR_IN
+        self.net = make_mlp(in_dim, A.N, hidden)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.enc is not None:

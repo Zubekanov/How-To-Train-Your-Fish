@@ -18,19 +18,16 @@ import torch
 import torch.nn as nn
 
 from fishrl.data.features import GOD_DIM, GOD_SLOTS, PUB_DIM, PUB_SLOTS
-from fishrl.models.entity_encoder import EntityEncoder, layout_from_slots
+from fishrl.models.entity_encoder import build_entity_encoder, layout_from_slots
 from fishrl.models.mlp import make_mlp
 
 
 class _OutcomeHead(nn.Module):
     def __init__(self, total_in: int, slots: dict, hidden, encoder: str):
         super().__init__()
-        if encoder == "entity":
-            self.enc = EntityEncoder(*layout_from_slots(slots), total_in)
-            self.net = make_mlp(self.enc.enc_dim, 1, hidden)
-        else:
-            self.enc = None
-            self.net = make_mlp(total_in, 1, hidden)
+        self.enc = build_entity_encoder(encoder, *layout_from_slots(slots), total_in)
+        in_dim = self.enc.enc_dim if self.enc is not None else total_in
+        self.net = make_mlp(in_dim, 1, hidden)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.enc is not None:

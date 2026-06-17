@@ -17,7 +17,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as Fn
 
-from fishrl.models.entity_encoder import EntityEncoder, layout_from_slots
+from fishrl.models.entity_encoder import build_entity_encoder, layout_from_slots
 from fishrl.models.mlp import make_mlp
 from fishrl.obs.encoder import OBS_DIM, SLOTS
 from fishrl.obs import vocab as V
@@ -29,12 +29,9 @@ GUESSER_IN = OBS_DIM + GUESS_DIM
 class HandGuesser(nn.Module):
     def __init__(self, hidden=(256, 256), encoder: str = "flat"):
         super().__init__()
-        if encoder == "entity":
-            self.enc = EntityEncoder(*layout_from_slots(SLOTS), GUESSER_IN)
-            self.net = make_mlp(self.enc.enc_dim, GUESS_DIM, hidden)
-        else:
-            self.enc = None
-            self.net = make_mlp(GUESSER_IN, GUESS_DIM, hidden)
+        self.enc = build_entity_encoder(encoder, *layout_from_slots(SLOTS), GUESSER_IN)
+        in_dim = self.enc.enc_dim if self.enc is not None else GUESSER_IN
+        self.net = make_mlp(in_dim, GUESS_DIM, hidden)
 
     def forward(self, perspective: torch.Tensor, prev_guess: torch.Tensor) -> torch.Tensor:
         """Return expected counts (>=0), shape [..., N_NAMES]."""

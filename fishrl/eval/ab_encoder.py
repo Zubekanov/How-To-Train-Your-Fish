@@ -1,84 +1,231 @@
-"""Flat vs entity encoder A/B on the privileged critic.
+"""Encoder A/B on the privileged critic: flat vs entity vs attention.
 
-    python -m fishrl.eval.ab_encoder
+    python -m fishrl.eval.ab_encoder --gpu --seeds 3 --games 120
+    python -m fishrl.eval.ab_encoder --data onpolicy --onpolicy-iters 20   # on-policy states
+    python -m fishrl.eval.ab_encoder --learning-curve                      # Brier vs data budget
 
-Collects a fixed train batch and a held-out batch from random self-play, fits each
-encoder's privileged critic to the terminal outcome (BCE), and reports held-out
-Brier / accuracy and parameter counts. We compare flat-vs-entity head-to-head on
-identical data rather than against an expected-zero loss: with a stochastic policy
-and a hidden shared library the god-state value has an irreducible aleatoric floor,
-so an absolute value-loss level is NOT a clean signal of encoder capacity.
+WHAT THIS MEASURES (and the traps it is built to avoid)
+-------------------------------------------------------
+The critic predicts P(p1 wins) from god-state; lower held-out Brier = better-
+calibrated value head = lower-variance advantages. But a naive single-batch Brier
+ranking is *not* a result, for three reasons this harness addresses:
+
+1. Effective sample size is the number of GAMES, not transitions. Transitions
+   within a game are heavily autocorrelated (one shuffle, one trajectory, a few
+   swing moments decide the label), so 2k transitions from 6 games carry ~6 games'
+   worth of independent signal. We therefore collect many games per split and
+   report Brier/accuracy as **mean ± std across independent seeds** (each seed =
+   fresh data draw + fresh critic init). A ranking without that error bar is noise.
+
+2. CPU throughput is the co-equal axis, and it is the one that actually decides the
+   encoder. Rollout collection is CPU-bound on the (pure-Python) engine and the
+   actors run on a CPU server, so attention over ~118 entities can win on Brier yet
+   lose the run by halving samples/sec. We report **CPU milliseconds per decision**
+   (guesser + actor + critic, batch=1, on CPU) alongside Brier. Parameter count is
+   reported but de-emphasised — VRAM is cheap; CPU latency is not.
+
+3. Random self-play is the WRONG distribution. The critic ultimately sees on-policy
+   states from a partially-trained agent, not random-vs-random games. ``--data
+   random`` (default, cheap) only probes capacity/calibration on an off-distribution
+   set; ``--data onpolicy`` trains a shared reference agent for ``--onpolicy-iters``
+   and collects from it, which is the distribution the decision should rest on.
+
+The decision metric is Brier-per-CPU-ms with an error bar, on on-policy data — not
+any single number below.
 """
 from __future__ import annotations
 
 import argparse
+import statistics
+import time
 
 import numpy as np
 import torch
 
+from fishrl.data.features import GOD_DIM
 from fishrl.models.estimators import PrivilegedCritic
 from fishrl.models.guesser import HandGuesser
+from fishrl.models.policy import ACTOR_IN, MaskedActor
+from fishrl.obs import vocab as V
+from fishrl.obs.encoder import OBS_DIM
+from fishrl.spaces import action_space as A
 from fishrl.train.belief_env import BeliefAugmentedEnv
-from fishrl.train.collector import collect_games, random_act_fn
-from fishrl.train.config import resolve_device
+from fishrl.train.collector import actor_act_fn, collect_games, random_act_fn
+from fishrl.train.config import Config, resolve_device
 from fishrl.train.losses import outcome_bce
+
+ENCODERS = ("flat", "entity", "attention")
 
 
 def _log(msg: str) -> None:
     print(msg, flush=True)          # flush so progress shows live even when piped
 
 
-def _batch(label, seed, n_games=6):
-    _log(f"[collect] {label}: {n_games} random self-play games (seed {seed})...")
-    benv = BeliefAugmentedEnv(HandGuesser(), max_decisions=2000)
-    buf = collect_games(benv, random_act_fn(np.random.default_rng(seed)), n_games, seed,
-                        critic=None, max_decisions=2000)
+# ── data collection ───────────────────────────────────────────────────────────
+def _collect(label, seed, n_games, act_fn, guesser, max_decisions=2000):
+    """Collect ``n_games`` and return the decided (god, y) plus per-decision inputs
+    for the CPU-latency probe (x_act, persp, prev_guess)."""
+    benv = BeliefAugmentedEnv(guesser, max_decisions=max_decisions)
+    buf = collect_games(benv, act_fn, n_games, seed, critic=None, max_decisions=max_decisions)
     b = buf.compute(0.997, 0.95)
     keep = b["valid"] > 0
-    god, y = b["god"][keep], b["y_p1"][keep]
-    _log(f"[collect] {label}: {god.shape[0]} decided transitions "
-         f"(p1 win rate {float(y.mean()):.2f})")
-    return god, y
+    out = {k: b[k][keep] for k in ("god", "y_p1", "x_act", "persp", "prev_guess")}
+    _log(f"  [collect] {label}: {n_games} games -> {int(keep.sum())} decided "
+         f"transitions (p1 win rate {float(out['y_p1'].mean()):.2f})")
+    return out
 
 
-def _fit_eval(encoder, train, holdout, device="cpu", steps=400, log_every=50):
-    gx, gy = (t.to(device) for t in train)
-    hx, hy = (t.to(device) for t in holdout)
+def _reference_agent(iters, seed, device):
+    """Train a shared, encoder-agnostic reference agent so on-policy data reflects a
+    partially-trained policy's state distribution (not random self-play)."""
+    from fishrl.train.train_loop import build_models, train
+    _log(f"[onpolicy] training reference agent (flat, {iters} iters, seed {seed})...")
+    cfg = Config(device=device, iters=iters, encoder="flat", seed=seed,
+                 games_per_iter=8, warmup_games=32)
+    m = train(cfg, build_models(cfg), log=lambda s: _log(f"  {s}"))
+    return actor_act_fn(m.actor), m.guesser
+
+
+# ── fit / eval ────────────────────────────────────────────────────────────────
+def _fit(encoder, gx, gy, device, steps):
     c = PrivilegedCritic(encoder=encoder).to(device)
-    params = sum(pp.numel() for pp in c.parameters())
-    _log(f"[fit] {encoder}: training privileged critic "
-         f"({params:,} params) for {steps} steps...")
     opt = torch.optim.Adam(c.parameters(), lr=2e-3)
     ones = torch.ones_like(gy)
-    for step in range(1, steps + 1):
+    for _ in range(steps):
         loss = outcome_bce(c(gx), gy, ones)
         opt.zero_grad(); loss.backward(); opt.step()
-        if step % log_every == 0 or step == steps:
-            _log(f"[fit] {encoder}: step {step}/{steps}  train_bce {float(loss):.4f}")
+    return c
+
+
+def _brier_acc(c, hx, hy):
     with torch.no_grad():
         p = torch.sigmoid(c(hx))
-        brier = float(((p - hy) ** 2).mean())
-        acc = float(((p > 0.5).float() == hy).float().mean())
-    res = {"encoder": encoder, "holdout_brier": round(brier, 4),
-           "holdout_acc": round(acc, 4), "params": params}
-    _log(f"[result] {res}")
-    return res
+    return float(((p - hy) ** 2).mean()), float(((p > 0.5).float() == hy).float().mean())
+
+
+def _cpu_ms_per_decision(encoder, sample, reps=300):
+    """Wall-clock ms for one decision's forward passes (guesser + actor + critic,
+    batch=1) on CPU — the deciding cost axis, since collection/actors run on CPU."""
+    torch.manual_seed(0)
+    actor = MaskedActor(encoder=encoder).eval()
+    critic = PrivilegedCritic(encoder=encoder).eval()
+    guesser = HandGuesser(encoder=encoder).eval()
+    xs = sample["x_act"].cpu(); gs = sample["god"].cpu()
+    ps = sample["persp"].cpu(); pg = sample["prev_guess"].cpu()
+    n = xs.shape[0]
+    mask = torch.ones(1, A.N)
+
+    def one(i):
+        guesser(ps[i:i + 1], pg[i:i + 1])         # belief (runs first, in env.observe)
+        actor.log_probs(xs[i:i + 1], mask)        # policy
+        critic.p1_winprob(gs[i:i + 1])            # value
+
+    with torch.no_grad():
+        for i in range(min(5, n)):                # warm caches / lazy init
+            one(i)
+        t0 = time.perf_counter()
+        for r in range(reps):
+            one(r % n)
+        dt = time.perf_counter() - t0
+    return 1000.0 * dt / reps
+
+
+# ── learning curve (replaces the meaningless "can it overfit 3k points" test) ──
+def _learning_curve(train, holdout, device, steps, fractions=(0.1, 0.25, 0.5, 1.0)):
+    gx, gy = train["god"].to(device), train["y_p1"].to(device)
+    hx, hy = holdout["god"].to(device), holdout["y_p1"].to(device)
+    M = gx.shape[0]
+    _log("\n=== generalization vs data budget (held-out Brier; lower better) ===")
+    header = "frac     n_train  " + "  ".join(f"{e:>9s}" for e in ENCODERS)
+    _log(header)
+    for f in fractions:
+        n = max(int(M * f), 1)
+        row = []
+        for enc in ENCODERS:
+            c = _fit(enc, gx[:n], gy[:n], device, steps)
+            brier, _ = _brier_acc(c, hx, hy)
+            row.append(brier)
+        _log(f"{f:<8.2f} {n:<8d} " + "  ".join(f"{b:9.4f}" for b in row))
+
+
+# ── main ──────────────────────────────────────────────────────────────────────
+def _agg(xs):
+    m = statistics.mean(xs)
+    s = statistics.stdev(xs) if len(xs) > 1 else 0.0
+    return m, s
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Flat vs entity encoder A/B on the privileged critic.")
+    ap = argparse.ArgumentParser(description="Encoder A/B on the privileged critic.")
     ap.add_argument("--gpu", action="store_true", help="fit critics on CUDA if available")
+    ap.add_argument("--encoders", nargs="+", default=list(ENCODERS))
+    ap.add_argument("--seeds", type=int, default=3, help="independent data+init draws (error bar)")
+    ap.add_argument("--games", type=int, default=120, help="games per train split")
+    ap.add_argument("--holdout-games", type=int, default=120, help="games per holdout split")
+    ap.add_argument("--steps", type=int, default=300, help="critic fit steps")
+    ap.add_argument("--reps", type=int, default=300, help="timing reps for CPU ms/decision")
+    ap.add_argument("--data", choices=["random", "onpolicy"], default="random",
+                    help="random self-play (cheap, off-distribution) or on-policy from a "
+                         "partially-trained reference agent (the distribution that matters)")
+    ap.add_argument("--onpolicy-iters", type=int, default=20, help="reference-agent train iters")
+    ap.add_argument("--learning-curve", action="store_true",
+                    help="also report held-out Brier vs train-data budget (seed 0)")
     args = ap.parse_args()
     device = resolve_device(args.gpu)
-    _log(f"=== flat vs entity encoder A/B (privileged critic) | device {device} ===")
-    train = _batch("train", seed=0)
-    holdout = _batch("holdout", seed=999)
-    results = [_fit_eval(enc, train, holdout, device=device) for enc in ("flat", "entity")]
-    _log("=== summary ===")
-    for r in results:
-        _log(str(r))
-    winner = min(results, key=lambda r: r["holdout_brier"])["encoder"]
-    _log(f"lower held-out Brier (better-calibrated critic): {winner}")
+    encoders = [e for e in args.encoders if e in ENCODERS]
+
+    _log(f"=== encoder A/B {encoders} | device {device} | data={args.data} ===")
+    _log(f"    {args.seeds} seeds x ({args.games} train / {args.holdout_games} holdout) games"
+         f"; fit {args.steps} steps")
+    if args.data == "random":
+        _log("    NOTE: random self-play is OFF the on-policy distribution -- these numbers")
+        _log("          bound capacity/calibration only. Use --data onpolicy to decide.")
+
+    # Shared reference agent for on-policy data (one agent; seeds vary the trajectories).
+    ref_act, ref_guesser = (None, None)
+    if args.data == "onpolicy":
+        ref_act, ref_guesser = _reference_agent(args.onpolicy_iters, seed=0, device=device)
+
+    def make_act_and_guesser(seed):
+        if args.data == "onpolicy":
+            return ref_act, ref_guesser
+        return random_act_fn(np.random.default_rng(seed)), HandGuesser()
+
+    briers = {e: [] for e in encoders}
+    accs = {e: [] for e in encoders}
+    last_holdout = None
+    for si in range(args.seeds):
+        _log(f"\n[seed {si}] collecting...")
+        act, guesser = make_act_and_guesser(seed=si)
+        train = _collect("train", seed=si * 7919, n_games=args.games, act_fn=act, guesser=guesser)
+        hold = _collect("holdout", seed=si * 7919 + 104729, n_games=args.holdout_games,
+                        act_fn=act, guesser=guesser)
+        last_holdout = hold
+        gx, gy = train["god"].to(device), train["y_p1"].to(device)
+        hx, hy = hold["god"].to(device), hold["y_p1"].to(device)
+        for enc in encoders:
+            c = _fit(enc, gx, gy, device, args.steps)
+            brier, acc = _brier_acc(c, hx, hy)
+            briers[enc].append(brier); accs[enc].append(acc)
+            _log(f"  [seed {si}] {enc:9s} holdout_brier {brier:.4f}  acc {acc:.4f}")
+
+    # CPU latency is seed-independent (architecture, not data) — measure once.
+    _log("\n[timing] CPU ms/decision (guesser+actor+critic, batch=1)...")
+    ms = {e: _cpu_ms_per_decision(e, last_holdout, reps=args.reps) for e in encoders}
+    params = {e: sum(p.numel() for p in PrivilegedCritic(encoder=e).parameters()) for e in encoders}
+
+    _log("\n=== summary (mean +/- std across seeds) ===")
+    _log(f"{'encoder':9s} {'holdout_brier':>16s} {'holdout_acc':>16s} "
+         f"{'cpu_ms/dec':>11s} {'brier*ms':>9s} {'critic_params':>14s}")
+    for enc in encoders:
+        bm, bs = _agg(briers[enc]); am, asd = _agg(accs[enc])
+        _log(f"{enc:9s} {bm:7.4f} +/-{bs:6.4f} {am:7.4f} +/-{asd:6.4f} "
+             f"{ms[enc]:11.3f} {bm * ms[enc]:9.4f} {params[enc]:14,d}")
+    _log("\nDecision metric = Brier*ms (lower better): calibration weighted by CPU cost.")
+    _log("With overlapping +/-std the encoders are statistically tied -- add seeds/games.")
+
+    if args.learning_curve:
+        _learning_curve(train, hold, device, args.steps)
 
 
 if __name__ == "__main__":

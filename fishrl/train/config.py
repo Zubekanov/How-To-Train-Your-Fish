@@ -44,10 +44,11 @@ class Config:
     warmup_epochs: int = 3
     iters: int = 100
     hidden: tuple = (256, 256)
-    # Front-end encoder: "flat" (MLP over the raw observation) or "entity" (shared
-    # card-embedding encoder; far fewer params, composes relational structure).
-    # Default "flat" so behaviour is unchanged until the A/B (eval/ab_encoder) backs
-    # flipping it. The critic is off the inference path, so it gets more capacity;
+    # Front-end encoder: "flat" (MLP over the raw observation), "entity" (shared
+    # card-embedding encoder, masked mean/max pool; far fewer params), or "attention"
+    # (the entity front-end + cross-zone self-attention and a learned per-zone
+    # attention pool — relational, less lossy than mean/max). Default "flat" so
+    # behaviour is unchanged until the A/B (eval/ab_encoder) backs flipping it. The critic is off the inference path, so it gets more capacity;
     # under MC-ish returns (lam≈1) that lowers advantage VARIANCE — lower `lam` to
     # make the bigger critic bias-relevant via bootstrapping.
     encoder: str = "flat"

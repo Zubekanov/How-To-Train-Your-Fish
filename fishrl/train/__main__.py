@@ -22,7 +22,7 @@ def main():
     ap.add_argument("--iters", type=int, default=100)
     ap.add_argument("--games-per-iter", type=int, default=8)
     ap.add_argument("--warmup-games", type=int, default=64)
-    ap.add_argument("--encoder", choices=["flat", "entity"], default="flat")
+    ap.add_argument("--encoder", choices=["flat", "entity", "attention"], default="flat")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--ckpt-dir", default="checkpoints")
     args = ap.parse_args()

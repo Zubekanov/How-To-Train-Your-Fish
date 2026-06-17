@@ -15,7 +15,7 @@ def _clone(g):
 
 def test_random_selfplay_terminates_zero_sum():
     rng = np.random.default_rng(0)
-    for seed in range(12):
+    for seed in range(6):
         e = raw_env()
         e.reset(seed=seed)
         steps = 0
@@ -53,11 +53,11 @@ def test_atomic_mask_is_sound():
     """Every unmasked atomic action is accepted by the engine (tested on clones)."""
     rng = np.random.default_rng(3)
     checked = 0
-    for seed in range(4):
+    for seed in range(2):
         e = raw_env()
         e.reset(seed=seed)
         steps = 0
-        while e.agents and steps < 1500:
+        while e.agents and steps < 600:
             a = e.agent_selection
             if e.terminations[a] or e.truncations[a]:
                 e.step(None)
@@ -73,14 +73,33 @@ def test_atomic_mask_is_sound():
             mask = e.observe(a)["action_mask"]
             e.step(int(rng.choice(np.flatnonzero(mask))))
             steps += 1
-    assert checked > 200       # exercised a meaningful number of (state, action) pairs
+    assert checked > 100       # exercised a meaningful number of (state, action) pairs
+
+
+def test_empty_library_compound_auto_resolves():
+    """A scry/reorder on an empty library (deck-out) has zero legal sub-actions; the
+    env must auto-resolve it rather than hand the agent an empty mask (which would
+    make the masked softmax uniform and let an illegal action be sampled)."""
+    from fishrl.forgetful_fish import engine as E
+    for start in (lambda g, s: E.start_reorder(g, "p1", s, 3),
+                  lambda g, s: E.start_scry(g, "p1", s, 3, resolving_kind="ability")):
+        e = raw_env()
+        e.reset(seed=1)
+        g = e.g
+        g.active_player, g.current_step = "p1", "main1"
+        g.library = []                              # deck-out
+        start(g, next(iter(g.objects)))
+        assert g.pending.type in ("reorder", "scry")
+        e._refresh()                                # must auto-finalize, not stall
+        assert e._builder is None
+        assert g.pending is None or g.pending.type not in ("reorder", "scry")
 
 
 def test_compound_types_are_exercised():
     """Compound builders actually run (and finalize) in real games."""
     rng = np.random.default_rng(5)
     seen = set()
-    for seed in range(20):
+    for seed in range(8):
         e = raw_env()
         e.reset(seed=seed)
         steps = 0

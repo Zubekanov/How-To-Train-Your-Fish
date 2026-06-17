@@ -32,6 +32,14 @@ class Config:
     warmup_epochs: int = 3
     iters: int = 100
     hidden: tuple = (256, 256)
+    # Front-end encoder: "flat" (MLP over the raw observation) or "entity" (shared
+    # card-embedding encoder; far fewer params, composes relational structure).
+    # Default "flat" so behaviour is unchanged until the A/B (eval/ab_encoder) backs
+    # flipping it. The critic is off the inference path, so it gets more capacity;
+    # under MC-ish returns (lam≈1) that lowers advantage VARIANCE — lower `lam` to
+    # make the bigger critic bias-relevant via bootstrapping.
+    encoder: str = "flat"
+    critic_hidden: tuple = (512, 512, 256)
     seed: int = 0
     ckpt_dir: str = "checkpoints"
 

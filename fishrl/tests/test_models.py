@@ -1,5 +1,6 @@
-"""Model shapes, masked-softmax legality, and head ranges."""
+"""Model shapes, masked-softmax legality, and head ranges (flat and entity)."""
 import numpy as np
+import pytest
 import torch
 
 from fishrl.data.features import GOD_DIM, PUB_DIM
@@ -10,10 +11,13 @@ from fishrl.obs.encoder import OBS_DIM
 from fishrl.obs import vocab as V
 from fishrl.spaces import action_space as A
 
+ENCODERS = ["flat", "entity"]
 
-def test_actor_in_out_dims():
+
+@pytest.mark.parametrize("encoder", ENCODERS)
+def test_actor_in_out_dims(encoder):
     assert ACTOR_IN == OBS_DIM + V.N_NAMES
-    actor = MaskedActor()
+    actor = MaskedActor(encoder=encoder)
     x = torch.zeros(4, ACTOR_IN)
     assert actor(x).shape == (4, A.N)
 
@@ -34,16 +38,18 @@ def test_masked_softmax_legal_support_and_sampling():
         assert a in legal
 
 
-def test_guesser_nonneg_and_dims():
+@pytest.mark.parametrize("encoder", ENCODERS)
+def test_guesser_nonneg_and_dims(encoder):
     assert GUESSER_IN == OBS_DIM + GUESS_DIM
-    gss = HandGuesser()
+    gss = HandGuesser(encoder=encoder)
     out = gss(torch.zeros(3, OBS_DIM), torch.zeros(3, GUESS_DIM))
     assert out.shape == (3, GUESS_DIM)
     assert torch.all(out >= 0)
 
 
-def test_estimators_winprob_range():
-    pc, pe = PrivilegedCritic(), PublicEstimator()
+@pytest.mark.parametrize("encoder", ENCODERS)
+def test_estimators_winprob_range(encoder):
+    pc, pe = PrivilegedCritic(encoder=encoder), PublicEstimator(encoder=encoder)
     with torch.no_grad():
         wp = pc.p1_winprob(torch.zeros(2, GOD_DIM))
     assert float(wp.min()) >= 0.0 and float(wp.max()) <= 1.0

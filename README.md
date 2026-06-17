@@ -79,6 +79,19 @@ damage/counters; tapped / summoning-sick / controller-is-self; and a known bit.
 Text changes (Mind Bend / Crystal Spray / Vision Charm) are thus fully visible to
 agents, including which basic type a permanent currently is.
 
+### Front-end encoder (`Config.encoder`)
+
+`"flat"` (default) is an MLP over the raw observation. `"entity"` reshapes the same
+flat vector into per-card rows and applies a **shared card encoder** (name embedding
++ feature MLP, learned once and reused across every zone/slot), with zone and
+positional embeddings and masked mean+max pooling per zone — far fewer params
+(actor 1.48M→0.43M) and built to compose relational structure. Both nets share the
+trunk; the critic gets more capacity (`Config.critic_hidden`) since it is off the
+inference path. Compare them with `python -m fishrl.eval.ab_encoder`. NOTE: on the
+current privileged-critic A/B, flat still wins (held-out Brier 0.23 vs 0.35), so the
+default stays `"flat"` — the entity encoder likely needs attention (not just
+pooling) to beat it; that's the noted follow-up before flipping the default.
+
 ## Layout
 
 ```

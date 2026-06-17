@@ -40,7 +40,12 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef) -> dict:
 
 
 def aux_update(batch, guesser, public_est, opt_g, opt_p, steps: int) -> dict:
-    """A few SGD steps on the guesser (Poisson) and public estimator (BCE)."""
+    """A few SGD steps on the guesser (Poisson) and public estimator (BCE).
+
+    These are the only places the guesser and public estimator are trained — both
+    purely supervised on the rollout's targets, never through the policy gradient.
+    The guesser is thus an honest posterior; the public estimator is diagnostic
+    (it is not the critic — only the privileged critic computes advantages)."""
     g_loss = p_loss = 0.0
     for _ in range(max(steps, 1)):
         pred = guesser(batch["persp"], batch["prev_guess"])

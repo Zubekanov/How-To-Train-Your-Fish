@@ -164,6 +164,18 @@ class CompoundBuilder:
             return False
         return False  # pragma: no cover
 
+    def autofinalize(self, g) -> bool:
+        """Resolve a builder that has NO legal sub-action — only `scry`/`reorder`
+        on an empty library (deck-out), where there are zero cards to arrange.
+        Completing with empty arguments is the correct no-op; the env calls this so
+        the agent is never handed an empty action mask (which would otherwise make
+        the masked softmax uniform and let an illegal action be sampled)."""
+        if self.ptype == "scry":
+            return self._finalize(E.complete_scry(g, self.player, [], []))
+        if self.ptype == "reorder":
+            return self._finalize(E.complete_reorder(g, self.player, []))
+        raise RuntimeError(f"cannot autofinalize a {self.ptype} builder with an empty mask")
+
     def progress(self) -> float:
         """Fraction of this compound decision already specified (0..1)."""
         n = len(self.items) or 1

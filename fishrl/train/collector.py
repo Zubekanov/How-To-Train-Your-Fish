@@ -50,7 +50,8 @@ def collect_games(belief_env, act_fn, n_games, base_seed, critic=None,
             g = belief_env.g
             god = encode_god(g)
             value = 0.0
-            if critic is not None:
+            if critic is not None:                     # the privileged critic is the ONLY
+                # value head in the advantage loop (asymmetric actor-critic).
                 with torch.no_grad():
                     p_p1 = float(critic.p1_winprob(torch.as_tensor(god).unsqueeze(0))[0])
                 value = p1_winprob_to_seat_value(p_p1, agent)

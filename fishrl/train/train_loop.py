@@ -28,8 +28,12 @@ class Models:
 
 def build_models(cfg: Config) -> Models:
     torch.manual_seed(cfg.seed)
-    return Models(MaskedActor(cfg.hidden), PrivilegedCritic(cfg.hidden),
-                  HandGuesser(cfg.hidden), PublicEstimator(cfg.hidden))
+    return Models(
+        MaskedActor(cfg.hidden, cfg.encoder),
+        PrivilegedCritic(cfg.critic_hidden, cfg.encoder),
+        HandGuesser(cfg.hidden, cfg.encoder),
+        PublicEstimator(cfg.hidden, cfg.encoder),
+    )
 
 
 def train(cfg: Config, models: Models | None = None, log=print) -> Models:

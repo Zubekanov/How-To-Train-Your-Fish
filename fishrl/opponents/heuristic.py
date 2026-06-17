@@ -41,13 +41,20 @@ class HeuristicMatch:
         return self._obs()
 
     def _sync(self) -> None:
-        """Ensure a compound builder exists iff p1's current pending needs one."""
-        pend = self.g.pending
-        if pend is not None and pend.player == SEAT and pend.type in COMPOUND_TYPES:
-            if self._builder is None:
-                self._builder = CompoundBuilder(self.g, SEAT, pend.type, pend.context or {})
-        else:
-            self._builder = None
+        """Ensure a compound builder exists iff p1's current pending needs one;
+        auto-resolve an empty-mask builder (empty-library scry/reorder)."""
+        while True:
+            pend = self.g.pending
+            if pend is not None and pend.player == SEAT and pend.type in COMPOUND_TYPES:
+                if self._builder is None:
+                    self._builder = CompoundBuilder(self.g, SEAT, pend.type, pend.context or {})
+                if int(self._builder.mask().sum()) == 0:
+                    self._builder.autofinalize(self.g)
+                    self._builder = None
+                    continue
+            else:
+                self._builder = None
+            return
 
     def _obs(self) -> dict:
         if self._builder is not None:

@@ -1,0 +1,324 @@
+[
+  {
+    "qty": 4,
+    "name": "Accumulated Knowledge",
+    "mana_cost": "{1}{U}",
+    "type_line": "Instant",
+    "oracle_text": "Draw a card, then draw cards equal to the number of cards named Accumulated Knowledge in all graveyards.",
+    "power": null,
+    "toughness": null,
+    "colors": [
+      "U"
+    ],
+    "artist": "Randy Gallegos",
+    "set": "NEM",
+    "collector_number": "26",
+    "art": "/static/img/fish/nem_26.jpg"
+  },
+  {
+    "qty": 3,
+    "name": "Brainstorm",
+    "mana_cost": "{U}",
+    "type_line": "Instant",
+    "oracle_text": "Draw three cards, then put two cards from your hand on top of your library in any order.",
+    "power": null,
+    "toughness": null,
+    "colors": [
+      "U"
+    ],
+    "artist": "DiTerlizzi",
+    "set": "MMQ",
+    "collector_number": "61",
+    "art": "/static/img/fish/mmq_61.jpg"
+  },
+  {
+    "qty": 3,
+    "name": "Crystal Spray",
+    "mana_cost": "{2}{U}",
+    "type_line": "Instant",
+    "oracle_text": "Change the text of target spell or permanent by replacing all instances of one color word with another or one basic land type with another until end of turn.\nDraw a card.",
+    "power": null,
+    "toughness": null,
+    "colors": [
+      "U"
+    ],
+    "artist": "Jeff Miracola",
+    "set": "INV",
+    "collector_number": "50",
+    "art": "/static/img/fish/inv_50.jpg"
+  },
+  {
+    "qty": 5,
+    "name": "Dandân",
+    "mana_cost": "{U}{U}",
+    "type_line": "Creature — Fish",
+    "oracle_text": "This creature can't attack unless defending player controls an Island.\nWhen you control no Islands, sacrifice this creature.",
+    "power": "4",
+    "toughness": "1",
+    "colors": [
+      "U"
+    ],
+    "artist": "Kelogsloops",
+    "set": "SLD",
+    "collector_number": "2138",
+    "art": "/static/img/fish/sld_2138.jpg"
+  },
+  {
+    "qty": 5,
+    "name": "Dandân",
+    "mana_cost": "{U}{U}",
+    "type_line": "Creature — Fish",
+    "oracle_text": "This creature can't attack unless defending player controls an Island.\nWhen you control no Islands, sacrifice this creature.",
+    "power": "4",
+    "toughness": "1",
+    "colors": [
+      "U"
+    ],
+    "artist": "Kelogsloops",
+    "set": "SLD",
+    "collector_number": "2139",
+    "art": "/static/img/fish/sld_2139.jpg"
+  },
+  {
+    "qty": 2,
+    "name": "Day's Undoing",
+    "mana_cost": "{2}{U}",
+    "type_line": "Sorcery",
+    "oracle_text": "Each player shuffles their hand and graveyard into their library, then draws seven cards. If it's your turn, end the turn. (Exile all spells and abilities from the stack, including this card. Discard down to your maximum hand size. Damage wears off, and \"this turn\" and \"until end of turn\" effects end.)",
+    "power": null,
+    "toughness": null,
+    "colors": [
+      "U"
+    ],
+    "artist": "Jonas De Ro",
+    "set": "SLD",
+    "collector_number": "2153",
+    "art": "/static/img/fish/sld_2153.jpg"
+  },
+  {
+    "qty": 2,
+    "name": "Fact or Fiction",
+    "mana_cost": "{3}{U}",
+    "type_line": "Instant",
+    "oracle_text": "Reveal the top five cards of your library. An opponent separates those cards into two piles. Put one pile into your hand and the other into your graveyard.",
+    "power": null,
+    "toughness": null,
+    "colors": [
+      "U"
+    ],
+    "artist": "Terese Nielsen",
+    "set": "INV",
+    "collector_number": "57",
+    "art": "/static/img/fish/inv_57.jpg"
+  },
+  {
+    "qty": 2,
+    "name": "Halimar Depths",
+    "mana_cost": "",
+    "type_line": "Land",
+    "oracle_text": "This land enters tapped.\nWhen this land enters, look at the top three cards of your library, then put them back in any order.\n{T}: Add {U}.",
+    "power": null,
+    "toughness": null,
+    "colors": [],
+    "artist": "Volkan Baǵa",
+    "set": "SLD",
+    "collector_number": "2159",
+    "art": "/static/img/fish/sld_2159.jpg"
+  },
+  {
+    "qty": 20,
+    "name": "Island",
+    "mana_cost": "",
+    "type_line": "Basic Land — Island",
+    "oracle_text": "({T}: Add {U}.)",
+    "power": null,
+    "toughness": null,
+    "colors": [],
+    "artist": "Douglas Shuler",
+    "set": "MIR",
+    "collector_number": "338",
+    "art": "/static/img/fish/mir_338.jpg"
+  },
+  {
+    "qty": 4,
+    "name": "Lonely Sandbar",
+    "mana_cost": "",
+    "type_line": "Land",
+    "oracle_text": "This land enters tapped.\n{T}: Add {U}.\nCycling {U} ({U}, Discard this card: Draw a card.)",
+    "power": null,
+    "toughness": null,
+    "colors": [],
+    "artist": "Heather Hudson",
+    "set": "ONS",
+    "collector_number": "320",
+    "art": "/static/img/fish/ons_320.jpg"
+  },
+  {
+    "qty": 8,
+    "name": "Memory Lapse",
+    "mana_cost": "{1}{U}",
+    "type_line": "Instant",
+    "oracle_text": "Counter target spell. If that spell is countered this way, put it on top of its owner's library instead of into that player's graveyard.",
+    "power": null,
+    "toughness": null,
+    "colors": [
+      "U"
+    ],
+    "artist": "Rebecca Guay",
+    "set": "MIR",
+    "collector_number": "74",
+    "art": "/static/img/fish/mir_74.jpg"
+  },
+  {
+    "qty": 2,
+    "name": "Metamorphose",
+    "mana_cost": "{1}{U}",
+    "type_line": "Instant",
+    "oracle_text": "Put target permanent an opponent controls on top of its owner's library. That opponent may put an artifact, creature, enchantment, or land card from their hand onto the battlefield.",
+    "power": null,
+    "toughness": null,
+    "colors": [
+      "U"
+    ],
+    "artist": "Ron Spencer",
+    "set": "SLD",
+    "collector_number": "2155",
+    "art": "/static/img/fish/sld_2155.jpg"
+  },
+  {
+    "qty": 2,
+    "name": "Mind Bend",
+    "mana_cost": "{U}",
+    "type_line": "Instant",
+    "oracle_text": "Change the text of target permanent by replacing all instances of one color word with another or one basic land type with another. (For example, you may change \"nonblack creature\" to \"nongreen creature\" or \"forestwalk\" to \"islandwalk.\" This effect lasts indefinitely.)",
+    "power": null,
+    "toughness": null,
+    "colors": [
+      "U"
+    ],
+    "artist": "Mike Dringenberg",
+    "set": "MIR",
+    "collector_number": "77",
+    "art": "/static/img/fish/mir_77.jpg"
+  },
+  {
+    "qty": 2,
+    "name": "Mystic Sanctuary",
+    "mana_cost": "",
+    "type_line": "Land — Island",
+    "oracle_text": "({T}: Add {U}.)\nThis land enters tapped unless you control three or more other Islands.\nWhen this land enters untapped, you may put target instant or sorcery card from your graveyard on top of your library.",
+    "power": null,
+    "toughness": null,
+    "colors": [],
+    "artist": "Randy Vargas",
+    "set": "TSR",
+    "collector_number": "408",
+    "art": "/static/img/fish/tsr_408.jpg"
+  },
+  {
+    "qty": 2,
+    "name": "Mystical Tutor",
+    "mana_cost": "{U}",
+    "type_line": "Instant",
+    "oracle_text": "Search your library for an instant or sorcery card, reveal it, then shuffle and put that card on top.",
+    "power": null,
+    "toughness": null,
+    "colors": [
+      "U"
+    ],
+    "artist": "David O'Connor",
+    "set": "MIR",
+    "collector_number": "80",
+    "art": "/static/img/fish/mir_80.jpg"
+  },
+  {
+    "qty": 3,
+    "name": "Ponder",
+    "mana_cost": "{U}",
+    "type_line": "Sorcery",
+    "oracle_text": "Look at the top three cards of your library, then put them back in any order. You may shuffle.\nDraw a card.",
+    "power": null,
+    "toughness": null,
+    "colors": [
+      "U"
+    ],
+    "artist": "Dan Murayama Scott",
+    "set": "TSR",
+    "collector_number": "315",
+    "art": "/static/img/fish/tsr_315.jpg"
+  },
+  {
+    "qty": 3,
+    "name": "Predict",
+    "mana_cost": "{1}{U}",
+    "type_line": "Instant",
+    "oracle_text": "Choose a card name, then target player mills a card. If a card with the chosen name was milled this way, you draw two cards. Otherwise, you draw a card.",
+    "power": null,
+    "toughness": null,
+    "colors": [
+      "U"
+    ],
+    "artist": "Rebecca Guay",
+    "set": "ODY",
+    "collector_number": "94",
+    "art": "/static/img/fish/ody_94.jpg"
+  },
+  {
+    "qty": 2,
+    "name": "Svyelunite Temple",
+    "mana_cost": "",
+    "type_line": "Land",
+    "oracle_text": "This land enters tapped.\n{T}: Add {U}.\n{T}, Sacrifice this land: Add {U}{U}.",
+    "power": null,
+    "toughness": null,
+    "colors": [],
+    "artist": "Liz Danforth",
+    "set": "SLD",
+    "collector_number": "2164",
+    "art": "/static/img/fish/sld_2164.jpg"
+  },
+  {
+    "qty": 2,
+    "name": "Temple of Epiphany",
+    "mana_cost": "",
+    "type_line": "Land",
+    "oracle_text": "This land enters tapped.\nWhen this land enters, scry 1. (Look at the top card of your library. You may put that card on the bottom.)\n{T}: Add {U} or {R}.",
+    "power": null,
+    "toughness": null,
+    "colors": [],
+    "artist": "Adam Paquette",
+    "set": "BRC",
+    "collector_number": "207",
+    "art": "/static/img/fish/brc_207.jpg"
+  },
+  {
+    "qty": 2,
+    "name": "The Surgical Bay",
+    "mana_cost": "",
+    "type_line": "Land — Sphere",
+    "oracle_text": "This land enters tapped.\n{T}: Add {U}.\n{1}{U}, {T}, Sacrifice this land: Draw a card.",
+    "power": null,
+    "toughness": null,
+    "colors": [],
+    "artist": "Sarah Finnigan",
+    "set": "SLD",
+    "collector_number": "2163",
+    "art": "/static/img/fish/sld_2163.jpg"
+  },
+  {
+    "qty": 2,
+    "name": "Vision Charm",
+    "mana_cost": "{U}",
+    "type_line": "Instant",
+    "oracle_text": "Choose one —\n• Target player mills four cards.\n• Choose a land type and a basic land type. Each land of the first chosen type becomes the second chosen type until end of turn.\n• Target artifact phases out. (While it's phased out, it's treated as though it doesn't exist. It phases in before its controller untaps during their next untap step.)",
+    "power": null,
+    "toughness": null,
+    "colors": [
+      "U"
+    ],
+    "artist": "Greg Spalenka",
+    "set": "VIS",
+    "collector_number": "49",
+    "art": "/static/img/fish/vis_49.jpg"
+  }
+]

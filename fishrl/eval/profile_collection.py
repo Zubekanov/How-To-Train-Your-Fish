@@ -117,6 +117,33 @@ def main():
           f"network is {100*network/total:.0f}% of collection, 6x -> "
           f"{(total - network + 6*network)/total:.2f}x total collection time.", flush=True)
 
+    # ── feature / view breakdown: where the non-network majority actually goes ──
+    print("\n  FEATURE / VIEW BREAKDOWN (the non-network majority):", flush=True)
+    rows = [
+        ("encode_observation (perspective)", "fishrl/obs/encoder.py", "encode_observation"),
+        ("encode_god", "fishrl/data/features.py", "encode_god"),
+        ("encode_public", "fishrl/data/features.py", "encode_public"),
+        ("opponent_hand_counts", "fishrl/data/features.py", "opponent_hand_counts"),
+        ("  current_view (state)", "forgetful_fish/state.py", "current_view"),
+        ("  spectator_view (state)", "forgetful_fish/state.py", "spectator_view"),
+        ("  _public_object (state)", "forgetful_fish/state.py", "_public_object"),
+        ("  _zone", "fishrl/obs/encoder.py", "_zone"),
+        ("  _encode_card", "fishrl/obs/encoder.py", "_encode_card"),
+        ("  _basic_multihot (regex)", "fishrl/obs/encoder.py", "_basic_multihot"),
+    ]
+    for label, fsub, func in rows:
+        row(label, _cum(st, fsub, func))
+
+    # generic top-15 by tottime, excluding torch -- catches anything not listed above
+    skip = ("site-packages/torch", "/torch/")
+    items = [((fn, name), tt) for (fn, _ln, name), (_cc, _nc, tt, _ct, _cl) in st.stats.items()
+             if not any(s in fn.replace("\\", "/") for s in skip)]
+    items.sort(key=lambda kv: kv[1], reverse=True)
+    print("\n  TOP 15 BY SELF-TIME (tottime, non-torch):", flush=True)
+    for (fn, name), tt in items[:15]:
+        mod = fn.replace("\\", "/").split("/")[-1]
+        print(f"    {tt*1e3/n_dec:7.3f} ms/dec  {100*tt/total:5.1f}%  {mod}:{name}", flush=True)
+
 
 if __name__ == "__main__":
     main()

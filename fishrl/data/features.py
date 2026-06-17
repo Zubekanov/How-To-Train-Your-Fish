@@ -69,11 +69,12 @@ def _obj_dicts(g, ids) -> list:
 
 def encode_god(g) -> np.ndarray:
     """Privileged, fully-observed, p1-oriented feature vector (GOD_DIM)."""
+    bf = {pid: _obj_dicts(g, g.players[pid].battlefield) for pid in ("p1", "p2")}  # reused below
     parts = [
         _zone(_obj_dicts(g, g.players["p1"].hand), GOD_SLOTS["p1_hand"], "p1"),
         _zone(_obj_dicts(g, g.players["p2"].hand), GOD_SLOTS["p2_hand"], "p1"),
-        _zone(_obj_dicts(g, g.players["p1"].battlefield), GOD_SLOTS["p1_bf"], "p1"),
-        _zone(_obj_dicts(g, g.players["p2"].battlefield), GOD_SLOTS["p2_bf"], "p1"),
+        _zone(bf["p1"], GOD_SLOTS["p1_bf"], "p1"),
+        _zone(bf["p2"], GOD_SLOTS["p2_bf"], "p1"),
         _zone(_obj_dicts(g, g.graveyard), GOD_SLOTS["graveyard"], "p1"),
         _zone(_obj_dicts(g, g.exile), GOD_SLOTS["exile"], "p1"),
         _zone([_public_object(g.objects[s.source_instance_id])
@@ -84,8 +85,7 @@ def encode_god(g) -> np.ndarray:
     gv = []
     for pid in ("p1", "p2"):
         p = g.players[pid]
-        bf = _obj_dicts(g, p.battlefield)
-        gv += _player_scalars(p.life, len(p.hand), bf, p.mana_pool, p.mulligans, p.has_lost)
+        gv += _player_scalars(p.life, len(p.hand), bf[pid], p.mana_pool, p.mulligans, p.has_lost)
     gv += [g.turn_number / 40.0, float(g.active_player == "p1"),
            float(g.priority_player == "p1"), len(g.library) / 80.0, len(g.stack) / 6.0]
     parts.append(np.asarray(gv, dtype=np.float32))

@@ -12,6 +12,7 @@ with the action space so a card's feature row and its action slot share an index
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 import numpy as np
 
@@ -26,10 +27,20 @@ from fishrl.obs import vocab as V
 _BASIC_RE = [re.compile(r"\b" + t + r"s?\b", re.I) for t in BASIC_TYPES]
 
 
-def _basic_multihot(text: str, out: np.ndarray, off: int) -> None:
+@lru_cache(maxsize=8192)
+def _basic_bits(text: str) -> tuple:
+    """Which canonical basic-land types appear as whole words in `text` (5-tuple of
+    0/1). This is a PURE function of the string, so it's memoized: the same handful
+    of card texts recur across every zone, every encoder (perspective/god/public),
+    every decision -- and `re.Pattern.search` was ~30% of collection self-time. Card
+    texts are few, so the cache is ~100% hit after warmup."""
     t = text or ""
-    for i, pat in enumerate(_BASIC_RE):
-        if pat.search(t):
+    return tuple(1.0 if pat.search(t) else 0.0 for pat in _BASIC_RE)
+
+
+def _basic_multihot(text: str, out: np.ndarray, off: int) -> None:
+    for i, b in enumerate(_basic_bits(text)):
+        if b:
             out[off + i] = 1.0
 
 

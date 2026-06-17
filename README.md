@@ -39,6 +39,35 @@ from fishrl.opponents.random_masked import RandomMaskedPolicy
 print(evaluate(RandomMaskedPolicy().act, n_games=20))   # win/loss record
 ```
 
+## Self-play training stack
+
+Adversarial self-play (masked PPO) plus two auxiliary belief/outcome models:
+
+- **Hand-guesser** (`models/guesser.py`): per-seat, takes the fair perspective view
+  ⊕ its previous guess, predicts the **opponent's hand as per-name expected counts**
+  (Poisson). Its output augments the actor's observation via `BeliefAugmentedEnv`.
+- **Advantage estimators** (`models/estimators.py`): both output **P(p1 wins)**,
+  trained vs the terminal winner — a **privileged** one (full hidden info; also the
+  PPO critic, asymmetric actor-critic) and a **public** one (mutual knowledge only).
+
+```python
+from fishrl.train.config import Config
+from fishrl.train.train_loop import train, build_models
+cfg = Config(iters=50, games_per_iter=8)      # CPU-friendly defaults
+models = train(cfg, build_models(cfg))         # warmup -> PPO self-play
+
+from fishrl.eval.metrics import winrate_vs_random, winrate_vs_heuristic, estimator_metrics, collect_eval_batch
+print(winrate_vs_random(models), winrate_vs_heuristic(models))
+print(estimator_metrics(models, collect_eval_batch(models)))   # privileged should beat public
+```
+
+Or run the end-to-end demo: `python -m fishrl.eval.smoke`.
+
+Key design points: one shared policy plays both seats; each env step (including
+compound-decision sub-steps) is one PPO transition; per-seat GAE uses a single
+zero-sum sign convention (`V_p1 = -V_p2`, guarded by `tests/test_perspective.py`);
+the guesser is frozen within each PPO update and slow-refreshed between iterations.
+
 ## Layout
 
 ```

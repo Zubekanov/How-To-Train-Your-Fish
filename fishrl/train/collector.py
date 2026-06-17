@@ -12,6 +12,7 @@ import torch
 
 from fishrl.data.buffer import RolloutBuffer, Step
 from fishrl.data.features import encode_god, encode_public, opponent_hand_counts
+from fishrl.models import device_of
 from fishrl.obs.encoder import OBS_DIM
 from fishrl.train.advantages import p1_winprob_to_seat_value
 
@@ -24,9 +25,11 @@ def random_act_fn(rng: np.random.Generator):
 
 
 def actor_act_fn(actor):
+    dev = device_of(actor)
+
     def act(obs):
-        x = torch.as_tensor(obs["observation"], dtype=torch.float32).unsqueeze(0)
-        m = torch.as_tensor(obs["action_mask"], dtype=torch.float32).unsqueeze(0)
+        x = torch.as_tensor(obs["observation"], dtype=torch.float32).unsqueeze(0).to(dev)
+        m = torch.as_tensor(obs["action_mask"], dtype=torch.float32).unsqueeze(0).to(dev)
         with torch.no_grad():
             logp_all = actor.log_probs(x, m)[0]
             p = logp_all.exp()
@@ -53,7 +56,8 @@ def collect_games(belief_env, act_fn, n_games, base_seed, critic=None,
             if critic is not None:                     # the privileged critic is the ONLY
                 # value head in the advantage loop (asymmetric actor-critic).
                 with torch.no_grad():
-                    p_p1 = float(critic.p1_winprob(torch.as_tensor(god).unsqueeze(0))[0])
+                    gt = torch.as_tensor(god).unsqueeze(0).to(device_of(critic))
+                    p_p1 = float(critic.p1_winprob(gt)[0])
                 value = p1_winprob_to_seat_value(p_p1, agent)
             action, logp = act_fn(obs)
             buf.add(Step(

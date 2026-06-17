@@ -11,6 +11,8 @@ so an absolute value-loss level is NOT a clean signal of encoder capacity.
 """
 from __future__ import annotations
 
+import argparse
+
 import numpy as np
 import torch
 
@@ -18,6 +20,7 @@ from fishrl.models.estimators import PrivilegedCritic
 from fishrl.models.guesser import HandGuesser
 from fishrl.train.belief_env import BeliefAugmentedEnv
 from fishrl.train.collector import collect_games, random_act_fn
+from fishrl.train.config import resolve_device
 from fishrl.train.losses import outcome_bce
 
 
@@ -38,10 +41,10 @@ def _batch(label, seed, n_games=6):
     return god, y
 
 
-def _fit_eval(encoder, train, holdout, steps=400, log_every=50):
-    gx, gy = train
-    hx, hy = holdout
-    c = PrivilegedCritic(encoder=encoder)
+def _fit_eval(encoder, train, holdout, device="cpu", steps=400, log_every=50):
+    gx, gy = (t.to(device) for t in train)
+    hx, hy = (t.to(device) for t in holdout)
+    c = PrivilegedCritic(encoder=encoder).to(device)
     params = sum(pp.numel() for pp in c.parameters())
     _log(f"[fit] {encoder}: training privileged critic "
          f"({params:,} params) for {steps} steps...")
@@ -63,10 +66,14 @@ def _fit_eval(encoder, train, holdout, steps=400, log_every=50):
 
 
 def main():
-    _log("=== flat vs entity encoder A/B (privileged critic) ===")
+    ap = argparse.ArgumentParser(description="Flat vs entity encoder A/B on the privileged critic.")
+    ap.add_argument("--gpu", action="store_true", help="fit critics on CUDA if available")
+    args = ap.parse_args()
+    device = resolve_device(args.gpu)
+    _log(f"=== flat vs entity encoder A/B (privileged critic) | device {device} ===")
     train = _batch("train", seed=0)
     holdout = _batch("holdout", seed=999)
-    results = [_fit_eval(enc, train, holdout) for enc in ("flat", "entity")]
+    results = [_fit_eval(enc, train, holdout, device=device) for enc in ("flat", "entity")]
     _log("=== summary ===")
     for r in results:
         _log(str(r))

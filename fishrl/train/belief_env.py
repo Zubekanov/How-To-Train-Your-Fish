@@ -12,6 +12,7 @@ import numpy as np
 import torch
 
 from fishrl.env.aec_env import FishAEC
+from fishrl.models import device_of
 from fishrl.obs import vocab as V
 
 
@@ -64,10 +65,11 @@ class BeliefAugmentedEnv:
         base = self.env.observe(agent)
         persp = base["observation"]
         prev = self.last_guess.get(agent, np.zeros(V.N_NAMES, dtype=np.float32))
+        dev = device_of(self.guesser)
         with torch.no_grad():
             guess = self.guesser(
-                torch.as_tensor(persp, dtype=torch.float32).unsqueeze(0),
-                torch.as_tensor(prev, dtype=torch.float32).unsqueeze(0),
+                torch.as_tensor(persp, dtype=torch.float32).unsqueeze(0).to(dev),
+                torch.as_tensor(prev, dtype=torch.float32).unsqueeze(0).to(dev),
             ).squeeze(0).cpu().numpy().astype(np.float32)
         self.last_guess[agent] = guess
         return {"observation": np.concatenate([persp, guess]).astype(np.float32),

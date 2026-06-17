@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
+from fishrl.models import device_of
 from fishrl.obs import vocab as V
 from fishrl.train.belief_env import BeliefAugmentedEnv
 from fishrl.train.collector import actor_act_fn, collect_games, random_act_fn
@@ -28,8 +29,8 @@ def estimator_metrics(models, batch) -> dict:
     if y.numel() == 0:
         return {"n": 0}
     with torch.no_grad():
-        priv = models.critic.p1_winprob(batch["god"][keep])
-        pub = models.public.p1_winprob(batch["pub"][keep])
+        priv = models.critic.p1_winprob(batch["god"][keep].to(device_of(models.critic))).cpu()
+        pub = models.public.p1_winprob(batch["pub"][keep].to(device_of(models.public))).cpu()
 
     def acc(p):
         return float(((p > 0.5).float() == y).float().mean())
@@ -43,8 +44,9 @@ def estimator_metrics(models, batch) -> dict:
 
 
 def guesser_mae(models, batch) -> float:
+    dev = device_of(models.guesser)
     with torch.no_grad():
-        pred = models.guesser(batch["persp"], batch["prev_guess"])
+        pred = models.guesser(batch["persp"].to(dev), batch["prev_guess"].to(dev)).cpu()
     return float((pred - batch["cnt"]).abs().mean())
 
 
@@ -52,8 +54,9 @@ def act_from_actor(actor, obs, greedy: bool = False) -> int:
     """Sample (default) or greedily pick a legal action. Sampling is the right
     default: greedy argmax of a high-entropy masked policy is degenerate (it
     deterministically repeats one action — usually a no-op pass — and loses)."""
-    x = torch.as_tensor(obs["observation"], dtype=torch.float32).unsqueeze(0)
-    m = torch.as_tensor(obs["action_mask"], dtype=torch.float32).unsqueeze(0)
+    dev = device_of(actor)
+    x = torch.as_tensor(obs["observation"], dtype=torch.float32).unsqueeze(0).to(dev)
+    m = torch.as_tensor(obs["action_mask"], dtype=torch.float32).unsqueeze(0).to(dev)
     with torch.no_grad():
         logp = actor.log_probs(x, m)[0]
     if greedy:
@@ -93,10 +96,11 @@ def winrate_vs_heuristic(models, n_games=20, seed=0, max_decisions=2000) -> floa
         while not done and guard < max_decisions * 6:
             guard += 1
             persp = obs["observation"]
+            gdev = device_of(models.guesser)
             with torch.no_grad():
                 guess = models.guesser(
-                    torch.as_tensor(persp).unsqueeze(0),
-                    torch.as_tensor(prev).unsqueeze(0)).squeeze(0).numpy().astype(np.float32)
+                    torch.as_tensor(persp).unsqueeze(0).to(gdev),
+                    torch.as_tensor(prev).unsqueeze(0).to(gdev)).squeeze(0).cpu().numpy().astype(np.float32)
             prev = guess
             aug = {"observation": np.concatenate([persp, guess]).astype(np.float32),
                    "action_mask": obs["action_mask"]}

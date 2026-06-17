@@ -3,6 +3,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import torch
+
+
+def resolve_device(gpu: bool) -> str:
+    """Map a --gpu flag to a torch device string, falling back to CPU (with a
+    warning) when CUDA was requested but isn't available."""
+    if gpu and torch.cuda.is_available():
+        return "cuda"
+    if gpu:
+        print("[warn] --gpu requested but CUDA is not available; running on CPU", flush=True)
+    return "cpu"
+
 
 @dataclass
 class Config:
@@ -40,6 +52,7 @@ class Config:
     # make the bigger critic bias-relevant via bootstrapping.
     encoder: str = "flat"
     critic_hidden: tuple = (512, 512, 256)
+    device: str = "cpu"          # "cpu" | "cuda" (set via resolve_device / --gpu)
     seed: int = 0
     ckpt_dir: str = "checkpoints"
 

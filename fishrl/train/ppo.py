@@ -4,11 +4,16 @@ from __future__ import annotations
 import numpy as np
 import torch
 
+from fishrl.models import device_of
 from fishrl.train.losses import guesser_poisson, outcome_bce, ppo_actor_loss
 
 
 def ppo_update(batch, actor, critic, opt, cfg, ent_coef) -> dict:
-    """K-epoch minibatched PPO over the actor and the privileged critic."""
+    """K-epoch minibatched PPO over the actor and the privileged critic.
+
+    The rollout batch lives on CPU (collection is CPU-bound); each minibatch is
+    moved to the model's device for the update."""
+    dev = device_of(actor)
     M = batch["x_act"].shape[0]
     idx = np.arange(M)
     rng = np.random.default_rng(0)
@@ -17,12 +22,12 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef) -> dict:
         rng.shuffle(idx)
         for s in range(0, M, cfg.minibatch):
             mb = idx[s:s + cfg.minibatch]
-            logp_all = actor.log_probs(batch["x_act"][mb], batch["mask"][mb])
+            logp_all = actor.log_probs(batch["x_act"][mb].to(dev), batch["mask"][mb].to(dev))
             ploss, ent, kl = ppo_actor_loss(
-                logp_all, batch["mask"][mb], batch["action"][mb],
-                batch["old_logp"][mb], batch["adv"][mb], cfg.clip)
-            critic_logit = critic(batch["god"][mb])
-            closs = outcome_bce(critic_logit, batch["y_p1"][mb], batch["valid"][mb])
+                logp_all, batch["mask"][mb].to(dev), batch["action"][mb].to(dev),
+                batch["old_logp"][mb].to(dev), batch["adv"][mb].to(dev), cfg.clip)
+            critic_logit = critic(batch["god"][mb].to(dev))
+            closs = outcome_bce(critic_logit, batch["y_p1"][mb].to(dev), batch["valid"][mb].to(dev))
             loss = ploss - ent_coef * ent + cfg.critic_coef * closs
             opt.zero_grad()
             loss.backward()
@@ -46,12 +51,14 @@ def aux_update(batch, guesser, public_est, opt_g, opt_p, steps: int) -> dict:
     purely supervised on the rollout's targets, never through the policy gradient.
     The guesser is thus an honest posterior; the public estimator is diagnostic
     (it is not the critic — only the privileged critic computes advantages)."""
+    dev = device_of(guesser)
+    persp, prev, cnt = batch["persp"].to(dev), batch["prev_guess"].to(dev), batch["cnt"].to(dev)
+    pub, y_p1, valid = batch["pub"].to(dev), batch["y_p1"].to(dev), batch["valid"].to(dev)
     g_loss = p_loss = 0.0
     for _ in range(max(steps, 1)):
-        pred = guesser(batch["persp"], batch["prev_guess"])
-        gl = guesser_poisson(pred, batch["cnt"])
+        gl = guesser_poisson(guesser(persp, prev), cnt)
         opt_g.zero_grad(); gl.backward(); opt_g.step()
-        pl = outcome_bce(public_est(batch["pub"]), batch["y_p1"], batch["valid"])
+        pl = outcome_bce(public_est(pub), y_p1, valid)
         opt_p.zero_grad(); pl.backward(); opt_p.step()
         g_loss, p_loss = gl.detach().item(), pl.detach().item()
     return {"guesser_loss": g_loss, "public_loss": p_loss}

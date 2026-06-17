@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 import torch
 
+from fishrl.models import device_of
 from fishrl.models.estimators import PrivilegedCritic, PublicEstimator
 from fishrl.models.guesser import HandGuesser
 from fishrl.models.policy import MaskedActor
@@ -28,11 +29,12 @@ class Models:
 
 def build_models(cfg: Config) -> Models:
     torch.manual_seed(cfg.seed)
+    dev = cfg.device
     return Models(
-        MaskedActor(cfg.hidden, cfg.encoder),
-        PrivilegedCritic(cfg.critic_hidden, cfg.encoder),
-        HandGuesser(cfg.hidden, cfg.encoder),
-        PublicEstimator(cfg.hidden, cfg.encoder),
+        MaskedActor(cfg.hidden, cfg.encoder).to(dev),
+        PrivilegedCritic(cfg.critic_hidden, cfg.encoder).to(dev),
+        HandGuesser(cfg.hidden, cfg.encoder).to(dev),
+        PublicEstimator(cfg.hidden, cfg.encoder).to(dev),
     )
 
 
@@ -66,9 +68,11 @@ def policy_callable(models: Models, guesser=None):
     FishAEC with the (trained) guesser so eval observations match training."""
     g = guesser or models.guesser
 
+    dev = device_of(models.actor)
+
     def act(obs):
-        x = torch.as_tensor(obs["observation"], dtype=torch.float32).unsqueeze(0)
-        m = torch.as_tensor(obs["action_mask"], dtype=torch.float32).unsqueeze(0)
+        x = torch.as_tensor(obs["observation"], dtype=torch.float32).unsqueeze(0).to(dev)
+        m = torch.as_tensor(obs["action_mask"], dtype=torch.float32).unsqueeze(0).to(dev)
         with torch.no_grad():
             logp = models.actor.log_probs(x, m)[0]
         return int(torch.multinomial(logp.exp(), 1))     # sample (argmax is degenerate)

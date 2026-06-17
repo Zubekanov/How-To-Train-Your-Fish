@@ -63,6 +63,19 @@ print(estimator_metrics(models, collect_eval_batch(models)))   # privileged shou
 
 Or run the end-to-end demo: `python -m fishrl.eval.smoke`.
 
+### Running (CPU by default, `--gpu` to use CUDA)
+
+The runnable entry points take a `--gpu` flag (falls back to CPU with a warning if
+CUDA isn't available). Models and per-update minibatches move to the device; rollout
+collection stays on CPU (the engine is pure Python), so the GPU mainly accelerates
+the network updates.
+
+```bash
+python -m fishrl.train --gpu --iters 200 --encoder entity   # train + save checkpoints/fishrl.pt
+python -m fishrl.eval.smoke --gpu                            # short demo + metrics
+python -m fishrl.eval.ab_encoder --gpu                       # flat-vs-entity A/B
+```
+
 Key design points: one shared policy plays both seats; each env step (including
 compound-decision sub-steps) is one PPO transition; per-seat GAE uses a single
 zero-sum sign convention (`V_p1 = -V_p2`, guarded by `tests/test_perspective.py`);

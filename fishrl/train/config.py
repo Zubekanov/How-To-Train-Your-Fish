@@ -62,7 +62,11 @@ class Config:
     # the calibration winner, so it's the natural critic override.
     encoder: str = "flat"
     actor_encoder: str | None = None
-    critic_encoder: str | None = None
+    # critic defaults to entity: it's the measured on-policy calibration winner
+    # (Brier 0.261 vs flat 0.342), off the deployment path, and ~free now that the
+    # value pass is batched post-collection. The actor/guesser stay "flat" until a
+    # win-rate head-to-head backs flipping them.
+    critic_encoder: str | None = "entity"
     guesser_encoder: str | None = None
     public_encoder: str | None = None
     critic_hidden: tuple = (512, 512, 256)

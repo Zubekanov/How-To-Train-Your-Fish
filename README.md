@@ -68,6 +68,17 @@ compound-decision sub-steps) is one PPO transition; per-seat GAE uses a single
 zero-sum sign convention (`V_p1 = -V_p2`, guarded by `tests/test_perspective.py`);
 the guesser is frozen within each PPO update and slow-refreshed between iterations.
 
+### Per-card observation features (`obs/encoder.py`, `CARD_F`)
+
+Each card slot encodes: name one-hot (20-card vocab) + unknown bit; generic type
+flags (land/creature/instant/sorcery); **effective basic land type** (5-way
+multi-hot read from the *rewritten* type line, so a Mind-Bended Island reads as
+Swamp); **basic types referenced in the oracle text** (5-way, e.g. a Dandân's
+"Island" clause after a text change); a **text-altered flag**; power/toughness/
+damage/counters; tapped / summoning-sick / controller-is-self; and a known bit.
+Text changes (Mind Bend / Crystal Spray / Vision Charm) are thus fully visible to
+agents, including which basic type a permanent currently is.
+
 ## Layout
 
 ```

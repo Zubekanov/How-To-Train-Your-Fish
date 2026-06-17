@@ -11,14 +11,34 @@ with the action space so a card's feature row and its action slot share an index
 """
 from __future__ import annotations
 
+import re
+
 import numpy as np
 
-from fishrl.forgetful_fish.state import current_view
+from fishrl.forgetful_fish.state import current_view, BASIC_TYPES
 from fishrl.obs import vocab as V
 
+# Basic land types, in canonical order, with whole-word matchers. Forgetful Fish
+# rewrites the basic-type word in a card's text (Mind Bend / Crystal Spray /
+# Vision Charm change "Island" into another type, permanently or until end of
+# turn). The engine stores the EFFECTIVE (already-rewritten) type_line/oracle_text,
+# so we read the current type off those strings.
+_BASIC_RE = [re.compile(r"\b" + t + r"s?\b", re.I) for t in BASIC_TYPES]
+
+
+def _basic_multihot(text: str, out: np.ndarray, off: int) -> None:
+    t = text or ""
+    for i, pat in enumerate(_BASIC_RE):
+        if pat.search(t):
+            out[off + i] = 1.0
+
+
 # ── per-card feature vector ───────────────────────────────────────────────────
-# name one-hot (N_NAMES) + unknown bit, type flags(5), stats(4), perm flags(3), known bit
-CARD_F = V.N_NAMES + 1 + 5 + 4 + 3 + 1
+# name one-hot (N_NAMES) + unknown bit; generic type flags(4); effective basic
+# type in the type line (5); basic types referenced in the oracle text (5, e.g. a
+# Dandân's "Island" clause after Mind Bend); text-altered flag(1); stats(4);
+# perm flags(3); known bit(1).
+CARD_F = V.N_NAMES + 1 + 4 + 5 + 5 + 1 + 4 + 3 + 1
 
 # ── fixed zone slot counts (pad / truncate) ───────────────────────────────────
 SLOTS = {
@@ -50,13 +70,19 @@ def _encode_card(card: dict | None, viewer: str) -> np.ndarray:
     else:
         v[V.N_NAMES] = 1.0
     o = V.N_NAMES + 1
-    tl = (card.get("type_line") or "").lower()
-    v[o + 0] = float("land" in tl)
-    v[o + 1] = float("creature" in tl)
-    v[o + 2] = float("instant" in tl)
-    v[o + 3] = float("sorcery" in tl)
-    v[o + 4] = float("basic land" in tl and "island" in tl)
+    tl = card.get("type_line") or ""
+    tll = tl.lower()
+    v[o + 0] = float("land" in tll)
+    v[o + 1] = float("creature" in tll)
+    v[o + 2] = float("instant" in tll)
+    v[o + 3] = float("sorcery" in tll)
+    o += 4
+    _basic_multihot(tl, v, o)                  # effective basic land type (5)
     o += 5
+    _basic_multihot(card.get("oracle_text") or "", v, o)   # basic types named in text (5)
+    o += 5
+    v[o] = 1.0 if card.get("text_variant") else 0.0        # text-altered (Island lineage moved)
+    o += 1
     v[o + 0] = (card.get("power") or 0) / 10.0
     v[o + 1] = (card.get("toughness") or 0) / 10.0
     v[o + 2] = (card.get("damage_marked") or 0) / 10.0

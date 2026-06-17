@@ -38,6 +38,31 @@ def test_opponent_hand_counts_matches_state():
             assert counts[V.NAME_INDEX[name]] == c
 
 
+def test_text_change_exposed_in_observation():
+    """A Mind-Bended Island (Island->Swamp) shows its EFFECTIVE basic type and the
+    text-altered flag in the observation, not just the printed name 'Island'."""
+    from fishrl.forgetful_fish import state as S
+    from fishrl.obs.encoder import CARD_F, SLOTS, encode_observation
+
+    g = E.new_multiplayer_game(load_decklist(), p1_name="p1", p2_name="p2", seed=2)
+    isl = next(i for i, o in g.objects.items() if o.name == "Island")
+    g.library = [s for s in g.library if s.instance_id != isl]
+    g.players["p1"].battlefield = [isl]
+    g.objects[isl].controller = "p1"
+    assert S.add_text_change(g.objects[isl], "Island", "Swamp", eot=False, turn=1)
+    g.active_player, g.current_step = "p1", "main1"
+
+    obs = encode_observation(g, "p1")
+    off = (SLOTS["own_hand"] + SLOTS["opp_hand"]) * CARD_F      # own battlefield, row 0
+    row = obs[off:off + CARD_F]
+    B = list(S.BASIC_TYPES)
+    tl = V.N_NAMES + 1 + 4                                       # start of type-line basics
+    assert row[:V.N_NAMES].argmax() == V.NAME_INDEX["Island"]    # printed name unchanged
+    assert row[tl + B.index("Swamp")] == 1.0                     # effective type is now Swamp
+    assert row[tl + B.index("Island")] == 0.0
+    assert row[tl + 10] == 1.0                                   # text-altered flag set
+
+
 def test_privileged_sees_opp_hand_public_does_not():
     g = _opened()
     n_p2 = len(g.players["p2"].hand)

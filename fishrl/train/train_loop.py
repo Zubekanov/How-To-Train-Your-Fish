@@ -38,7 +38,13 @@ def build_models(cfg: Config) -> Models:
     )
 
 
-def train(cfg: Config, models: Models | None = None, log=print) -> Models:
+def train(cfg: Config, models: Models | None = None, log=print,
+          max_seconds: float | None = None) -> Models:
+    """Run warmup + PPO self-play. If `max_seconds` is set, stop once that wall-clock
+    budget is spent (cfg.iters is then just an upper cap) -- this is how fixed-wall-
+    clock head-to-heads are run. The entropy schedule anneals over the budget (by
+    elapsed fraction) rather than over iters so it doesn't depend on the iter count."""
+    import time
     from fishrl.train.warmup import warmup
     m = models or build_models(cfg)
     w = warmup(m.guesser, m.critic, m.public, cfg, seed=cfg.seed)
@@ -47,14 +53,24 @@ def train(cfg: Config, models: Models | None = None, log=print) -> Models:
     opt_ppo = torch.optim.Adam(list(m.actor.parameters()) + list(m.critic.parameters()), lr=cfg.lr_ppo)
     opt_g = torch.optim.Adam(m.guesser.parameters(), lr=cfg.lr_guesser)
     opt_p = torch.optim.Adam(m.public.parameters(), lr=cfg.lr_public)
-    benv = BeliefAugmentedEnv(m.guesser, max_decisions=cfg.max_decisions)
+    benv = BeliefAugmentedEnv(m.guesser, belief=cfg.use_belief, max_decisions=cfg.max_decisions)
 
+    start = time.perf_counter()
     for it in range(cfg.iters):
+        elapsed = time.perf_counter() - start
+        if max_seconds is not None and elapsed > max_seconds:
+            log(f"[stop] wall-clock budget {max_seconds:.0f}s reached at iter {it}")
+            break
         seed = cfg.seed + 1000 + it * cfg.games_per_iter
         buf = collect_games(benv, actor_act_fn(m.actor), cfg.games_per_iter, seed,
                             critic=m.critic, max_decisions=cfg.max_decisions)
         batch = buf.compute(cfg.gamma, cfg.lam)
-        ppo_stats = ppo_update(batch, m.actor, m.critic, opt_ppo, cfg, cfg.ent_coef(it))
+        if max_seconds is not None:                      # anneal entropy over the budget
+            frac = min(elapsed / max_seconds, 1.0)
+            ent = cfg.ent_start + frac * (cfg.ent_end - cfg.ent_start)
+        else:
+            ent = cfg.ent_coef(it)
+        ppo_stats = ppo_update(batch, m.actor, m.critic, opt_ppo, cfg, ent)
         aux_stats = aux_update(batch, m.guesser, m.public, opt_g, opt_p, cfg.aux_steps)
         log(f"[iter {it}] T={len(buf)} "
             f"pi={ppo_stats['policy_loss']:.3f} V={ppo_stats['critic_loss']:.3f} "

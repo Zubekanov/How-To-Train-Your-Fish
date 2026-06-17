@@ -17,9 +17,10 @@ from fishrl.obs import vocab as V
 
 
 class BeliefAugmentedEnv:
-    def __init__(self, guesser, **env_kwargs):
+    def __init__(self, guesser, belief: bool = True, **env_kwargs):
         self.env = FishAEC(**env_kwargs)
         self.guesser = guesser
+        self.belief = belief          # when False, feed zeros for the belief channel
         self.last_guess: dict[str, np.ndarray] = {}
 
     # ── delegated state ──────────────────────────────────────────────────────
@@ -64,6 +65,10 @@ class BeliefAugmentedEnv:
     def observe(self, agent: str) -> dict:
         base = self.env.observe(agent)
         persp = base["observation"]
+        if not self.belief:                       # ablation: no belief, no guesser forward
+            z = np.zeros(V.N_NAMES, dtype=np.float32)
+            return {"observation": np.concatenate([persp, z]).astype(np.float32),
+                    "action_mask": base["action_mask"]}
         prev = self.last_guess.get(agent, np.zeros(V.N_NAMES, dtype=np.float32))
         dev = device_of(self.guesser)
         with torch.no_grad():

@@ -61,6 +61,9 @@ class Config:
     # On-policy A/B (eval/ab_encoder): entity Brier 0.261 vs flat 0.342 -> entity is
     # the calibration winner, so it's the natural critic override.
     encoder: str = "flat"
+    # when False, the actor's belief channel is fed zeros (guesser skipped) -- the
+    # controlled "is the belief worth anything?" ablation. Architecture is unchanged.
+    use_belief: bool = True
     actor_encoder: str | None = None
     # critic defaults to entity: it's the measured on-policy calibration winner
     # (Brier 0.261 vs flat 0.342), off the deployment path, and ~free now that the

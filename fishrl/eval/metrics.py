@@ -64,9 +64,10 @@ def act_from_actor(actor, obs, greedy: bool = False) -> int:
     return int(torch.multinomial(logp.exp(), 1))
 
 
-def winrate_vs_random(models, n_games=20, seed=0, max_decisions=2000) -> float:
+def winrate_vs_random(models, n_games=20, seed=0, max_decisions=2000,
+                      use_belief=True) -> float:
     rng = np.random.default_rng(seed)
-    benv = BeliefAugmentedEnv(models.guesser, max_decisions=max_decisions)
+    benv = BeliefAugmentedEnv(models.guesser, belief=use_belief, max_decisions=max_decisions)
     wins = 0
     for i in range(n_games):
         benv.reset(seed=seed + i)
@@ -84,24 +85,31 @@ def winrate_vs_random(models, n_games=20, seed=0, max_decisions=2000) -> float:
     return wins / n_games
 
 
-def winrate_vs_heuristic(models, n_games=20, seed=0, max_decisions=2000) -> float:
-    """The trained actor (p1, belief-augmented) vs the engine heuristic AI (p2)."""
+def winrate_vs_heuristic(models, n_games=20, seed=0, max_decisions=2000,
+                         use_belief=True) -> float:
+    """The trained actor (p1, belief-augmented) vs the engine heuristic AI (p2).
+    With use_belief=False the belief channel is fed zeros (no guesser), matching a
+    belief-off-trained actor."""
     from fishrl.opponents.heuristic import HeuristicMatch
+    z = np.zeros(V.N_NAMES, dtype=np.float32)
     wins = 0
     for i in range(n_games):
         m = HeuristicMatch(max_decisions=max_decisions)
         obs = m.reset(seed=seed + i)
-        prev = np.zeros(V.N_NAMES, dtype=np.float32)
+        prev = z.copy()
         done, r, guard = False, 0.0, 0
         while not done and guard < max_decisions * 6:
             guard += 1
             persp = obs["observation"]
-            gdev = device_of(models.guesser)
-            with torch.no_grad():
-                guess = models.guesser(
-                    torch.as_tensor(persp).unsqueeze(0).to(gdev),
-                    torch.as_tensor(prev).unsqueeze(0).to(gdev)).squeeze(0).cpu().numpy().astype(np.float32)
-            prev = guess
+            if use_belief:
+                gdev = device_of(models.guesser)
+                with torch.no_grad():
+                    guess = models.guesser(
+                        torch.as_tensor(persp).unsqueeze(0).to(gdev),
+                        torch.as_tensor(prev).unsqueeze(0).to(gdev)).squeeze(0).cpu().numpy().astype(np.float32)
+                prev = guess
+            else:
+                guess = z
             aug = {"observation": np.concatenate([persp, guess]).astype(np.float32),
                    "action_mask": obs["action_mask"]}
             obs, r, done, _ = m.step(act_from_actor(models.actor, aug))

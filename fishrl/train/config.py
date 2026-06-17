@@ -48,14 +48,32 @@ class Config:
     # card-embedding encoder, masked mean/max pool; far fewer params), or "attention"
     # (the entity front-end + cross-zone self-attention and a learned per-zone
     # attention pool — relational, less lossy than mean/max). Default "flat" so
-    # behaviour is unchanged until the A/B (eval/ab_encoder) backs flipping it. The critic is off the inference path, so it gets more capacity;
-    # under MC-ish returns (lam≈1) that lowers advantage VARIANCE — lower `lam` to
-    # make the bigger critic bias-relevant via bootstrapping.
+    # behaviour is unchanged until the A/B (eval/ab_encoder) backs flipping it.
+    #
+    # `encoder` is the BASE applied to any net without an explicit override below.
+    # The four nets have different throughput exposure, so the encoder is decoupled
+    # per-net (resolve via `enc_for`):
+    #   * actor / guesser run per-decision DURING collection -> on the throughput path.
+    #   * critic runs per-decision too (value baseline) but its god_feat is buffered,
+    #     so it is batchable post-collection; and it is gone at deployment entirely.
+    #     -> an entity critic is a near-free calibration win once values are batched.
+    #   * public is diagnostic-only.
+    # On-policy A/B (eval/ab_encoder): entity Brier 0.261 vs flat 0.342 -> entity is
+    # the calibration winner, so it's the natural critic override.
     encoder: str = "flat"
+    actor_encoder: str | None = None
+    critic_encoder: str | None = None
+    guesser_encoder: str | None = None
+    public_encoder: str | None = None
     critic_hidden: tuple = (512, 512, 256)
     device: str = "cpu"          # "cpu" | "cuda" (set via resolve_device / --gpu)
     seed: int = 0
     ckpt_dir: str = "checkpoints"
+
+    def enc_for(self, net: str) -> str:
+        """Resolve the encoder for one net ('actor'|'critic'|'guesser'|'public'),
+        falling back to the base `encoder` when no per-net override is set."""
+        return getattr(self, f"{net}_encoder") or self.encoder
 
     def ent_coef(self, it: int) -> float:
         if self.iters <= 1:

@@ -31,10 +31,10 @@ def build_models(cfg: Config) -> Models:
     torch.manual_seed(cfg.seed)
     dev = cfg.device
     return Models(
-        MaskedActor(cfg.hidden, cfg.encoder).to(dev),
-        PrivilegedCritic(cfg.critic_hidden, cfg.encoder).to(dev),
-        HandGuesser(cfg.hidden, cfg.encoder).to(dev),
-        PublicEstimator(cfg.hidden, cfg.encoder).to(dev),
+        MaskedActor(cfg.hidden, cfg.enc_for("actor")).to(dev),
+        PrivilegedCritic(cfg.critic_hidden, cfg.enc_for("critic")).to(dev),
+        HandGuesser(cfg.hidden, cfg.enc_for("guesser")).to(dev),
+        PublicEstimator(cfg.hidden, cfg.enc_for("public")).to(dev),
     )
 
 

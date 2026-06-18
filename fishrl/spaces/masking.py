@@ -170,8 +170,8 @@ def _priority_mask(g, viewer: str, m) -> None:
                 continue
             spec = PERMANENT_ABILITIES[name][idx]
             # mana abilities cost no mana (they ARE mana); a non-mana ability must be
-            # payable from OTHER sources, since this one taps/sacrifices itself.
-            if spec["adds"] or _affordable(g, viewer, {}, spec["cost"], exclude_iid=iid):
+            # payable (colour-aware) from OTHER sources, since this one taps/sacs itself.
+            if spec["adds"] or _affordable(g, viewer, *E._parse_cost(spec["cost"]), exclude_iid=iid):
                 m[A.aid("ACTIVATE", i * A.ABIL_SLOTS + idx)] = 1
 
 

@@ -837,9 +837,9 @@ def activate_ability(g: GameState, player: str, iid: str, index: int) -> bool:
         if _payment_done(ctx):
             _complete_payment(g, player, ctx)
         return True
-    cost, pool = ab["cost"], p.mana_pool
+    colored, generic = _parse_cost(ab["cost"])        # coloured pips preserved ({1}{U} != {2})
     ctx = _new_payment({"kind": "activate", "source": iid, "index": index,
-                        "name": g.objects[iid].name}, pool, {}, cost)
+                        "name": g.objects[iid].name}, p.mana_pool, colored, generic)
     if _payment_done(ctx):
         _resolve_activation(g, player, iid, index)
         return True

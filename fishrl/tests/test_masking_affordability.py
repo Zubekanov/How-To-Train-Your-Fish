@@ -8,7 +8,7 @@ import numpy as np
 
 from fishrl.forgetful_fish import engine as E
 from fishrl.forgetful_fish.state import (
-    GameState, PlayerState, CardInstance, PendingDecision,
+    GameState, PlayerState, CardInstance, PendingDecision, PERMANENT_ABILITIES,
 )
 from fishrl.spaces import action_space as A
 from fishrl.spaces import masking as M
@@ -44,14 +44,19 @@ def test_affordable_counts_svyelunite_sacrifice():
     assert not M._affordable(g, "p1", {}, 3)
 
 
-def test_surgical_bay_ability_needs_two_other_lands():
+def test_surgical_bay_ability_cost_is_colour_aware():
+    """The Surgical Bay's draw is {1}{U} (one generic AND one blue), paid from OTHER
+    sources since it taps/sacrifices itself. So it needs a blue pip plus one more mana
+    -- two RED lands cannot pay it (no blue), contrary to a flat 'two generic'."""
     g = _game()
-    bay = _put(g, "The Surgical Bay", "Land")        # {1}{U},{T},Sac: draw  (cost 2)
-    _put(g, "Island", "Basic Land - Island")
-    # the bay taps/sacs itself, so it can't help pay its own cost: one other land is short
-    assert not M._affordable(g, "p1", {}, 2, exclude_iid=bay)
-    _put(g, "Island", "Basic Land - Island")
-    assert M._affordable(g, "p1", {}, 2, exclude_iid=bay)   # two other lands -> affordable
+    bay = _put(g, "The Surgical Bay", "Land")
+    colored, generic = E._parse_cost(PERMANENT_ABILITIES["The Surgical Bay"][1]["cost"])
+    assert (colored, generic) == ({"U": 1}, 1)       # not ({}, 2)
+    _put(g, "Island", "Basic Land - Mountain")       # {R}
+    _put(g, "Island", "Basic Land - Mountain")       # {R}
+    assert not M._affordable(g, "p1", colored, generic, exclude_iid=bay)   # no blue
+    _put(g, "Island", "Basic Land - Island")         # {U}
+    assert M._affordable(g, "p1", colored, generic, exclude_iid=bay)       # blue + generic
 
 
 def test_affordable_is_colour_aware():

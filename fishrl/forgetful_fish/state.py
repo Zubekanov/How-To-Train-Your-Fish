@@ -520,14 +520,17 @@ def land_mana_color(o: "CardInstance") -> str:
 # colour). Cards with no entry keep the default "click a land to tap for {U}".
 # ---------------------------------------------------------------------------
 
+# `cost` is the ability's mana cost as a mana-cost STRING (parsed by engine._parse_cost,
+# like a spell's mana_cost), so coloured pips are preserved — {1}{U} is one generic AND
+# one blue, NOT two generic. "" means no mana cost (the {T} part is paid by tapping).
 PERMANENT_ABILITIES = {
     "Svyelunite Temple": [
-        {"text": "{T}: Add {U}.", "tap": True, "sac": False, "cost": 0, "adds": 1, "effect": None},
-        {"text": "{T}, Sacrifice: Add {U}{U}.", "tap": True, "sac": True, "cost": 0, "adds": 2, "effect": None},
+        {"text": "{T}: Add {U}.", "tap": True, "sac": False, "cost": "", "adds": 1, "effect": None},
+        {"text": "{T}, Sacrifice: Add {U}{U}.", "tap": True, "sac": True, "cost": "", "adds": 2, "effect": None},
     ],
     "The Surgical Bay": [
-        {"text": "{T}: Add {U}.", "tap": True, "sac": False, "cost": 0, "adds": 1, "effect": None},
-        {"text": "{1}{U}, {T}, Sacrifice: Draw a card.", "tap": True, "sac": True, "cost": 2, "adds": 0, "effect": "draw_1"},
+        {"text": "{T}: Add {U}.", "tap": True, "sac": False, "cost": "", "adds": 1, "effect": None},
+        {"text": "{1}{U}, {T}, Sacrifice: Draw a card.", "tap": True, "sac": True, "cost": "{1}{U}", "adds": 0, "effect": "draw_1"},
     ],
 }
 

@@ -55,14 +55,25 @@ def test_surgical_bay_ability_needs_two_other_lands():
 
 
 def test_affordable_is_colour_aware():
-    """A {U} cost (e.g. cycling Lonely Sandbar) can't be paid by a land whose basic
-    type was changed to Mountain (taps for R) -- otherwise the agent commits to an
-    unpayable cost with no cancel and the pay mask goes empty."""
+    """A {U} cost (e.g. cycling Lonely Sandbar, or any blue spell) can't be paid by a
+    land whose basic type was changed to Mountain (taps for R) -- otherwise the agent
+    commits to an unpayable cost with no cancel and the pay mask goes empty."""
     g = _game()
     _put(g, "Island", "Basic Land - Mountain")       # text-changed -> taps for {R}
     assert not M._affordable(g, "p1", {"U": 1}, 0)
     _put(g, "Island", "Basic Land - Island")
     assert M._affordable(g, "p1", {"U": 1}, 0)
+
+
+def test_affordable_checks_colour_not_just_total():
+    """Affordability is by colour, not total mana: {U}{U} is unpayable with one blue
+    and one red source even though the total is two. (Guards every gate that routes a
+    coloured cost through _affordable -- casts and cycling.)"""
+    g = _game()
+    _put(g, "Island", "Basic Land - Island")         # {U}
+    _put(g, "Island", "Basic Land - Mountain")       # {R}
+    assert not M._affordable(g, "p1", {"U": 2}, 0)   # two mana, but only one is blue
+    assert M._affordable(g, "p1", {"U": 1}, 1)       # one blue + one generic -> ok
 
 
 # ── the reversible 'undo' actions are never offered ───────────────────────────

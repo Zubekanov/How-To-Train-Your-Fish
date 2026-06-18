@@ -84,11 +84,15 @@ class CompoundBuilder:
                     m[A.aid("PICK_A", i)] = 1
         elif t == "declare_attackers":
             for i in range(n):
-                m[A.aid("PICK_A", i)] = 1       # toggle in/out
+                if self.items[i] not in self.attacking:  # ADD only; no reversible toggle-off
+                    m[A.aid("PICK_A", i)] = 1            # (else the agent oscillates forever)
             m[A.aid("COMMIT")] = 1
         elif t == "declare_blockers":
-            for j in range(min(len(self.attackers), A.CMP_K)):
-                m[A.aid("PICK_B", j)] = 1       # select an attacker to assign to
+            # attacker focus moves FORWARD only, so the agent can't cycle focus
+            # (PICK_B a, PICK_B b, PICK_B a, ...) without ever assigning/committing.
+            start = 0 if self.sel_attacker is None else self.sel_attacker + 1
+            for j in range(start, min(len(self.attackers), A.CMP_K)):
+                m[A.aid("PICK_B", j)] = 1       # select the next attacker to assign to
             if self.sel_attacker is not None:
                 for i in range(n):
                     if i not in self.used_blockers:
@@ -137,9 +141,7 @@ class CompoundBuilder:
             if name == "COMMIT":
                 return self._finalize(E.declare_attackers(g, self.player, self.attacking))
             iid = self.items[i]
-            if iid in self.attacking:
-                self.attacking.remove(iid)
-            else:
+            if iid not in self.attacking:        # add-only (the mask never re-offers a chosen one)
                 self.attacking.append(iid)
             return False
         if t == "declare_blockers":
@@ -188,6 +190,8 @@ class CompoundBuilder:
             return len(self.order) / (self.count or 1)
         if t == "declare_blockers":
             return len(self.used_blockers) / n
+        if t == "declare_attackers":
+            return len(self.attacking) / n
         return 0.0
 
     @staticmethod

@@ -120,4 +120,16 @@ class FishAEC(AECEnv):
                     continue
             else:
                 self._builder = None
+                # A pay decision must never present an empty mask (it would make the
+                # masked policy uniform and sample an illegal action). If affordability
+                # gating ever lets a payment strand, abort it transparently here — the
+                # agent never sees a cancel action, so this is not a reversible stall
+                # lever. Mirrors the empty-builder autofinalize above.
+                if pend.type == "pay" and int(atomic_mask(g, pend.player).sum()) == 0:
+                    import os
+                    if os.environ.get("FISH_DEBUG_STRAND"):
+                        print(f"[STRAND] aborting empty-mask payment: ctx={pend.context}",
+                              flush=True)
+                    E.cancel_payment(g, pend.player)
+                    continue
             return

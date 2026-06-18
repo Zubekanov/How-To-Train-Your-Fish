@@ -117,6 +117,8 @@ def main():
     ap.add_argument("--seeds", type=int, default=2)
     ap.add_argument("--heuristic-games", type=int, default=100)
     ap.add_argument("--match-games", type=int, default=100, help="per arm-pair, seat-balanced")
+    ap.add_argument("--anchor-minutes", type=float, default=20.0,
+                    help="budget to train the frozen-self anchor (a flat agent), 0 to skip")
     ap.add_argument("--ckpt-dir", default="checkpoints")
     ap.add_argument("--out", default="h2h_results.json")
     args = ap.parse_args()
@@ -124,8 +126,26 @@ def main():
 
     _log(f"=== actor head-to-head | {device} | {args.minutes}min/arm | {args.seeds} seeds ===")
     _log(f"    arms: {[a['name'] for a in ARMS]}; entity critic; flat guesser")
+
+    # Frozen-self anchor: ONE flat agent trained to a fixed budget, identical for every
+    # arm/seed (transitive), automatically in the agents' skill band, and distinct in
+    # character from the scripted attacker -> a second transitive point for the panel.
+    anchor = None
+    if args.anchor_minutes > 0:
+        _log(f"\n[anchor] training frozen flat agent ({args.anchor_minutes}min, seed 12345) ...")
+        acfg = Config(device=device, encoder="flat", critic_encoder="entity", use_belief=True,
+                      iters=1_000_000, seed=12345, games_per_iter=8, warmup_games=32)
+        am = train(acfg, build_models(acfg), log=lambda s: _log(f"    {s}"),
+                   max_seconds=args.anchor_minutes * 60)
+        am.actor.eval()
+        path = os.path.join(args.ckpt_dir, "h2h_anchor.pt")
+        os.makedirs(args.ckpt_dir, exist_ok=True)
+        torch.save({"actor": am.actor.state_dict(), "guesser": am.guesser.state_dict()}, path)
+        anchor = (am, True)
+
     names = [a["name"] for a in ARMS]
-    vs_attk = {n: [] for n in names}     # PRIMARY transitive anchor (in the agents' band)
+    vs_attk = {n: [] for n in names}     # PRIMARY transitive anchor (scripted, in-band)
+    vs_froz = {n: [] for n in names}     # 2nd transitive anchor (frozen flat self)
     vs_heur = {n: [] for n in names}     # ceiling milestone (heuristic saturates ~0 early)
     vs_rand = {n: [] for n in names}     # floor sanity ("did it learn at all")
     pairs = [("flat", "entity"), ("flat", "flat-nobel"), ("entity", "flat-nobel")]
@@ -148,10 +168,15 @@ def main():
                                       use_belief=arm["use_belief"])
             wr = winrate_vs_random(m, n_games=args.heuristic_games, seed=800_000,
                                    use_belief=arm["use_belief"])
+            wf = float("nan")
+            if anchor is not None:                        # seat-balanced vs the frozen self
+                wf, _raw = _head2head((m, arm["use_belief"]), anchor, args.match_games,
+                                      seed=500_000 + seed)
+                vs_froz[arm["name"]].append(wf)
             vs_attk[arm["name"]].append(wa)
             vs_heur[arm["name"]].append(wh)
             vs_rand[arm["name"]].append(wr)
-            _log(f"  [eval] {arm['name']:11s} vs_attacker {wa:.3f}  "
+            _log(f"  [eval] {arm['name']:11s} vs_attacker {wa:.3f}  vs_frozen {wf:.3f}  "
                  f"vs_heuristic {wh:.3f}  vs_random {wr:.3f}")
 
         for x, y in pairs:                            # seed-matched round-robin
@@ -169,22 +194,25 @@ def main():
         return (float(a.mean()), float(a.std())) if len(a) else (float("nan"), float("nan"))
 
     _log("\n=== SUMMARY (win-rate mean +/- std over seeds) ===")
-    _log("  vs_attacker is the PRIMARY decider (transitive, in-band); vs_heuristic is a")
-    _log("  ceiling milestone; vs_random a floor check; head-to-head is a cycle-detector only.")
-    _log(f"  {'arm':11s} {'vs_attacker':>15s} {'vs_heuristic':>15s} {'vs_random':>15s}")
+    _log("  PRIMARY = the transitive anchor PANEL: vs_attacker (scripted) + vs_frozen (frozen")
+    _log("  flat self). vs_heuristic = ceiling milestone; vs_random = floor; A-vs-B = cycle-check.")
+    _log(f"  {'arm':11s} {'vs_attacker':>13s} {'vs_frozen':>13s} {'vs_heuristic':>13s} {'vs_random':>13s}")
     for n in names:
         ma, sa = ms(vs_attk[n])
+        mf, sf = ms(vs_froz[n])
         mh, sh = ms(vs_heur[n])
         mr, sr = ms(vs_rand[n])
-        _log(f"  {n:11s} {ma:.3f}+/-{sa:.3f}  {mh:.3f}+/-{sh:.3f}  {mr:.3f}+/-{sr:.3f}")
+        _log(f"  {n:11s} {ma:.3f}+/-{sa:.3f} {mf:.3f}+/-{sf:.3f} "
+             f"{mh:.3f}+/-{sh:.3f} {mr:.3f}+/-{sr:.3f}")
     _log("\n  direct head-to-head (cycle-detector / tiebreaker, NOT the decider):")
     for k, xs in h2h.items():
         mh, sh = ms(xs)
         _log(f"  {k:24s} {mh:.3f}+/-{sh:.3f}   raw_per_seed={h2h_raw[k]}")
 
     out = {"minutes": args.minutes, "seeds": args.seeds, "device": device,
-           "vs_attacker": vs_attk, "vs_heuristic": vs_heur, "vs_random": vs_rand,
-           "head2head": h2h, "head2head_raw": h2h_raw}
+           "anchor_minutes": args.anchor_minutes,
+           "vs_attacker": vs_attk, "vs_frozen": vs_froz, "vs_heuristic": vs_heur,
+           "vs_random": vs_rand, "head2head": h2h, "head2head_raw": h2h_raw}
     with open(args.out, "w") as f:
         json.dump(out, f, indent=2)
     _log(f"\nsaved -> {args.out}")

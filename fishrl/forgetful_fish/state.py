@@ -161,6 +161,8 @@ class PlayerState:
     land_played_this_turn: bool = False
     has_lost: bool = False
     loss_reason: str | None = None
+    drew_from_empty: bool = False                    # attempted to draw from an empty
+    #                                                  library -> loses at next SBA (CR 704.5c)
     hand: list = field(default_factory=list)         # instance ids (ordered)
     battlefield: list = field(default_factory=list)  # instance ids
     tap_undo: list = field(default_factory=list)     # lands tapped since the last
@@ -292,14 +294,17 @@ def rng_from_state(state: list | None) -> random.Random:
 def draw_card(state: "GameState", player: str, *, log: bool = True) -> str | None:
     """Move the top card of the shared library into `player`'s hand.
 
-    Returns the moved instance id, or None if the library is empty (a real
-    draw from an empty library would lose the game; that rule lives in the
-    engine, not here). `log=False` suppresses the per-draw log line (used by
-    draw_cards, which logs the aggregate instead).
+    Returns the moved instance id, or None if the library is empty. A draw
+    attempted from an empty library flags the player, who then loses at the next
+    state-based-action check (CR 704.5c) -- this covers EVERY draw source (the
+    turn-based draw step and any spell/ability draw), not just the draw step.
+    `log=False` suppresses the per-draw log line (used by draw_cards, which logs
+    the aggregate instead).
     """
     _seal_taps(state)
     if not state.library:
         state.log.append(f"{state.players[player].name} cannot draw from an empty library.")
+        state.players[player].drew_from_empty = True
         return None
     slot = state.library.pop(0)
     # whoever knew this top card now knows it in the drawer's hand

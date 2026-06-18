@@ -289,9 +289,9 @@ def _enter_step(g: GameState, step: str) -> None:
 
     if step == "draw":                               # CR 504
         first_turn = g.turn_number == 1 and g.active_player == g.first_player
-        if not first_turn and draw_card(g, g.active_player) is None:
-            _lose(g, g.active_player, "drawing from an empty library")
-            return
+        if not first_turn:
+            draw_card(g, g.active_player)             # empty-library loss handled as an SBA below
+            #                                           (CR 704.5c), via _give_priority -> _check_sba
 
     if step == "begin_combat":                       # CR 507 — fresh combat each turn
         g.combat = Combat()
@@ -2205,8 +2205,12 @@ def _check_sba(g: GameState) -> None:
                 _remove_from_battlefield(g, pl, iid, o, f"{o.name} dies.")
     _sweep_text_changes(g)
     for pid, p in g.players.items():
-        if p.life <= 0 and not p.has_lost:
+        if p.has_lost:
+            continue
+        if p.life <= 0:
             _lose(g, pid, f"life total {p.life}")
+        elif p.drew_from_empty:                       # CR 704.5c — any source, not just the draw step
+            _lose(g, pid, "drawing from an empty library")
 
 
 def _state_trigger_pending(g: GameState, iid: str) -> bool:

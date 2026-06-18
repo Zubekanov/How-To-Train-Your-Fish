@@ -95,6 +95,42 @@ def test_empty_library_compound_auto_resolves():
         assert g.pending is None or g.pending.type not in ("reorder", "scry")
 
 
+def test_spell_draw_from_empty_library_decks_via_sba():
+    """A spell/ability draw (NOT just the turn-based draw step) into an empty library
+    must lose the game at the next state-based-action check (CR 704.5c). Regression for
+    the bug where only the draw step enforced decking, so spell/ability draws into an
+    empty library silently drew nothing."""
+    from fishrl.forgetful_fish import engine as E
+    from fishrl.forgetful_fish.state import draw_card, draw_cards
+    for drawer in (lambda g: draw_card(g, "p1"), lambda g: draw_cards(g, "p1", 3)):
+        e = raw_env()
+        e.reset(seed=1)
+        g = e.g
+        g.library = []                              # deck-out
+        assert drawer(g) in (None, [])              # the draw returns nothing...
+        assert g.players["p1"].drew_from_empty      # ...but flags the player
+        assert not g.players["p1"].has_lost         # not lost until the next SBA
+        E._check_sba(g)
+        assert g.players["p1"].has_lost
+        assert g.result["winner"] == "p2"
+        assert "empty library" in g.result["reason"]
+
+
+def test_draw_step_from_empty_library_still_decks():
+    """The turn-based draw step still decks an empty-library player -- guards the change
+    that routes the loss through the SBA instead of an inline check in the draw step."""
+    from fishrl.forgetful_fish import engine as E
+    e = raw_env()
+    e.reset(seed=1)
+    g = e.g
+    g.library = []
+    g.turn_number = 3                               # past the first-turn draw skip
+    g.active_player = "p1"
+    E._enter_step(g, "draw")
+    assert g.players["p1"].has_lost
+    assert g.result["winner"] == "p2"
+
+
 def test_compound_types_are_exercised():
     """Compound builders actually run (and finalize) in real games."""
     rng = np.random.default_rng(5)

@@ -36,11 +36,15 @@ def main():
     ap.add_argument("--ckpt-dir", default="checkpoints")
     args = ap.parse_args()
 
+    # Only pass per-net overrides the user actually set, so an omitted flag keeps the
+    # Config default (e.g. critic_encoder defaults to "entity") instead of clobbering
+    # it with None.
+    per_net = {f"{n}_encoder": getattr(args, f"{n}_encoder")
+               for n in ("actor", "critic", "guesser", "public")
+               if getattr(args, f"{n}_encoder") is not None}
     cfg = Config(device=resolve_device(args.gpu), iters=args.iters,
                  games_per_iter=args.games_per_iter, warmup_games=args.warmup_games,
-                 encoder=args.encoder, actor_encoder=args.actor_encoder,
-                 critic_encoder=args.critic_encoder, guesser_encoder=args.guesser_encoder,
-                 public_encoder=args.public_encoder, seed=args.seed, ckpt_dir=args.ckpt_dir)
+                 encoder=args.encoder, seed=args.seed, ckpt_dir=args.ckpt_dir, **per_net)
     encs = {n: cfg.enc_for(n) for n in ("actor", "critic", "guesser", "public")}
     print(f"device: {cfg.device} | encoders: {encs} | iters: {cfg.iters}", flush=True)
 

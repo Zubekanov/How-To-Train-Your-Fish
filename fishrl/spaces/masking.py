@@ -94,9 +94,19 @@ def _single_pick_mask(items, m, *, allow_none: bool) -> None:
 
 def _mana_options(g, viewer: str, exclude_iid):
     """List of (iid, ('tap_land'|'activate', idx_or_None), sym, amount) for every
-    untapped source's mana options. Ability mana is always {U} in this game."""
+    untapped source's mana options. Ability mana is always {U} in this game.
+
+    Only ADDRESSABLE sources are returned: a permanent past the action space's
+    battlefield-slot cap (``A.BF``) or an ability past ``A.ABIL_SLOTS`` has no
+    TAP_LAND/ACTIVATE id, so the pay mask could never emit it. Counting such a
+    source toward affordability would let a cast be offered at priority and then
+    strand with an empty pay mask (the {U}-spell strand). Affordability
+    (``_potential_pool``) and the pay mask both route through here, so applying the
+    cap once keeps them consistent by construction."""
     opts = []
-    for iid in g.players[viewer].battlefield:
+    for i, iid in enumerate(g.players[viewer].battlefield):
+        if i >= A.BF:                         # beyond the addressable slot cap -> the
+            break                             # pay mask can't tap it; don't count it
         if iid == exclude_iid:
             continue
         o = g.objects.get(iid)
@@ -105,6 +115,8 @@ def _mana_options(g, viewer: str, exclude_iid):
         if _is_land(o.type_line):
             opts.append((iid, ("tap_land", None), land_mana_color(o), 1))
         for idx, ab in enumerate(PERMANENT_ABILITIES.get(o.name, [])):
+            if idx >= A.ABIL_SLOTS:           # ability id the action space can't reach
+                continue
             if ab["adds"] and not (ab["tap"] and o.tapped):   # an available mana ability
                 opts.append((iid, ("activate", idx), "U", ab["adds"]))
     return opts

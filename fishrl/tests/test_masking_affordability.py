@@ -122,6 +122,39 @@ def test_pay_mask_two_islands_both_tappable():
     assert m[A.aid("TAP_LAND", 0)] == 1 and m[A.aid("TAP_LAND", 1)] == 1
 
 
+# ── affordability counts only ADDRESSABLE mana (the {U}-spell strand) ──────────
+def test_unaddressable_u_source_past_slot_cap_does_not_count():
+    """A {U} source sitting past the action space's battlefield-slot cap (A.BF) has no
+    TAP_LAND id, so the pay mask can't emit it. Affordability must NOT count it -- else
+    a {U} spell is offered at priority and then strands with an empty pay mask (the bug
+    seen ~31x in the 6h run). With the only blue source at slot 20, the cast is simply
+    not offered."""
+    g = _game()
+    for _ in range(A.BF):                            # 20 addressable non-blue lands ({R})
+        _put(g, "Island", "Basic Land - Mountain")
+    u_iid = _put(g, "Island", "Basic Land - Island")  # the ONLY {U}, at slot 20 (>= A.BF)
+    assert g.players["p1"].battlefield.index(u_iid) >= A.BF
+    assert not M._affordable(g, "p1", {"U": 1}, 0)   # unaddressable blue doesn't count
+    # and the pay mask for a committed {U} is empty -- which is why it must not be offered
+    _pay_pending(g, {"U": 1}, 0)
+    assert int(M.atomic_mask(g, "p1").sum()) == 0
+
+
+def test_affordable_implies_nonempty_pay_mask():
+    """The invariant that kills the strand: if a coloured cost is deemed affordable, the
+    pay mask for that exact cost is non-empty (the committed payment is completable).
+    Checked across a U source within the cap and a sac-for-UU source."""
+    for setup, need, generic in [
+        (lambda g: _put(g, "Island", "Basic Land - Island"), {"U": 1}, 0),       # in-cap blue
+        (lambda g: _put(g, "Svyelunite Temple", "Land"), {}, 2),                  # sac -> UU
+    ]:
+        g = _game()
+        setup(g)
+        assert M._affordable(g, "p1", need, generic)
+        _pay_pending(g, need, generic)
+        assert int(M.atomic_mask(g, "p1").sum()) >= 1
+
+
 # ── floating mana empties when the phase moves (CR 500.4) ──────────────────────
 def test_floating_mana_empties_on_step_advance():
     g = _game()

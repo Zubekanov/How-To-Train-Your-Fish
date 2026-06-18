@@ -37,6 +37,10 @@ class BeliefAugmentedEnv:
         return self.env.agent_selection
 
     @property
+    def decision_id(self) -> int:
+        return self.env.decision_id
+
+    @property
     def terminations(self):
         return self.env.terminations
 

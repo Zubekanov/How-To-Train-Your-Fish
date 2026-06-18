@@ -68,6 +68,11 @@ def collect_games(belief_env, act_fn, n_games, base_seed, critic=None,
     for gi in range(n_games):
         belief_env.reset(seed=base_seed + gi)
         start = len(buf)
+        # god/public features depend only on `g`, which is FROZEN across the sub-steps of
+        # a compound decision -> encode once per distinct engine state (keyed on the env's
+        # decision_id) and reuse across sub-steps. A reused vector is copied so each Step
+        # owns an independent array (defensive; they're only ever read via np.stack today).
+        cache_id, cache_god, cache_pub = None, None, None
         for agent in belief_env.agent_iter(max_iter=max_decisions * 6):
             if belief_env.terminations[agent] or belief_env.truncations[agent]:
                 belief_env.step(None)
@@ -75,11 +80,17 @@ def collect_games(belief_env, act_fn, n_games, base_seed, critic=None,
             obs = belief_env.observe(agent)
             x = obs["observation"]
             g = belief_env.g
+            did = belief_env.decision_id
+            if did != cache_id:                       # engine advanced -> fresh encode
+                cache_id, cache_god, cache_pub = did, encode_god(g), encode_public(g)
+                god, pub = cache_god, cache_pub
+            else:                                     # same frozen state (compound sub-step)
+                god, pub = cache_god.copy(), cache_pub.copy()
             action, logp = act_fn(obs)
             buf.add(Step(
                 seat=agent, x_act=x.astype(np.float32),
                 mask=obs["action_mask"].astype(np.int8), action=action, logp=logp,
-                value=0.0, god_feat=encode_god(g), pub_feat=encode_public(g),
+                value=0.0, god_feat=god, pub_feat=pub,
                 guess_in=x[OBS_DIM:].astype(np.float32),
                 cnt_target=opponent_hand_counts(g, agent),
             ))

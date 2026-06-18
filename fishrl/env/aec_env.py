@@ -41,6 +41,15 @@ class FishAEC(AECEnv):
             for a in self.possible_agents
         }
 
+    @property
+    def decision_id(self) -> int:
+        """Monotonic counter that increments iff the engine actually ADVANCED (an atomic
+        action applied, or a compound builder finalized) -- it stays CONSTANT across the
+        sub-steps of one compound decision (the builder accumulates env-side; `g` is
+        frozen until finalize). Lets the collector dedupe the god/public encodes that are
+        otherwise recomputed identically on every sub-step."""
+        return self._decisions
+
     def observation_space(self, agent):
         return self.observation_spaces[agent]
 

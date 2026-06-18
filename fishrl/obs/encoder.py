@@ -69,11 +69,17 @@ _GLOBALS = _PER_PLAYER * 2 + _GAME + V.N_STEPS + _COMBAT + V.N_PENDING + _PAY + 
 OBS_DIM = _ZONE_ROWS * CARD_F + _GLOBALS
 
 
-def _encode_card(card: dict | None, viewer: str) -> np.ndarray:
-    v = np.zeros(CARD_F, dtype=np.float32)
+def _encode_card_into(card: dict | None, viewer: str, v: np.ndarray) -> None:
+    """Write a card's feature row into ``v`` (a CARD_F-wide slice, assumed zeroed).
+
+    In-place to avoid a per-card temporary allocation + row-copy: this runs ~150x per
+    decision (3 encoders x ~50 occupied slots) and `_encode_card` was the single
+    hottest function in collection. The name one-hot stays a single sparse write
+    (`v[idx]=1.0`) -- it is NOT densely constructed, so precomputing it would be a
+    20-wide copy in place of one assignment (slower)."""
     if not card or card.get("known") is False or "name" not in card:
         v[V.N_NAMES] = 1.0          # "unknown/hidden" bit
-        return v
+        return
     name = card.get("name", "")
     idx = V.NAME_INDEX.get(name)
     if idx is not None:
@@ -104,13 +110,19 @@ def _encode_card(card: dict | None, viewer: str) -> np.ndarray:
     v[o + 2] = float(card.get("controller") == viewer)
     o += 3
     v[o] = 1.0                       # known bit
+
+
+def _encode_card(card: dict | None, viewer: str) -> np.ndarray:
+    """Allocating wrapper kept for callers that want a standalone row."""
+    v = np.zeros(CARD_F, dtype=np.float32)
+    _encode_card_into(card, viewer, v)
     return v
 
 
 def _zone(cards: list, n: int, viewer: str) -> np.ndarray:
     rows = np.zeros((n, CARD_F), dtype=np.float32)
     for i, card in enumerate(cards[:n]):
-        rows[i] = _encode_card(card, viewer)
+        _encode_card_into(card, viewer, rows[i])   # write into the row; no temp + copy
     return rows.reshape(-1)
 
 

@@ -85,6 +85,50 @@ def winrate_vs_random(models, n_games=20, seed=0, max_decisions=2000,
     return wins / n_games
 
 
+def winrate_vs_attacker(models, n_games=40, seed=0, max_decisions=2000,
+                        use_belief=True) -> float:
+    """Win-rate of the trained agent vs the scripted attacker opponent, seat-balanced
+    (the agent plays p1 half the games and p2 the other half to cancel first-player
+    bias). A fixed, transitive anchor in the agents' own skill band."""
+    from fishrl.env.aec_env import FishAEC
+    from fishrl.opponents.attacker import attacker_action
+    z = np.zeros(V.N_NAMES, dtype=np.float32)
+    dev = device_of(models.guesser)
+    rng = np.random.default_rng(seed)
+    wins = 0
+    for i in range(n_games):
+        agent_seat = "p1" if i % 2 == 0 else "p2"     # alternate seats
+        env = FishAEC(max_decisions=max_decisions)
+        env.reset(seed=seed + i)
+        prev = z.copy()
+        guard = 0
+        while env.agents and guard < max_decisions * 6:
+            guard += 1
+            seat = env.agent_selection
+            if env.terminations[seat] or env.truncations[seat]:
+                env.step(None)
+                continue
+            base = env.observe(seat)
+            if seat == agent_seat:
+                persp = base["observation"]
+                if use_belief:
+                    with torch.no_grad():
+                        guess = models.guesser(
+                            torch.as_tensor(persp).unsqueeze(0).to(dev),
+                            torch.as_tensor(prev).unsqueeze(0).to(dev)).squeeze(0).cpu().numpy().astype(np.float32)
+                    prev = guess
+                else:
+                    guess = z
+                aug = {"observation": np.concatenate([persp, guess]).astype(np.float32),
+                       "action_mask": base["action_mask"]}
+                a = act_from_actor(models.actor, aug)
+            else:
+                a = attacker_action(env.g, seat, base["action_mask"], rng)
+            env.step(a)
+        wins += int(env.g.result.get("winner") == agent_seat)
+    return wins / n_games
+
+
 def winrate_vs_heuristic(models, n_games=20, seed=0, max_decisions=2000,
                          use_belief=True) -> float:
     """The trained actor (p1, belief-augmented) vs the engine heuristic AI (p2).

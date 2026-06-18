@@ -26,7 +26,8 @@ import numpy as np
 import torch
 
 from fishrl.env.aec_env import FishAEC
-from fishrl.eval.metrics import act_from_actor, winrate_vs_heuristic, winrate_vs_random
+from fishrl.eval.metrics import (
+    act_from_actor, winrate_vs_attacker, winrate_vs_heuristic, winrate_vs_random)
 from fishrl.models import device_of
 from fishrl.obs import vocab as V
 from fishrl.train.config import Config, resolve_device
@@ -124,8 +125,9 @@ def main():
     _log(f"=== actor head-to-head | {device} | {args.minutes}min/arm | {args.seeds} seeds ===")
     _log(f"    arms: {[a['name'] for a in ARMS]}; entity critic; flat guesser")
     names = [a["name"] for a in ARMS]
-    vs_heur = {n: [] for n in names}
-    vs_rand = {n: [] for n in names}
+    vs_attk = {n: [] for n in names}     # PRIMARY transitive anchor (in the agents' band)
+    vs_heur = {n: [] for n in names}     # ceiling milestone (heuristic saturates ~0 early)
+    vs_rand = {n: [] for n in names}     # floor sanity ("did it learn at all")
     pairs = [("flat", "entity"), ("flat", "flat-nobel"), ("entity", "flat-nobel")]
     h2h = {f"{x} vs {y}": [] for x, y in pairs}      # list of X-winrate per seed
     h2h_raw = {f"{x} vs {y}": [] for x, y in pairs}
@@ -140,13 +142,17 @@ def main():
                 _log(f"  [ERROR] arm {arm['name']} seed {seed}: {e!r}")
                 continue
             trained[arm["name"]] = (m, arm["use_belief"])
+            wa = winrate_vs_attacker(m, n_games=args.heuristic_games, seed=700_000,
+                                     use_belief=arm["use_belief"])
             wh = winrate_vs_heuristic(m, n_games=args.heuristic_games, seed=900_000,
                                       use_belief=arm["use_belief"])
             wr = winrate_vs_random(m, n_games=args.heuristic_games, seed=800_000,
                                    use_belief=arm["use_belief"])
+            vs_attk[arm["name"]].append(wa)
             vs_heur[arm["name"]].append(wh)
             vs_rand[arm["name"]].append(wr)
-            _log(f"  [eval] {arm['name']:11s} vs_heuristic {wh:.3f}  vs_random {wr:.3f}")
+            _log(f"  [eval] {arm['name']:11s} vs_attacker {wa:.3f}  "
+                 f"vs_heuristic {wh:.3f}  vs_random {wr:.3f}")
 
         for x, y in pairs:                            # seed-matched round-robin
             if x in trained and y in trained:
@@ -163,18 +169,21 @@ def main():
         return (float(a.mean()), float(a.std())) if len(a) else (float("nan"), float("nan"))
 
     _log("\n=== SUMMARY (win-rate mean +/- std over seeds) ===")
-    _log(f"  {'arm':11s} {'vs_heuristic':>16s} {'vs_random':>16s}")
+    _log("  vs_attacker is the PRIMARY decider (transitive, in-band); vs_heuristic is a")
+    _log("  ceiling milestone; vs_random a floor check; head-to-head is a cycle-detector only.")
+    _log(f"  {'arm':11s} {'vs_attacker':>15s} {'vs_heuristic':>15s} {'vs_random':>15s}")
     for n in names:
+        ma, sa = ms(vs_attk[n])
         mh, sh = ms(vs_heur[n])
         mr, sr = ms(vs_rand[n])
-        _log(f"  {n:11s} {mh:.3f}+/-{sh:.3f}     {mr:.3f}+/-{sr:.3f}")
-    _log("\n  direct head-to-head (first arm's win-rate over decided games):")
+        _log(f"  {n:11s} {ma:.3f}+/-{sa:.3f}  {mh:.3f}+/-{sh:.3f}  {mr:.3f}+/-{sr:.3f}")
+    _log("\n  direct head-to-head (cycle-detector / tiebreaker, NOT the decider):")
     for k, xs in h2h.items():
         mh, sh = ms(xs)
         _log(f"  {k:24s} {mh:.3f}+/-{sh:.3f}   raw_per_seed={h2h_raw[k]}")
 
     out = {"minutes": args.minutes, "seeds": args.seeds, "device": device,
-           "vs_heuristic": vs_heur, "vs_random": vs_rand,
+           "vs_attacker": vs_attk, "vs_heuristic": vs_heur, "vs_random": vs_rand,
            "head2head": h2h, "head2head_raw": h2h_raw}
     with open(args.out, "w") as f:
         json.dump(out, f, indent=2)

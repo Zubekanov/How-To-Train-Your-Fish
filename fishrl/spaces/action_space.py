@@ -20,7 +20,7 @@ from __future__ import annotations
 
 # ── Capacities (sized generously above realistic maxima for the 80-card pool) ──
 HAND = 12          # own hand slots (mulligan-7 + draws; Brainstorm peaks ~10)
-BF = 20            # own battlefield slots (lands + creatures)
+BF = 34            # own battlefield slots (lands + creatures)
 PICK_K = 64        # single-pick context list (library search / graveyard / names)
 CMP_K = 20         # compound working-list size (attackers/blockers ≤ creatures; hand ≤ 12)
 COLORS = ("W", "U", "B", "R", "G")

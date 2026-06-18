@@ -53,7 +53,7 @@ CARD_F = V.N_NAMES + 1 + 4 + 5 + 5 + 1 + 4 + 3 + 1
 
 # ── fixed zone slot counts (pad / truncate) ───────────────────────────────────
 SLOTS = {
-    "own_hand": 12, "opp_hand": 12, "own_bf": 20, "opp_bf": 20,
+    "own_hand": 12, "opp_hand": 12, "own_bf": 34, "opp_bf": 34,
     "graveyard": 32, "exile": 8, "stack": 6, "library": 8,
 }
 _ZONE_ROWS = sum(SLOTS.values())

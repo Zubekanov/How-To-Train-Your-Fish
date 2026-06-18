@@ -23,7 +23,7 @@ from fishrl.obs import vocab as V
 
 # ── god (privileged) layout ───────────────────────────────────────────────────
 GOD_SLOTS = {
-    "p1_hand": 12, "p2_hand": 12, "p1_bf": 20, "p2_bf": 20,
+    "p1_hand": 12, "p2_hand": 12, "p1_bf": 34, "p2_bf": 34,
     "graveyard": 32, "exile": 8, "stack": 6, "library": 64,
 }
 _GOD_ROWS = sum(GOD_SLOTS.values())
@@ -33,7 +33,7 @@ GOD_DIM = _GOD_ROWS * CARD_F + _GOD_PER_PLAYER * 2 + _GOD_GAME
 
 # ── public (mutual-knowledge) layout ──────────────────────────────────────────
 PUB_SLOTS = {
-    "p1_hand": 12, "p2_hand": 12, "p1_bf": 20, "p2_bf": 20,
+    "p1_hand": 12, "p2_hand": 12, "p1_bf": 34, "p2_bf": 34,
     "graveyard": 32, "exile": 8, "stack": 6, "library": 8,
 }
 _PUB_ROWS = sum(PUB_SLOTS.values())

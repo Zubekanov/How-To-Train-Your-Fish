@@ -1,0 +1,57 @@
+"""Crash-safe training checkpoints for the long-running self-play service.
+
+A checkpoint is a single torch-serialised dict (schema ``format: 1``) holding EVERYTHING
+needed to resume `train()` mid-run with full continuity: all four model state_dicts, the
+frozen-self anchor, the three optimizer states, RNG state, the iteration counter, and the
+cumulative wall-clock. `latest.pt` is the canonical resume target; `step_*.pt` milestones are
+kept for inspection/rollback only.
+
+Writes are ATOMIC: serialise to ``<path>.tmp``, fsync, then ``os.replace`` onto the final name
+(atomic on POSIX). A process killed mid-write therefore leaves the previous good checkpoint
+intact — never a half-written file.
+"""
+from __future__ import annotations
+
+import glob
+import os
+
+import torch
+
+LATEST = "latest.pt"
+FORMAT = 1
+
+
+def latest_path(ckpt_dir: str) -> str:
+    return os.path.join(ckpt_dir, LATEST)
+
+
+def save_checkpoint(path: str, payload: dict) -> None:
+    """Atomically write `payload` to `path` (tmp + fsync + os.replace)."""
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        torch.save(payload, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def save_milestone(ckpt_dir: str, done: int, payload: dict, keep_last: int = 3) -> str:
+    """Write a numbered milestone `step_{done:08d}.pt` atomically, then prune the oldest
+    milestones beyond `keep_last`. Returns the milestone path."""
+    path = os.path.join(ckpt_dir, f"step_{done:08d}.pt")
+    save_checkpoint(path, payload)
+    if keep_last > 0:
+        existing = sorted(glob.glob(os.path.join(ckpt_dir, "step_*.pt")))
+        for old in existing[:-keep_last]:
+            try:
+                os.remove(old)
+            except OSError:
+                pass
+    return path
+
+
+def load_checkpoint(path: str, map_location="cpu") -> dict:
+    """Load a checkpoint dict. `weights_only=False` because the payload carries RNG/optim
+    state (plain Python/torch containers we wrote ourselves), not just tensors."""
+    return torch.load(path, map_location=map_location, weights_only=False)

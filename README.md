@@ -71,10 +71,60 @@ collection stays on CPU (the engine is pure Python), so the GPU mainly accelerat
 the network updates.
 
 ```bash
-python -m fishrl.train --gpu --iters 200 --encoder entity   # train + save checkpoints/fishrl.pt
+python -m fishrl.train --iters 200 --encoder entity         # bounded run
 python -m fishrl.eval.smoke --gpu                            # short demo + metrics
 python -m fishrl.eval.ab_encoder --gpu                       # flat-vs-entity A/B
 ```
+
+### Long offline runs: checkpointing, resume, and the systemd service
+
+`python -m fishrl.train` checkpoints to `<ckpt-dir>/latest.pt` (atomically) every
+`--checkpoint-every-seconds` (default 900) and on SIGTERM/SIGINT, and writes a numbered
+milestone at each status report. The checkpoint carries everything needed to resume
+seamlessly — all four model state_dicts, the frozen-self anchor, the three optimizers, RNG
+state, the iteration counter, and cumulative wall-clock — so a crash/restart loses at most the
+in-flight iteration (and never re-runs warmup).
+
+```bash
+python -m fishrl.train --resume --iters 0       # resume latest.pt; run forever until stopped
+python -m fishrl.train --resume --iters 0 --max-hours 48
+```
+
+`--iters 0` runs unbounded; `--resume` continues `latest.pt` if present (a fresh start over an
+existing checkpoint requires `--fresh`). On resume the architecture/seed are taken from the
+checkpoint (the `--encoder*` flags are ignored, and a mismatch is rejected).
+
+A `Restart=always` systemd **system** service (`/etc/systemd/system/fishrl-selfplay.service`,
+running as the user via `User=`) drives this offline and auto-resumes on crash/reboot:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now fishrl-selfplay
+journalctl -u fishrl-selfplay -f                 # follow the hourly status lines
+```
+
+The unit caps BLAS/torch threads (`OMP_NUM_THREADS` etc.) to share the box politely and sets
+`TimeoutStopSec=150` so the graceful checkpoint finishes before SIGKILL on stop/restart.
+
+**Win rates run out-of-band.** The inline panel is single-threaded and blocks the loop, so the
+service passes `--report-winrate-games 0` (skip it) and a separate timer evaluates instead.
+`fishrl.eval.parallel_panel` reads `latest.pt` and fans the games for each anchor across worker
+processes (one BLAS thread each — parallelism is across processes), so a 100-game panel finishes
+in a few minutes on the spare cores *without* pausing training. torch is seeded per chunk, so the
+panel is reproducible for a fixed checkpoint + worker count (hour-over-hour deltas reflect the
+policy, not sampling noise).
+
+```bash
+python -m fishrl.eval.parallel_panel --ckpt-dir checkpoints --n-games 100   # one-off
+sudo systemctl enable --now fishrl-eval.timer                               # hourly, logs [eval ...]
+journalctl -u fishrl-eval.service -f
+```
+
+**Best checkpoint.** Each panel also rolls `<ckpt-dir>/best.pt` — the highest win-rate-vs-heuristic
+checkpoint seen so far (a full, resume-able snapshot; the winning panel is recorded in `best.json`).
+It is saved from the in-memory payload that was just evaluated, so it always matches the reported
+rate even though the trainer overwrites `latest.pt` mid-eval. Pass `--no-best` to skip it. (n=100
+has ±5% binomial noise, so treat `best.pt` as the best *measured* checkpoint, not a certainty.)
 
 Key design points: one shared policy plays both seats; each env step (including
 compound-decision sub-steps) is one PPO transition; per-seat GAE uses a single

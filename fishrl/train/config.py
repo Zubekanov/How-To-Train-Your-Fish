@@ -42,8 +42,25 @@ class Config:
     # schedule
     warmup_games: int = 64
     warmup_epochs: int = 3
-    iters: int = 100
+    iters: int = 100            # <= 0 means UNBOUNDED (run until signal / max_seconds)
+    ent_anneal_iters: int = 3000  # entropy-anneal horizon used when iters <= 0 (unbounded)
     hidden: tuple = (256, 256)
+
+    # status reporting: train() consolidates per-iter logs into ONE status line emitted
+    # every `report_every_seconds` of wall-clock (default hourly), plus a final line.
+    # Each line carries window-mean losses, estimator calibration + guesser MAE on the
+    # latest batch, and current win-rates vs the frozen-self / random / attacker /
+    # heuristic anchors (`report_winrate_games` games each, fixed eval seeds so the
+    # trend is comparable across reports). Lower the interval for finer-grained logs.
+    # report_winrate_games <= 0 SKIPS the inline panel entirely (it is single-threaded and
+    # blocks the loop) -- the long-running service does this and runs the parallel,
+    # out-of-band evaluator (fishrl.eval.parallel_panel) on a systemd timer instead.
+    report_every_seconds: float = 3600.0
+    report_winrate_games: int = 30
+    # crash-recovery checkpoint cadence -- decoupled from the (expensive) report cadence so
+    # state is saved often (cheap, no eval) without running the win-rate panel each time.
+    checkpoint_every_seconds: float = 900.0
+    keep_last_checkpoints: int = 3    # numbered step_*.pt milestones to retain
     # Front-end encoder: "flat" (MLP over the raw observation), "entity" (shared
     # card-embedding encoder, masked mean/max pool; far fewer params), or "attention"
     # (the entity front-end + cross-zone self-attention and a learned per-zone
@@ -82,8 +99,15 @@ class Config:
         falling back to the base `encoder` when no per-net override is set."""
         return getattr(self, f"{net}_encoder") or self.encoder
 
-    def ent_coef(self, it: int) -> float:
-        if self.iters <= 1:
+    def ent_at(self, it: int, horizon: int) -> float:
+        """Linearly anneal entropy from ent_start -> ent_end over `horizon` iters, then
+        hold at ent_end. `horizon` lets the unbounded loop (iters <= 0) anneal over a finite
+        window (ent_anneal_iters) instead of dividing by a non-positive iter count."""
+        if horizon <= 1:
             return self.ent_end
-        frac = min(it / (self.iters - 1), 1.0)
+        frac = min(it / (horizon - 1), 1.0)
         return self.ent_start + frac * (self.ent_end - self.ent_start)
+
+    def ent_coef(self, it: int) -> float:
+        horizon = self.iters if self.iters > 0 else self.ent_anneal_iters
+        return self.ent_at(it, horizon)

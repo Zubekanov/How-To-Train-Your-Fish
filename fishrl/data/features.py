@@ -18,7 +18,7 @@ from __future__ import annotations
 import numpy as np
 
 from fishrl.forgetful_fish.state import _public_object, _is_land, spectator_view
-from fishrl.obs.encoder import CARD_F, _encode_card, _zone
+from fishrl.obs.encoder import CARD_F, _encode_card, _zone, _zone_obj
 from fishrl.obs import vocab as V
 
 # ── god (privileged) layout ───────────────────────────────────────────────────
@@ -67,8 +67,9 @@ def _obj_dicts(g, ids) -> list:
     return [_public_object(g.objects[iid]) for iid in ids if iid in g.objects]
 
 
-def encode_god(g) -> np.ndarray:
-    """Privileged, fully-observed, p1-oriented feature vector (GOD_DIM)."""
+def encode_god_ref(g) -> np.ndarray:
+    """REFERENCE god encoder (dict path through _public_object) -- the contract `encode_god`
+    must stay bit-identical to. Kept as the equivalence oracle (test_encoder_equivalence)."""
     bf = {pid: _obj_dicts(g, g.players[pid].battlefield) for pid in ("p1", "p2")}  # reused below
     parts = [
         _zone(_obj_dicts(g, g.players["p1"].hand), GOD_SLOTS["p1_hand"], "p1"),
@@ -86,6 +87,50 @@ def encode_god(g) -> np.ndarray:
     for pid in ("p1", "p2"):
         p = g.players[pid]
         gv += _player_scalars(p.life, len(p.hand), bf[pid], p.mana_pool, p.mulligans, p.has_lost)
+    gv += [g.turn_number / 40.0, float(g.active_player == "p1"),
+           float(g.priority_player == "p1"), len(g.library) / 80.0, len(g.stack) / 6.0]
+    parts.append(np.asarray(gv, dtype=np.float32))
+    return np.concatenate(parts).astype(np.float32)
+
+
+def _player_scalars_obj(life, hand_count, bf_objs, pool, mulligans, has_lost) -> list:
+    """Object-native twin of `_player_scalars` (reads CardInstance attrs, no dict)."""
+    lands = [o for o in bf_objs if "land" in (o.type_line or "").lower()]
+    out = [life / 20.0, hand_count / 12.0, len(lands) / 20.0,
+           sum(1 for o in lands if not o.tapped) / 20.0,
+           sum(pool.values()) / 10.0]
+    out += [pool.get(c, 0) / 10.0 for c in ("W", "U", "B", "R", "G")]
+    out += [mulligans / 7.0, float(bool(has_lost))]
+    return out
+
+
+def encode_god(g) -> np.ndarray:
+    """Privileged, fully-observed, p1-oriented feature vector (GOD_DIM). Fast object-native path:
+    god sees full identity in every zone (no visibility filter), so it reads CardInstance objects
+    directly and skips the _public_object/_ability_view dict build. Bit-identical to
+    `encode_god_ref` -- guarded by test_encoder_equivalence."""
+    obj = g.objects
+    bf = {pid: [obj[iid] for iid in g.players[pid].battlefield if iid in obj] for pid in ("p1", "p2")}
+
+    def zone(ids, slots):
+        return _zone_obj([obj[iid] for iid in ids if iid in obj], slots, "p1")
+
+    parts = [
+        zone(g.players["p1"].hand, GOD_SLOTS["p1_hand"]),
+        zone(g.players["p2"].hand, GOD_SLOTS["p2_hand"]),
+        _zone_obj(bf["p1"], GOD_SLOTS["p1_bf"], "p1"),
+        _zone_obj(bf["p2"], GOD_SLOTS["p2_bf"], "p1"),
+        zone(g.graveyard, GOD_SLOTS["graveyard"]),
+        zone(g.exile, GOD_SLOTS["exile"]),
+        _zone_obj([obj[s.source_instance_id] for s in g.stack if s.source_instance_id in obj],
+                  GOD_SLOTS["stack"], "p1"),
+        _zone_obj([obj[s.instance_id] for s in g.library if s.instance_id in obj],
+                  GOD_SLOTS["library"], "p1"),
+    ]
+    gv = []
+    for pid in ("p1", "p2"):
+        p = g.players[pid]
+        gv += _player_scalars_obj(p.life, len(p.hand), bf[pid], p.mana_pool, p.mulligans, p.has_lost)
     gv += [g.turn_number / 40.0, float(g.active_player == "p1"),
            float(g.priority_player == "p1"), len(g.library) / 80.0, len(g.stack) / 6.0]
     parts.append(np.asarray(gv, dtype=np.float32))

@@ -16,7 +16,7 @@ from functools import lru_cache
 
 import numpy as np
 
-from fishrl.forgetful_fish.state import current_view, BASIC_TYPES
+from fishrl.forgetful_fish.state import current_view, text_variant, BASIC_TYPES
 from fishrl.obs import vocab as V
 
 # Basic land types, in canonical order, with whole-word matchers. Forgetful Fish
@@ -126,9 +126,13 @@ def _zone(cards: list, n: int, viewer: str) -> np.ndarray:
     return rows.reshape(-1)
 
 
-def encode_observation(g, viewer: str, builder_progress: float = 0.0) -> np.ndarray:
-    """Fixed-size float32 observation for `viewer`. `builder_progress` is the
-    fraction of a compound decision already specified (0 when none active)."""
+def encode_observation_ref(g, viewer: str, builder_progress: float = 0.0) -> np.ndarray:
+    """REFERENCE observation encoder: the dict-based path through the engine's UI-oriented
+    `current_view`. This is the behavioural CONTRACT -- `encode_observation` (the fast
+    object-native path actually used in collection) must stay bit-identical to it, guarded by
+    tests/test_encoder_equivalence.py. Kept as the source of truth and the equivalence oracle.
+
+    `builder_progress` is the fraction of a compound decision already specified (0 when none)."""
     view = current_view(g, viewer)
     opp = "p2" if viewer == "p1" else "p1"
     me_v, op_v = view["players"][viewer], view["players"][opp]
@@ -180,6 +184,140 @@ def encode_observation(g, viewer: str, builder_progress: float = 0.0) -> np.ndar
     g_vec[k + 3] = sum(len(info.get("blockers", [])) for info in atk.values()) / 20.0
     k += _COMBAT
     # pending one-hot + pay sub-state
+    pend = g.pending
+    if pend is not None:
+        pi = V.PENDING_INDEX.get(pend.type)
+        if pi is not None:
+            g_vec[k + pi] = 1.0
+    k += V.N_PENDING
+    if pend is not None and pend.type == "pay":
+        ctx = pend.context or {}
+        need = ctx.get("need", {})
+        g_vec[k + 0] = need.get("U", 0) / 4.0
+        g_vec[k + 1] = sum(need.values()) / 6.0
+        g_vec[k + 2] = ctx.get("generic", 0) / 6.0
+        g_vec[k + 3] = 1.0
+    k += _PAY
+    g_vec[k] = float(builder_progress)
+    k += _BUILDER
+
+    parts.append(g_vec)
+    return np.concatenate(parts).astype(np.float32)
+
+
+# ── fast object-native path ───────────────────────────────────────────────────
+# `encode_observation_ref` builds the policy input by reading the UI view (`current_view`),
+# which constructs a rich per-object dict (ability legality, can_play, cycle, modes, full
+# asdict of pending/combat) -- the net reads NONE of that, and re-parses the ~12 fields it
+# does want back out through ~17 dict.get + a str.lower PER card. Profiling: that round-trip
+# (_public_object + _ability_view + the dict reads) was the dominant share of collection.
+# The functions below skip the dict entirely: they read CardInstance attributes directly,
+# re-deriving the viewer's visibility filter fishrl-side (engine objects used READ-ONLY, so no
+# vendored edit). They MUST stay bit-identical to the *_ref path -- see test_encoder_equivalence.
+
+
+def _encode_obj_into(o, viewer: str, v: np.ndarray) -> None:
+    """Object-native twin of `_encode_card_into`: write a CardInstance's CARD_F-wide row from
+    its attributes. `o is None` encodes the hidden/unknown slot (opp's unseen hand, empty stack
+    source). Mirrors `_encode_card_into` field-for-field; text_variant is a FUNCTION of the
+    card's text-change chain (NOT an attribute), so it is recomputed the same way the view does."""
+    if o is None:
+        v[V.N_NAMES] = 1.0          # "unknown/hidden" bit
+        return
+    idx = V.NAME_INDEX.get(o.name)
+    if idx is not None:
+        v[idx] = 1.0
+    else:
+        v[V.N_NAMES] = 1.0
+    off = V.N_NAMES + 1
+    tl = o.type_line or ""
+    tll = tl.lower()
+    v[off + 0] = float("land" in tll)
+    v[off + 1] = float("creature" in tll)
+    v[off + 2] = float("instant" in tll)
+    v[off + 3] = float("sorcery" in tll)
+    off += 4
+    _basic_multihot(tl, v, off)                            # effective basic land type (5)
+    off += 5
+    _basic_multihot(o.oracle_text or "", v, off)           # basic types named in text (5)
+    off += 5
+    v[off] = 1.0 if text_variant(o) else 0.0               # text-altered (Island lineage moved)
+    off += 1
+    v[off + 0] = (o.power or 0) / 10.0
+    v[off + 1] = (o.toughness or 0) / 10.0
+    v[off + 2] = (o.damage_marked or 0) / 10.0
+    v[off + 3] = sum((o.counters or {}).values()) / 10.0
+    off += 4
+    v[off + 0] = float(bool(o.tapped))
+    v[off + 1] = float(bool(o.entered_this_turn))
+    v[off + 2] = float(o.controller == viewer)
+    off += 3
+    v[off] = 1.0                       # known bit
+
+
+def _zone_obj(objs: list, n: int, viewer: str) -> np.ndarray:
+    rows = np.zeros((n, CARD_F), dtype=np.float32)
+    for i, o in enumerate(objs[:n]):
+        _encode_obj_into(o, viewer, rows[i])
+    return rows.reshape(-1)
+
+
+def encode_observation(g, viewer: str, builder_progress: float = 0.0) -> np.ndarray:
+    """Fast path used in collection: bit-identical to `encode_observation_ref` (guarded by
+    tests/test_encoder_equivalence.py) but reads engine objects directly instead of the UI view.
+
+    Visibility filter (mirrors `current_view`): own hand + both battlefields + graveyard + exile
+    are fully visible; the opponent's hand is per-card known-or-hidden; the library shows only the
+    slots this viewer knows. A hidden card / missing stack source is encoded as the unknown slot."""
+    opp = "p2" if viewer == "p1" else "p1"
+    obj = g.objects
+
+    parts = [
+        _zone_obj([obj[iid] for iid in g.players[viewer].hand], SLOTS["own_hand"], viewer),
+        _zone_obj([obj[iid] if viewer in (obj[iid].known_by or []) else None
+                   for iid in g.players[opp].hand], SLOTS["opp_hand"], viewer),
+        _zone_obj([obj[iid] for iid in g.players[viewer].battlefield], SLOTS["own_bf"], viewer),
+        _zone_obj([obj[iid] for iid in g.players[opp].battlefield], SLOTS["opp_bf"], viewer),
+        _zone_obj([obj[iid] for iid in g.graveyard], SLOTS["graveyard"], viewer),
+        _zone_obj([obj[iid] for iid in g.exile], SLOTS["exile"], viewer),
+        _zone_obj([obj.get(s.source_instance_id) for s in g.stack], SLOTS["stack"], viewer),
+        _zone_obj([obj[s.instance_id] for s in g.library if s.known_by.get(viewer)],
+                  SLOTS["library"], viewer),
+    ]
+
+    g_vec = np.zeros(_GLOBALS, dtype=np.float32)
+    k = 0
+    for pid in (viewer, opp):
+        p = g.players[pid]
+        lands = [obj[iid] for iid in p.battlefield
+                 if "land" in (obj[iid].type_line or "").lower()]
+        pool = p.mana_pool
+        g_vec[k + 0] = p.life / 20.0
+        g_vec[k + 1] = len(p.hand) / 12.0
+        g_vec[k + 2] = len(lands) / 20.0
+        g_vec[k + 3] = sum(1 for c in lands if not c.tapped) / 20.0
+        g_vec[k + 4] = sum(pool.values()) / 10.0
+        for ci, c in enumerate(("W", "U", "B", "R", "G")):
+            g_vec[k + 5 + ci] = pool.get(c, 0) / 10.0
+        g_vec[k + 10] = p.mulligans / 7.0
+        g_vec[k + 11] = float(bool(p.has_lost))
+        k += _PER_PLAYER
+    g_vec[k + 0] = g.turn_number / 40.0
+    g_vec[k + 1] = float(g.active_player == viewer)
+    g_vec[k + 2] = float(g.priority_player == viewer)
+    g_vec[k + 3] = len(g.library) / 80.0
+    g_vec[k + 4] = len(g.stack) / 6.0
+    k += _GAME
+    g_vec[k + V.STEP_INDEX.get(g.current_step, 0)] = 1.0
+    k += V.N_STEPS
+    atk = g.combat.attackers or {}
+    am_attacking = any(a in g.players[viewer].battlefield for a in atk)
+    am_defending = any(info.get("target") == viewer for info in atk.values())
+    g_vec[k + 0] = float(am_attacking)
+    g_vec[k + 1] = float(am_defending)
+    g_vec[k + 2] = len(atk) / 20.0
+    g_vec[k + 3] = sum(len(info.get("blockers", [])) for info in atk.values()) / 20.0
+    k += _COMBAT
     pend = g.pending
     if pend is not None:
         pi = V.PENDING_INDEX.get(pend.type)

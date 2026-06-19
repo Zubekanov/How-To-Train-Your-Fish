@@ -28,8 +28,16 @@ def actor_act_fn(actor):
     dev = device_of(actor)
 
     def act(obs):
+        mask = obs["action_mask"]
+        legal = np.flatnonzero(mask)
+        if legal.size == 1:
+            # Forced decision: with a 1-hot legal mask the masked policy assigns prob 1 to the
+            # sole action, so logp == log(1) == 0 exactly -- skip the (~20-25% of) forwards whose
+            # output is determined anyway. Bit-equivalent to computing it (PPO recomputes the same
+            # logp=0 from the same mask), so this is free compute, not a learning change.
+            return int(legal[0]), 0.0
         x = torch.as_tensor(obs["observation"], dtype=torch.float32).unsqueeze(0).to(dev)
-        m = torch.as_tensor(obs["action_mask"], dtype=torch.float32).unsqueeze(0).to(dev)
+        m = torch.as_tensor(mask, dtype=torch.float32).unsqueeze(0).to(dev)
         with torch.no_grad():
             logp_all = actor.log_probs(x, m)[0]
             p = logp_all.exp()

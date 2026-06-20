@@ -238,6 +238,13 @@ def main() -> None:
         return
     r = parallel_panel(latest, n_games=args.n_games, max_workers=args.max_workers,
                        max_decisions=args.max_decisions, save_best=not args.no_best)
+    from fishrl.train import stats as stats_io
+    stats_io.append_eval(args.ckpt_dir, {                # dump this panel to stats.json["evals"]
+        "it": r["it"], "frozen_at": r["frozen_it"], "elapsed_h": r["elapsed_h"],
+        "wall_time": time.time(), "n": r["n"], "workers": r["workers"], "took_s": r["took_s"],
+        "frozen": r["frozen"], "random": r["random"], "attacker": r["attacker"],
+        "heuristic": r["heuristic"], "new_best": bool(r.get("new_best")),
+    })
     best = "  *** NEW BEST (heuristic) -> best.pt ***" if r.get("new_best") else ""
     print(
         f"[eval it={r['it']} @{r['elapsed_h']:.2f}h n={r['n']} w={r['workers']} "

@@ -12,6 +12,7 @@ frozen-self / random / attacker / heuristic anchors.
 from __future__ import annotations
 
 import copy
+import math
 import os
 import signal
 import time
@@ -25,6 +26,7 @@ from fishrl.models.estimators import PrivilegedCritic, PublicEstimator
 from fishrl.models.guesser import HandGuesser
 from fishrl.models.policy import MaskedActor
 from fishrl.train import checkpoint as ckpt
+from fishrl.train import stats as stats_io
 from fishrl.train.belief_env import BeliefAugmentedEnv
 from fishrl.train.collector import actor_act_fn, collect_games
 from fishrl.train.config import Config
@@ -187,6 +189,23 @@ def train(cfg: Config, models: Models | None = None, log=print,
             f"pub(acc={est.get('pub_acc', nan):.2f},brier={est.get('pub_brier', nan):.2f}) "
             f"gmae={gmae:.2f}" + wr_str
         )
+        if checkpoint_path is not None:                  # dump this datapoint to stats.json
+            rec = {
+                "it": done, "elapsed_h": total_elapsed() / 3600.0, "wall_time": time.time(),
+                "iters": win_iters, "iters_per_h": win_iters / dt_h, "transitions": win_T,
+                "policy_loss": mean["policy_loss"], "critic_loss": mean["critic_loss"],
+                "entropy": mean["entropy"], "approx_kl": mean["approx_kl"],
+                "guesser_loss": mean["guesser_loss"], "public_loss": mean["public_loss"],
+                "priv_acc": est.get("priv_acc"), "pub_acc": est.get("pub_acc"),
+                "priv_brier": est.get("priv_brier"), "pub_brier": est.get("pub_brier"),
+                "gmae": gmae,
+            }
+            if wr is not None:                           # inline panel on -> carry win-rates too
+                rec["frozen_at"] = frozen_it
+                rec.update({f"wr_{k}": v for k, v in wr.items()})
+            rec = {k: (None if isinstance(v, float) and not math.isfinite(v) else v)
+                   for k, v in rec.items()}             # NaN/inf -> null (valid JSON)
+            stats_io.append_report(os.path.dirname(os.path.abspath(checkpoint_path)), rec)
         for k in KEYS:
             acc[k] = 0.0
         win_iters = win_T = 0

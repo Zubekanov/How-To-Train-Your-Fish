@@ -65,6 +65,25 @@ def test_resume_continues_iteration_and_restores_state(tmp_path):
 
 
 @slow
+def test_train_writes_stats_report(tmp_path):
+    import json
+
+    from fishrl.train import stats as stats_io
+
+    latest = ckpt.latest_path(str(tmp_path))
+    cfg = _cfg(iters=1, seed=5)                  # report_winrate_games=1 -> inline WR in record
+    train(cfg, build_models(cfg), checkpoint_path=latest)
+    with open(stats_io.stats_path(str(tmp_path))) as f:
+        data = json.load(f)
+    assert len(data["reports"]) == 1            # the final emit() appended one datapoint
+    rec = data["reports"][0]
+    assert rec["it"] == 1
+    for k in ("policy_loss", "critic_loss", "entropy", "gmae", "wr_heuristic", "frozen_at"):
+        assert k in rec
+    assert data["evals"] == []                   # trainer never touches the eval array
+
+
+@slow
 def test_resume_rejects_encoder_mismatch(tmp_path):
     latest = ckpt.latest_path(str(tmp_path))
     cfg = _cfg(iters=1, seed=1)

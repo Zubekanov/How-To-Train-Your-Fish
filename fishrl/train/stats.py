@@ -82,3 +82,21 @@ def append_report(ckpt_dir: str, record: dict) -> None:
 def append_eval(ckpt_dir: str, record: dict) -> None:
     """Eval-service datapoint (one per win-rate panel)."""
     _append(ckpt_dir, "evals", record)
+
+
+def merge(ckpt_dir: str, reports=None, evals=None, key: str = "it") -> dict:
+    """Merge historic records into the file, deduping each array by `key` (existing entries win,
+    so re-running is idempotent and the live writers' rows are never overwritten). Both arrays end
+    up sorted by `key`. Runs under the same lock + atomic write as the appenders, so it is safe to
+    call while the trainer / eval service are live. Returns counts of rows added."""
+    with _locked(ckpt_dir):
+        d = _read(ckpt_dir)
+        added = {}
+        for name, new in (("reports", reports or []), ("evals", evals or [])):
+            have = {r.get(key) for r in d[name]}
+            fresh = [r for r in new if r.get(key) not in have]
+            d[name].extend(fresh)
+            d[name].sort(key=lambda r: (r.get(key) is None, r.get(key)))
+            added[name] = len(fresh)
+        _atomic_write(ckpt_dir, d)
+        return added

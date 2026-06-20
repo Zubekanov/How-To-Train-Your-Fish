@@ -1,0 +1,137 @@
+"""Back-populate stats.json from the journald history.
+
+stats.json only started being written from the commit that added it, but the trainer and eval
+service have been logging `[status ...]` / `[eval ...]` lines to journald the whole time. This
+script parses those lines back into the SAME record schema the live writers use and merges them
+into stats.json, deduped by iteration (existing live rows win), so the time-series is complete
+back to the start of journald retention.
+
+It is idempotent (re-running adds nothing new) and lock-safe (uses stats.merge, the same flock +
+atomic write as the live appenders), so it is safe to run while the services are up.
+
+    python -m fishrl.eval.backfill_stats --ckpt-dir checkpoints
+    python -m fishrl.eval.backfill_stats --selfplay-unit fishrl-selfplay --eval-unit fishrl-eval
+
+The journald timestamp of each line becomes the record's `wall_time`; backfilled rows carry
+`"source": "journald"` so they are distinguishable from live rows.
+"""
+from __future__ import annotations
+
+import argparse
+import re
+import subprocess
+from datetime import datetime
+
+from fishrl.train import stats as stats_io
+
+# `[status 46.33h it=9358 (+151, 150.0/h) T=497782] pi=-0.022 V=0.583 H=0.494 kl=0.0254
+#  guess=0.311 pub=0.637 | calib priv(acc=0.83,brier=0.14) pub(acc=0.76,brier=0.19) gmae=0.18`
+_STATUS = re.compile(
+    r"\[status\s+(?P<tag>[\d.]+h|final)\s+it=(?P<it>\d+)\s+\(\+(?P<iters>\d+),\s+"
+    r"(?P<iph>[\d.]+)/h\)\s+T=(?P<T>\d+)\]\s+"
+    r"pi=(?P<pi>[-\d.naf]+)\s+V=(?P<V>[-\d.naf]+)\s+H=(?P<H>[-\d.naf]+)\s+kl=(?P<kl>[-\d.naf]+)\s+"
+    r"guess=(?P<guess>[-\d.naf]+)\s+pub=(?P<pub>[-\d.naf]+)\s+\|\s+calib\s+"
+    r"priv\(acc=(?P<pacc>[-\d.naf]+),brier=(?P<pbri>[-\d.naf]+)\)\s+"
+    r"pub\(acc=(?P<uacc>[-\d.naf]+),brier=(?P<ubri>[-\d.naf]+)\)\s+gmae=(?P<gmae>[-\d.naf]+)")
+
+# optional inline win-rates tail (older lines had it; newer say "WR via eval timer")
+_STATUS_WR = re.compile(
+    r"WR\s+frozen@(?P<fat>\d+)=(?P<frozen>[-\d.naf]+)\s+random=(?P<rand>[-\d.naf]+)\s+"
+    r"attacker=(?P<att>[-\d.naf]+)\s+heuristic=(?P<heu>[-\d.naf]+)")
+
+# `[eval it=2230 @9.20h n=100 w=6 took=87.8s] WR frozen@2034=0.540 random=0.940
+#  attacker=0.750 heuristic=0.070  *** NEW BEST ...`
+_EVAL = re.compile(
+    r"\[eval\s+it=(?P<it>\d+)\s+@(?P<eh>[\d.]+)h\s+n=(?P<n>\d+)\s+w=(?P<w>\d+)\s+"
+    r"took=(?P<took>[\d.]+)s\]\s+WR\s+frozen@(?P<fat>\d+)=(?P<frozen>[-\d.naf]+)\s+"
+    r"random=(?P<rand>[-\d.naf]+)\s+attacker=(?P<att>[-\d.naf]+)\s+heuristic=(?P<heu>[-\d.naf]+)")
+
+
+def _f(s):
+    """Parse a logged float; 'nan'/'inf' -> None so the JSON stays valid (matches the live path)."""
+    try:
+        v = float(s)
+    except (TypeError, ValueError):
+        return None
+    return v if v == v and v not in (float("inf"), float("-inf")) else None
+
+
+def _ts(line: str):
+    """Epoch seconds from a leading short-iso journald timestamp (`2026-06-19T10:17:48+10:00`)."""
+    try:
+        return datetime.fromisoformat(line.split(" ", 1)[0]).timestamp()
+    except (ValueError, IndexError):
+        return None
+
+
+def _journal(unit: str) -> list:
+    out = subprocess.run(["journalctl", "-u", unit, "--no-pager", "-o", "short-iso"],
+                         capture_output=True, text=True, check=True)
+    return out.stdout.splitlines()
+
+
+def parse_reports(lines) -> list:
+    recs = []
+    for line in lines:
+        m = _STATUS.search(line)
+        if not m:
+            continue
+        tag = m.group("tag")
+        rec = {
+            "it": int(m.group("it")),
+            "elapsed_h": None if tag == "final" else float(tag[:-1]),
+            "wall_time": _ts(line),
+            "iters": int(m.group("iters")), "iters_per_h": _f(m.group("iph")),
+            "transitions": int(m.group("T")),
+            "policy_loss": _f(m.group("pi")), "critic_loss": _f(m.group("V")),
+            "entropy": _f(m.group("H")), "approx_kl": _f(m.group("kl")),
+            "guesser_loss": _f(m.group("guess")), "public_loss": _f(m.group("pub")),
+            "priv_acc": _f(m.group("pacc")), "pub_acc": _f(m.group("uacc")),
+            "priv_brier": _f(m.group("pbri")), "pub_brier": _f(m.group("ubri")),
+            "gmae": _f(m.group("gmae")), "source": "journald",
+        }
+        w = _STATUS_WR.search(line)
+        if w:                                            # older inline-panel lines
+            rec["frozen_at"] = int(w.group("fat"))
+            rec["wr_frozen"] = _f(w.group("frozen"))
+            rec["wr_random"] = _f(w.group("rand"))
+            rec["wr_attacker"] = _f(w.group("att"))
+            rec["wr_heuristic"] = _f(w.group("heu"))
+        recs.append(rec)
+    return recs
+
+
+def parse_evals(lines) -> list:
+    recs = []
+    for line in lines:
+        m = _EVAL.search(line)
+        if not m:
+            continue
+        recs.append({
+            "it": int(m.group("it")), "frozen_at": int(m.group("fat")),
+            "elapsed_h": float(m.group("eh")), "wall_time": _ts(line),
+            "n": int(m.group("n")), "workers": int(m.group("w")), "took_s": _f(m.group("took")),
+            "frozen": _f(m.group("frozen")), "random": _f(m.group("rand")),
+            "attacker": _f(m.group("att")), "heuristic": _f(m.group("heu")),
+            "new_best": "NEW BEST" in line, "source": "journald",
+        })
+    return recs
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Back-populate stats.json from journald logs.")
+    ap.add_argument("--ckpt-dir", default="checkpoints")
+    ap.add_argument("--selfplay-unit", default="fishrl-selfplay")
+    ap.add_argument("--eval-unit", default="fishrl-eval")
+    args = ap.parse_args()
+
+    reports = parse_reports(_journal(args.selfplay_unit))
+    evals = parse_evals(_journal(args.eval_unit))
+    print(f"[backfill] parsed {len(reports)} status lines, {len(evals)} eval lines from journald")
+    added = stats_io.merge(args.ckpt_dir, reports=reports, evals=evals)
+    print(f"[backfill] merged into {stats_io.stats_path(args.ckpt_dir)}: "
+          f"+{added['reports']} reports, +{added['evals']} evals (existing rows kept)")
+
+
+if __name__ == "__main__":
+    main()

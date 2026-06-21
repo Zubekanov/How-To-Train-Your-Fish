@@ -29,6 +29,24 @@ def test_corrupt_file_is_reset_not_fatal(tmp_path):
     assert data["evals"] == []
 
 
+def test_merge_fill_enriches_existing_rows_without_overwriting(tmp_path):
+    d = str(tmp_path)
+    stats_io.append_report(d, {"it": 1, "opp_trained": None, "source": "live"})
+    stats_io.append_report(d, {"it": 2, "opp_trained": 0.5, "source": "live"})  # already set
+    added = stats_io.merge(
+        d, reports=[{"it": 1, "opp_trained": 0.9, "source": "journald"},
+                    {"it": 2, "opp_trained": 0.1, "source": "journald"},
+                    {"it": 3, "opp_trained": 0.7, "source": "journald"}],
+        replace_sources={"journald"}, fill=("opp_trained",))
+    with open(stats_io.stats_path(d)) as f:
+        rows = {r["it"]: r for r in json.load(f)["reports"]}
+    assert rows[1]["opp_trained"] == 0.9          # None -> filled from journald
+    assert rows[1]["source"] == "live"            # row identity preserved
+    assert rows[2]["opp_trained"] == 0.5          # already set -> untouched
+    assert rows[3]["opp_trained"] == 0.7          # genuinely new row added
+    assert added["reports"] == {"added": 1, "filled": 1, "total": 3}
+
+
 def test_no_leftover_tmp(tmp_path):
     d = str(tmp_path)
     stats_io.append_report(d, {"it": 1})

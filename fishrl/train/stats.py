@@ -85,20 +85,24 @@ def append_eval(ckpt_dir: str, record: dict) -> None:
 
 
 def merge(ckpt_dir: str, reports=None, evals=None, key: str = "it",
-          replace_sources=(), live_source=None) -> dict:
+          replace_sources=(), live_source=None, fill=()) -> dict:
     """Merge historic records into the file. For each array:
 
       * drop existing rows whose ``source`` is in ``replace_sources`` (rows the caller owns and is
         regenerating -- e.g. the backfill tool re-deriving its own rows from updated parse logic);
       * stamp a ``source`` on any surviving row that lacks one, from ``live_source[name]`` (so
         rows written before ``source`` existed get normalised);
+      * for each surviving row, fill any field named in ``fill`` that is missing/``None`` from the
+        incoming row of the same ``key`` (so columns added later -- e.g. the opponent mix -- can be
+        back-populated onto pre-existing rows without overwriting anything already set);
       * add the caller's rows that are not already present (deduped by ``key``, existing wins);
       * sort by ``key``.
 
     Runs under the same lock + atomic write as the appenders, so it is safe to call while the
-    trainer / eval service are live. Returns counts of rows added per array."""
+    trainer / eval service are live. Returns counts of rows added (and filled) per array."""
     replace_sources = set(replace_sources)
     live_source = live_source or {}
+    fill = tuple(fill)
     with _locked(ckpt_dir):
         d = _read(ckpt_dir)
         added = {}
@@ -107,11 +111,24 @@ def merge(ckpt_dir: str, reports=None, evals=None, key: str = "it",
             if name in live_source:
                 for r in kept:
                     r.setdefault("source", live_source[name])
+            filled = 0
+            if fill:
+                src_by_key = {r.get(key): r for r in new}
+                for r in kept:
+                    src = src_by_key.get(r.get(key))
+                    if src is None:
+                        continue
+                    touched = False
+                    for f in fill:
+                        if r.get(f) is None and src.get(f) is not None:
+                            r[f] = src[f]
+                            touched = True
+                    filled += touched
             have = {r.get(key) for r in kept}
             fresh = [r for r in new if r.get(key) not in have]
             kept.extend(fresh)
             kept.sort(key=lambda r: (r.get(key) is None, r.get(key)))
             d[name] = kept
-            added[name] = {"added": len(fresh), "total": len(kept)}
+            added[name] = {"added": len(fresh), "filled": filled, "total": len(kept)}
         _atomic_write(ckpt_dir, d)
         return added

@@ -41,6 +41,18 @@ _STATUS_WR = re.compile(
     r"attacker=(?P<att>[-\d.naf]+)\s+heuristic=(?P<heu>[-\d.naf]+)\s+"
     r"\(n=(?P<n>\d+),\s+eval\s+(?P<es>[\d.]+)s\)")
 
+# Opponent-mix tail of a `[status ...]` line: `... gmae=0.18 | opp trained=0.92 | ...`. Newer
+# lines carry it; older ones don't (-> opp_trained stays None).
+_OPP = re.compile(r"opp trained=(?P<opp>[\d.]+)")
+
+# `[league it=12755] games=1216 trained=0.92 (self=912 past=205 heuristic=89 attacker=5
+#  random=5) | <per-opponent win-rate table>` -- the per-category counts behind opp_trained,
+# divided by `games` into the same opp_* shares the website stores and the live writer emits.
+_LEAGUE = re.compile(
+    r"\[league\s+it=(?P<it>\d+)\]\s+games=(?P<games>\d+)\s+trained=[\d.]+\s+"
+    r"\(self=(?P<self>\d+)\s+past=(?P<past>\d+)\s+heuristic=(?P<heu>\d+)\s+"
+    r"attacker=(?P<att>\d+)\s+random=(?P<rand>\d+)\)")
+
 # `[eval it=2230 @9.20h n=100 w=6 took=87.8s] WR frozen@2034=0.540 random=0.940
 #  attacker=0.750 heuristic=0.070  *** NEW BEST ...`
 _EVAL = re.compile(
@@ -72,10 +84,33 @@ def _journal(unit: str) -> list:
     return out.stdout.splitlines()
 
 
-def parse_status(lines) -> tuple:
-    """Parse `[status ...]` lines into (reports, inline_evals). Reports are PURE trainer metrics;
-    where a line carried an inline win-rate panel, that panel is emitted as a separate eval-array
-    row (so win-rates live only in "evals", same as the live schema)."""
+_OPP_KEYS = ("opp_self", "opp_past", "opp_heuristic", "opp_attacker", "opp_random")
+
+
+def parse_league(lines) -> dict:
+    """Map iteration -> opponent-mix shares from `[league ...]` lines (counts / games)."""
+    out = {}
+    for line in lines:
+        m = _LEAGUE.search(line)
+        if not m:
+            continue
+        games = int(m.group("games")) or 1
+        out[int(m.group("it"))] = {
+            "opp_self": int(m.group("self")) / games,
+            "opp_past": int(m.group("past")) / games,
+            "opp_heuristic": int(m.group("heu")) / games,
+            "opp_attacker": int(m.group("att")) / games,
+            "opp_random": int(m.group("rand")) / games,
+        }
+    return out
+
+
+def parse_status(lines, league=None) -> tuple:
+    """Parse `[status ...]` lines into (reports, inline_evals). Reports are PURE trainer metrics
+    (plus the opponent mix); where a line carried an inline win-rate panel, that panel is emitted
+    as a separate eval-array row (so win-rates live only in "evals", same as the live schema).
+    `league` maps it -> opp_* shares from parse_league(); rows with no league line keep None."""
+    league = league or {}
     reports, inline_evals = [], []
     for line in lines:
         m = _STATUS.search(line)
@@ -85,7 +120,8 @@ def parse_status(lines) -> tuple:
         it = int(m.group("it"))
         elapsed_h = None if tag == "final" else float(tag[:-1])
         ts = _ts(line)
-        reports.append({
+        o = _OPP.search(line)
+        rec = {
             "it": it, "elapsed_h": elapsed_h, "wall_time": ts,
             "iters": int(m.group("iters")), "iters_per_h": _f(m.group("iph")),
             "transitions": int(m.group("T")),
@@ -94,8 +130,12 @@ def parse_status(lines) -> tuple:
             "guesser_loss": _f(m.group("guess")), "public_loss": _f(m.group("pub")),
             "priv_acc": _f(m.group("pacc")), "pub_acc": _f(m.group("uacc")),
             "priv_brier": _f(m.group("pbri")), "pub_brier": _f(m.group("ubri")),
-            "gmae": _f(m.group("gmae")), "source": "journald",
-        })
+            "gmae": _f(m.group("gmae")),
+            "opp_trained": _f(o.group("opp")) if o else None,
+        }
+        rec.update(league.get(it, {k: None for k in _OPP_KEYS}))
+        rec["source"] = "journald"
+        reports.append(rec)
         w = _STATUS_WR.search(line)
         if w:                                            # older inline-panel era -> an eval row
             inline_evals.append({
@@ -133,7 +173,8 @@ def main() -> None:
     ap.add_argument("--eval-unit", default="fishrl-eval")
     args = ap.parse_args()
 
-    reports, inline_evals = parse_status(_journal(args.selfplay_unit))
+    selfplay = _journal(args.selfplay_unit)
+    reports, inline_evals = parse_status(selfplay, parse_league(selfplay))
     evals = parse_evals(_journal(args.eval_unit)) + inline_evals
     print(f"[backfill] parsed {len(reports)} status lines "
           f"({len(inline_evals)} with inline win-rates), {len(evals)} eval rows total")
@@ -142,9 +183,11 @@ def main() -> None:
     added = stats_io.merge(
         args.ckpt_dir, reports=reports, evals=evals,
         replace_sources={"journald", "journald-inline"},
-        live_source={"reports": "live", "evals": "eval"})
+        live_source={"reports": "live", "evals": "eval"},
+        fill=("opp_trained", *_OPP_KEYS))     # back-populate the opponent mix onto live rows
     print(f"[backfill] merged into {stats_io.stats_path(args.ckpt_dir)}: "
-          f"reports {added['reports']['total']} (+{added['reports']['added']} backfilled), "
+          f"reports {added['reports']['total']} (+{added['reports']['added']} backfilled, "
+          f"{added['reports']['filled']} enriched), "
           f"evals {added['evals']['total']} (+{added['evals']['added']} backfilled); "
           f"live rows preserved")
 

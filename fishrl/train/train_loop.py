@@ -224,7 +224,16 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 "guesser_loss": mean["guesser_loss"], "public_loss": mean["public_loss"],
                 "priv_acc": est.get("priv_acc"), "pub_acc": est.get("pub_acc"),
                 "priv_brier": est.get("priv_brier"), "pub_brier": est.get("pub_brier"),
-                "gmae": gmae, "source": "live",
+                "gmae": gmae,
+                # Opponent mix for this window, as shares of total games (~sum to 1) --
+                # mirrors the website's [status]/[league] columns. opp_self+opp_past==opp_trained.
+                "opp_trained": trained_frac,
+                "opp_self": opp_mix["self"] / mix_total,
+                "opp_past": opp_mix["pastself"] / mix_total,
+                "opp_heuristic": opp_mix["heuristic"] / mix_total,
+                "opp_attacker": opp_mix["attacker"] / mix_total,
+                "opp_random": opp_mix["random"] / mix_total,
+                "source": "live",
             }
             rec = {k: (None if isinstance(v, float) and not math.isfinite(v) else v)
                    for k, v in rec.items()}             # NaN/inf -> null (valid JSON)

@@ -134,6 +134,12 @@ def train(cfg: Config, models: Models | None = None, log=print,
     KEYS = ("policy_loss", "critic_loss", "entropy", "approx_kl", "guesser_loss", "public_loss")
     acc = {k: 0.0 for k in KEYS}
     win_iters = win_T = 0
+    # Per-report opponent composition: games played vs each opponent category, so the
+    # status line can report the proportion of TRAINED (neural) opponents -- mirror
+    # self-play + frozen past-selves -- vs the scripted/engine bots (random/attacker/
+    # heuristic). Reset each report alongside win_iters.
+    OPP_CATS = ("self", "pastself", "heuristic", "attacker", "random")
+    opp_mix = {k: 0 for k in OPP_CATS}
     last_batch = None
     # PFSP opponent league: scripted anchors + a ring of frozen past selves, appended
     # at each report. In-memory only (never serialized), so resume refills it over the
@@ -191,6 +197,11 @@ def train(cfg: Config, models: Models | None = None, log=print,
             f"heuristic={wr['heuristic']:.2f} (n={cfg.report_winrate_games}, eval {eval_s:.1f}s)"
             if wr is not None else " | WR via eval timer"
         )
+        # Proportion of this window's games played vs a TRAINED (neural) opponent --
+        # the mirror self-play policy + frozen past-selves -- vs scripted/engine bots.
+        mix_total = sum(opp_mix.values()) or 1
+        trained_frac = (opp_mix["self"] + opp_mix["pastself"]) / mix_total
+        opp_str = f" | opp trained={trained_frac:.2f}"
         log(
             f"[status {tag} it={done} (+{win_iters}, {win_iters / dt_h:.1f}/h) T={win_T}] "
             f"pi={mean['policy_loss']:.3f} V={mean['critic_loss']:.3f} "
@@ -198,7 +209,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
             f"guess={mean['guesser_loss']:.3f} pub={mean['public_loss']:.3f} | "
             f"calib priv(acc={est.get('priv_acc', nan):.2f},brier={est.get('priv_brier', nan):.2f}) "
             f"pub(acc={est.get('pub_acc', nan):.2f},brier={est.get('pub_brier', nan):.2f}) "
-            f"gmae={gmae:.2f}" + wr_str
+            f"gmae={gmae:.2f}" + opp_str + wr_str
         )
         if checkpoint_path is not None:                  # dump this datapoint to stats.json
             ckpt_dir = os.path.dirname(os.path.abspath(checkpoint_path))
@@ -226,11 +237,16 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     "attacker": wr["attacker"], "heuristic": wr["heuristic"],
                     "new_best": False, "source": "inline",
                 })
-        if cfg.pool_frac > 0 and league.members():        # PFSP win-rate table (own line:
-            log(f"[league it={done}] {league.summary()}")  # not parsed by the metrics collector)
+        if cfg.pool_frac > 0 and league.members():        # PFSP composition + win-rate table
+            log(f"[league it={done}] games={mix_total} trained={trained_frac:.2f} "  # own line:
+                f"(self={opp_mix['self']} past={opp_mix['pastself']} "                # not parsed
+                f"heuristic={opp_mix['heuristic']} attacker={opp_mix['attacker']} "   # by the
+                f"random={opp_mix['random']}) | {league.summary()}")                  # collector
         for k in KEYS:
             acc[k] = 0.0
         win_iters = win_T = 0
+        for k in OPP_CATS:
+            opp_mix[k] = 0
         frozen = _snapshot(m)            # roll the anchor forward to the current policy
         league.add_snapshot(m, done)     # add this report's policy as a past-self member
         frozen_it = done
@@ -299,15 +315,18 @@ def train(cfg: Config, models: Models | None = None, log=print,
             seed = cfg.seed + 1000 + done * cfg.games_per_iter
             buf = collect_games(benv, actor_act_fn(m.actor), n_self, seed,
                                 critic=None, max_decisions=cfg.max_decisions)
+            opp_mix["self"] += n_self                       # mirror self-play games this iter
             pool_rng = np.random.default_rng(cfg.seed + 900_000 + done)
             for pidx in range(n_pool):
                 oseed = cfg.seed + 500_000 + done * cfg.games_per_iter + pidx * 17
                 member = league.sample(pool_rng)
                 if member is None:                          # empty league -> mirror fallback
+                    opp_mix["self"] += 1
                     gbuf = collect_games(benv, actor_act_fn(m.actor), 1, oseed,
                                          critic=None, max_decisions=cfg.max_decisions)
                     buf.steps.extend(gbuf.steps)
                     continue
+                opp_mix["pastself" if member.kind == "self" else member.kind] += 1
                 if member.kind == "heuristic":              # engine-driven -> learner is p1
                     lseat = "p1"
                     gbuf = collect_heuristic_games(m.guesser, m.actor, 1, oseed,

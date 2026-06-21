@@ -21,6 +21,7 @@ import contextlib
 import fcntl
 import json
 import os
+import time
 
 SCHEMA = 1
 STATS = "stats.json"
@@ -54,6 +55,7 @@ def _read(ckpt_dir: str) -> dict:
     d.setdefault("schema", SCHEMA)
     d.setdefault("reports", [])
     d.setdefault("evals", [])
+    d.setdefault("annotations", [])
     return d
 
 
@@ -82,6 +84,22 @@ def append_report(ckpt_dir: str, record: dict) -> None:
 def append_eval(ckpt_dir: str, record: dict) -> None:
     """Eval-service datapoint (one per win-rate panel)."""
     _append(ckpt_dir, "evals", record)
+
+
+def add_annotation(ckpt_dir: str, it: int, text: str, kind: str = "n.b.", **extra) -> bool:
+    """Add a marker to the skill-graph data: an event pinned to an iteration (e.g. a training-pool
+    or hyperparameter change), for a plotter to draw as a vertical line / note on the win-rate
+    curves. Deduped by (it, text) so re-running is idempotent. Returns True iff a new one was added.
+    Annotations live in their own array, untouched by the report/eval appenders and by merge()."""
+    rec = {"it": it, "text": text, "kind": kind, "created_ts": time.time(), **extra}
+    with _locked(ckpt_dir):
+        d = _read(ckpt_dir)
+        if any(a.get("it") == it and a.get("text") == text for a in d["annotations"]):
+            return False
+        d["annotations"].append(rec)
+        d["annotations"].sort(key=lambda a: (a.get("it") is None, a.get("it")))
+        _atomic_write(ckpt_dir, d)
+        return True
 
 
 def merge(ckpt_dir: str, reports=None, evals=None, key: str = "it",

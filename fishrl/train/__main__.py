@@ -27,6 +27,9 @@ def main():
     ap.add_argument("--iters", type=int, default=100, help="iteration cap; <=0 runs unbounded")
     ap.add_argument("--games-per-iter", type=int, default=8)
     ap.add_argument("--warmup-games", type=int, default=64)
+    ap.add_argument("--heuristic-pool-frac", type=float, default=Config.heuristic_pool_frac,
+                    help="fraction of each iteration's games played vs the heuristic AI "
+                         "(curriculum pool); 0 = pure self-play")
     ENC = ["flat", "entity", "attention"]
     ap.add_argument("--encoder", choices=ENC, default="flat",
                     help="base encoder for any net without a per-net override")
@@ -61,6 +64,7 @@ def main():
 
     common = dict(device=resolve_device(args.gpu), iters=args.iters,
                   games_per_iter=args.games_per_iter, warmup_games=args.warmup_games,
+                  heuristic_pool_frac=args.heuristic_pool_frac,
                   ckpt_dir=args.ckpt_dir, report_every_seconds=args.report_every_seconds,
                   report_winrate_games=args.report_winrate_games,
                   checkpoint_every_seconds=args.checkpoint_every_seconds)
@@ -80,6 +84,7 @@ def main():
     encs = {n: cfg.enc_for(n) for n in NETS}
     cap = "unbounded" if cfg.iters <= 0 else cfg.iters
     print(f"device: {cfg.device} | encoders: {encs} | iters: {cap} | "
+          f"heuristic_pool: {cfg.heuristic_pool_frac:.2f} | "
           f"resume: {resume} | ckpt: {latest}", flush=True)
 
     max_seconds = args.max_hours * 3600.0 if args.max_hours else None

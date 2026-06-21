@@ -13,6 +13,7 @@ import torch
 from fishrl.data.buffer import RolloutBuffer, Step
 from fishrl.data.features import encode_god, encode_public, opponent_hand_counts
 from fishrl.models import device_of
+from fishrl.obs import vocab as V
 from fishrl.obs.encoder import OBS_DIM
 from fishrl.train.advantages import SEAT_SIGN
 
@@ -68,6 +69,73 @@ def fill_critic_values(buf: RolloutBuffer, critic, batch: int = 8192) -> None:
             out[i:i + batch] = sign[i:i + batch] * (2.0 * p1 - 1.0)
     for s, v in zip(buf.steps, out):
         s.value = float(v)
+
+
+def collect_heuristic_games(guesser, actor, n_games, base_seed, critic=None,
+                            use_belief=True, max_decisions=2000,
+                            stops_mode="default") -> RolloutBuffer:
+    """Collect rollouts where the LEARNING policy (p1) plays the engine's heuristic
+    AI (p2) — the curriculum/pool opponent, in contrast to `collect_games`'
+    shared-policy self-play.
+
+    The heuristic is the vendored engine AI driven re-entrantly by the engine (the
+    same sandbox path eval uses), so we never choose its actions here: only p1 ever
+    receives a pending. Critically, ONLY p1's transitions are recorded — p2's moves
+    are off-policy (not produced by `actor`) and would corrupt the PPO update if
+    buffered. Every Step matches the self-play shape (belief-augmented obs ⊕ guess,
+    p1-oriented god/public features, opponent-hand-count targets) so the merged
+    buffer trains identically. The opponent always takes the p2 seat (sandbox
+    convention); self-play already supplies the p2-perspective transitions.
+    """
+    from fishrl.opponents.heuristic import SEAT, HeuristicMatch
+
+    act = actor_act_fn(actor)
+    dev = device_of(guesser)
+    zeros = np.zeros(V.N_NAMES, dtype=np.float32)
+    buf = RolloutBuffer()
+    for gi in range(n_games):
+        match = HeuristicMatch(stops_mode=stops_mode, max_decisions=max_decisions)
+        obs = match.reset(seed=base_seed + gi)
+        prev_guess = zeros.copy()
+        start = len(buf)
+        done = False
+        guard = 0
+        while not done and guard < max_decisions * 6:
+            guard += 1
+            persp = obs["observation"]
+            mask = obs["action_mask"]
+            if int(mask.sum()) == 0:                 # not p1's decision / terminal — stop
+                break
+            g = match.g
+            # g is the decision-time state (p2 already resolved by the engine). god/public
+            # are p1-oriented like the self-play path; recomputed per decision (the pool is
+            # a minority of games, so the self-play decision_id dedupe isn't worth the coupling).
+            god, pub = encode_god(g), encode_public(g)
+            if use_belief:
+                with torch.no_grad():
+                    guess = guesser(
+                        torch.as_tensor(persp, dtype=torch.float32).unsqueeze(0).to(dev),
+                        torch.as_tensor(prev_guess, dtype=torch.float32).unsqueeze(0).to(dev),
+                    ).squeeze(0).cpu().numpy().astype(np.float32)
+            else:
+                guess = zeros.copy()
+            x_act = np.concatenate([persp, guess]).astype(np.float32)
+            action, logp = act({"observation": x_act, "action_mask": mask})
+            buf.add(Step(
+                seat=SEAT, x_act=x_act,
+                mask=mask.astype(np.int8), action=action, logp=logp,
+                value=0.0, god_feat=god, pub_feat=pub,
+                guess_in=guess.astype(np.float32),
+                cnt_target=opponent_hand_counts(g, SEAT),
+            ))
+            prev_guess = guess
+            obs, _reward, done, _info = match.step(action)
+        winner = match.g.result.get("winner")
+        for i in range(start, len(buf)):
+            buf.steps[i].winner = winner
+    if critic is not None:
+        fill_critic_values(buf, critic)
+    return buf
 
 
 def collect_games(belief_env, act_fn, n_games, base_seed, critic=None,

@@ -28,7 +28,12 @@ from fishrl.models.policy import MaskedActor
 from fishrl.train import checkpoint as ckpt
 from fishrl.train import stats as stats_io
 from fishrl.train.belief_env import BeliefAugmentedEnv
-from fishrl.train.collector import actor_act_fn, collect_games
+from fishrl.train.collector import (
+    actor_act_fn,
+    collect_games,
+    collect_heuristic_games,
+    fill_critic_values,
+)
 from fishrl.train.config import Config
 from fishrl.train.ppo import aux_update, ppo_update
 
@@ -275,9 +280,22 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 break
             if stop["v"]:
                 break
+            # Opponent pool: split the iteration's games between self-play and the
+            # heuristic-AI curriculum. Critic values are filled ONCE on the merged
+            # buffer (so each sub-collect runs critic=None). frac<=0 -> pure self-play.
+            n_heur = int(round(cfg.games_per_iter * cfg.heuristic_pool_frac))
+            n_heur = max(0, min(n_heur, cfg.games_per_iter))
+            n_self = cfg.games_per_iter - n_heur
             seed = cfg.seed + 1000 + done * cfg.games_per_iter
-            buf = collect_games(benv, actor_act_fn(m.actor), cfg.games_per_iter, seed,
-                                critic=m.critic, max_decisions=cfg.max_decisions)
+            buf = collect_games(benv, actor_act_fn(m.actor), n_self, seed,
+                                critic=None, max_decisions=cfg.max_decisions)
+            if n_heur > 0:
+                hseed = cfg.seed + 500_000 + done * cfg.games_per_iter
+                hbuf = collect_heuristic_games(m.guesser, m.actor, n_heur, hseed,
+                                               critic=None, use_belief=cfg.use_belief,
+                                               max_decisions=cfg.max_decisions)
+                buf.steps.extend(hbuf.steps)
+            fill_critic_values(buf, m.critic)
             batch = buf.compute(cfg.gamma, cfg.lam)
             if max_seconds is not None:                  # anneal entropy over the budget
                 frac = min(total_elapsed() / max_seconds, 1.0)

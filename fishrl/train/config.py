@@ -23,6 +23,12 @@ class Config:
     lam: float = 0.95
     max_decisions: int = 2000
     games_per_iter: int = 8
+    # Opponent pool: fraction of each iteration's games played by the learning policy
+    # (p1) against the engine's heuristic AI (p2) instead of self-play. 0.0 -> pure
+    # self-play (original behaviour). Only the policy seat's transitions are trained;
+    # the heuristic seat is the engine's, off-policy. Targets the hardest anchor (the
+    # policy loses to the heuristic) by putting it directly in the rollout mix.
+    heuristic_pool_frac: float = 0.25
 
     # PPO
     clip: float = 0.2

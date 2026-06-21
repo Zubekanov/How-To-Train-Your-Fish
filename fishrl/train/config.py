@@ -23,12 +23,27 @@ class Config:
     lam: float = 0.95
     max_decisions: int = 2000
     games_per_iter: int = 8
-    # Opponent pool: fraction of each iteration's games played by the learning policy
-    # (p1) against the engine's heuristic AI (p2) instead of self-play. 0.0 -> pure
-    # self-play (original behaviour). Only the policy seat's transitions are trained;
-    # the heuristic seat is the engine's, off-policy. Targets the hardest anchor (the
-    # policy loses to the heuristic) by putting it directly in the rollout mix.
-    heuristic_pool_frac: float = 0.25
+
+    # ── Opponent pool / PFSP (prioritized fictitious self-play) ──────────────
+    # Fraction of each iteration's games the learner plays against a POOL opponent
+    # (sampled from the league below) instead of mirror self-play. 0.0 -> pure
+    # self-play (original behaviour). Only the learner seat's transitions are
+    # trained; the opponent's are off-policy and never buffered.
+    pool_frac: float = 0.25
+    # League = scripted anchors (also the eval anchors) + a ring of frozen past-self
+    # snapshots (true fictitious self-play). league_size is the past-self ring length
+    # (0 -> anchors only). A snapshot is appended every status report.
+    pfsp_anchors: tuple = ("random", "attacker", "heuristic")
+    league_size: int = 8
+    # Opponent sampling priority over the learner's per-opponent win-rate `x`:
+    #   "hard" -> (1-x)^pfsp_p  : focus on opponents you LOSE to (default)
+    #   "var"  -> x*(1-x)       : focus on EVEN matchups (AlphaStar main-agent style)
+    # pfsp_eps floors every member's weight so nothing starves; pfsp_wr_ema is the
+    # EMA rate for updating a member's win-rate from pool-game outcomes.
+    pfsp_mode: str = "hard"
+    pfsp_p: float = 2.0
+    pfsp_eps: float = 0.05
+    pfsp_wr_ema: float = 0.1
 
     # PPO
     clip: float = 0.2

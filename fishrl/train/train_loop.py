@@ -32,9 +32,11 @@ from fishrl.train.collector import (
     actor_act_fn,
     collect_games,
     collect_heuristic_games,
+    collect_vs_opponent,
     fill_critic_values,
 )
 from fishrl.train.config import Config
+from fishrl.train.pfsp import PFSPLeague
 from fishrl.train.ppo import aux_update, ppo_update
 
 
@@ -133,6 +135,10 @@ def train(cfg: Config, models: Models | None = None, log=print,
     acc = {k: 0.0 for k in KEYS}
     win_iters = win_T = 0
     last_batch = None
+    # PFSP opponent league: scripted anchors + a ring of frozen past selves, appended
+    # at each report. In-memory only (never serialized), so resume refills it over the
+    # first few reports. Unused when cfg.pool_frac <= 0.
+    league = PFSPLeague.from_config(cfg)
     run_start = last_report = last_ckpt = time.perf_counter()
 
     def total_elapsed() -> float:
@@ -220,10 +226,13 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     "attacker": wr["attacker"], "heuristic": wr["heuristic"],
                     "new_best": False, "source": "inline",
                 })
+        if cfg.pool_frac > 0 and league.members():        # PFSP win-rate table (own line:
+            log(f"[league it={done}] {league.summary()}")  # not parsed by the metrics collector)
         for k in KEYS:
             acc[k] = 0.0
         win_iters = win_T = 0
         frozen = _snapshot(m)            # roll the anchor forward to the current policy
+        league.add_snapshot(m, done)     # add this report's policy as a past-self member
         frozen_it = done
         last_report = time.perf_counter()
         _checkpoint(milestone=True)      # report-time save carries a numbered milestone
@@ -280,21 +289,41 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 break
             if stop["v"]:
                 break
-            # Opponent pool: split the iteration's games between self-play and the
-            # heuristic-AI curriculum. Critic values are filled ONCE on the merged
-            # buffer (so each sub-collect runs critic=None). frac<=0 -> pure self-play.
-            n_heur = int(round(cfg.games_per_iter * cfg.heuristic_pool_frac))
-            n_heur = max(0, min(n_heur, cfg.games_per_iter))
-            n_self = cfg.games_per_iter - n_heur
+            # Split the iteration into mirror self-play + PFSP pool games. Pool games
+            # draw an opponent from the league (sampled by difficulty) and record only
+            # the learner's transitions. Critic values are filled ONCE on the merged
+            # buffer (each sub-collect runs critic=None). pool_frac<=0 -> pure self-play.
+            n_pool = int(round(cfg.games_per_iter * cfg.pool_frac))
+            n_pool = max(0, min(n_pool, cfg.games_per_iter))
+            n_self = cfg.games_per_iter - n_pool
             seed = cfg.seed + 1000 + done * cfg.games_per_iter
             buf = collect_games(benv, actor_act_fn(m.actor), n_self, seed,
                                 critic=None, max_decisions=cfg.max_decisions)
-            if n_heur > 0:
-                hseed = cfg.seed + 500_000 + done * cfg.games_per_iter
-                hbuf = collect_heuristic_games(m.guesser, m.actor, n_heur, hseed,
-                                               critic=None, use_belief=cfg.use_belief,
-                                               max_decisions=cfg.max_decisions)
-                buf.steps.extend(hbuf.steps)
+            pool_rng = np.random.default_rng(cfg.seed + 900_000 + done)
+            for pidx in range(n_pool):
+                oseed = cfg.seed + 500_000 + done * cfg.games_per_iter + pidx * 17
+                member = league.sample(pool_rng)
+                if member is None:                          # empty league -> mirror fallback
+                    gbuf = collect_games(benv, actor_act_fn(m.actor), 1, oseed,
+                                         critic=None, max_decisions=cfg.max_decisions)
+                    buf.steps.extend(gbuf.steps)
+                    continue
+                if member.kind == "heuristic":              # engine-driven -> learner is p1
+                    lseat = "p1"
+                    gbuf = collect_heuristic_games(m.guesser, m.actor, 1, oseed,
+                                                   critic=None, use_belief=cfg.use_belief,
+                                                   max_decisions=cfg.max_decisions)
+                else:                                       # scripted / past-self, seat-balanced
+                    lseat = "p1" if pidx % 2 == 0 else "p2"
+                    gbuf = collect_vs_opponent(m, member, 1, oseed, critic=None,
+                                               use_belief=cfg.use_belief,
+                                               max_decisions=cfg.max_decisions,
+                                               learner_seat=lseat)
+                if gbuf.steps:                              # update the member's learner win-rate
+                    winner = gbuf.steps[-1].winner
+                    if winner in ("p1", "p2"):
+                        league.update(member, winner == lseat)
+                buf.steps.extend(gbuf.steps)
             fill_critic_values(buf, m.critic)
             batch = buf.compute(cfg.gamma, cfg.lam)
             if max_seconds is not None:                  # anneal entropy over the budget

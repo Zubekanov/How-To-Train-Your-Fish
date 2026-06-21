@@ -60,8 +60,9 @@ def test_buffer_computes_a_trainable_batch():
 
 
 def test_train_with_heuristic_pool_runs():
-    """A tiny bounded run with the pool active exercises the merged-buffer path."""
+    """A tiny bounded run with a heuristic-only pool exercises the merged-buffer path."""
     cfg = Config(iters=2, games_per_iter=4, warmup_games=4, warmup_epochs=1,
-                 max_decisions=400, report_winrate_games=0, heuristic_pool_frac=0.5)
+                 max_decisions=400, report_winrate_games=0, pool_frac=0.5,
+                 pfsp_anchors=("heuristic",), league_size=0)
     m = build_models(cfg)
     train(cfg, m, log=lambda *a, **k: None)

@@ -138,6 +138,116 @@ def collect_heuristic_games(guesser, actor, n_games, base_seed, critic=None,
     return buf
 
 
+def _belief_guess(guesser, persp, prev, dev):
+    """One guesser forward: opponent-hand belief from a seat's perspective ⊕ its
+    carried previous guess. Returns the new guess (float32[N_NAMES])."""
+    with torch.no_grad():
+        return guesser(
+            torch.as_tensor(persp, dtype=torch.float32).unsqueeze(0).to(dev),
+            torch.as_tensor(prev, dtype=torch.float32).unsqueeze(0).to(dev),
+        ).squeeze(0).cpu().numpy().astype(np.float32)
+
+
+def collect_vs_opponent(learner, opponent, n_games, base_seed, critic=None,
+                        use_belief=True, max_decisions=2000,
+                        learner_seat=None) -> RolloutBuffer:
+    """Collect rollouts where the LEARNER plays a fixed pool ``opponent`` through the
+    two-seat AEC env, recording ONLY the learner's transitions (the opponent is
+    off-policy and must never enter the PPO buffer). Seat-balanced: the learner plays
+    p1 on even games and p2 on odd games, cancelling first-player bias in the data.
+
+    ``opponent`` is a PFSP league member with ``kind`` in {"random", "attacker",
+    "self"}; the engine "heuristic" is driven by ``collect_heuristic_games`` instead
+    (the engine resolves it on p2, so it can't take an arbitrary seat here). A "self"
+    opponent acts through ITS OWN frozen actor+guesser (its own belief channel).
+
+    Every recorded Step matches the self-play shape (belief-augmented obs ⊕ guess,
+    p1-oriented god/public features, opponent-hand-count targets) so the merged
+    buffer trains identically to mirror self-play.
+    """
+    from fishrl.env.aec_env import FishAEC
+
+    kind = opponent.kind
+    if kind == "heuristic":
+        raise ValueError("heuristic is collected via collect_heuristic_games, not collect_vs_opponent")
+    learn_act = actor_act_fn(learner.actor)
+    ldev = device_of(learner.guesser)
+    zeros = np.zeros(V.N_NAMES, dtype=np.float32)
+
+    rng = np.random.default_rng(base_seed)
+    opp_actor = opp_guesser = opp_dev = None
+    attacker_action = None
+    if kind == "self":
+        opp_actor, opp_guesser = opponent.models.actor, opponent.models.guesser
+        opp_dev = device_of(opp_guesser)
+    elif kind == "attacker":
+        from fishrl.opponents.attacker import attacker_action
+
+    buf = RolloutBuffer()
+    for gi in range(n_games):
+        # Seat-balance across games unless the caller pins a seat (single-game pool calls
+        # alternate the seat themselves so the parity isn't always p1).
+        lseat = learner_seat or ("p1" if gi % 2 == 0 else "p2")
+        env = FishAEC(max_decisions=max_decisions)
+        env.reset(seed=base_seed + gi)
+        prev = {"p1": zeros.copy(), "p2": zeros.copy()}   # per-seat belief carry
+        start = len(buf)
+        cache_id = cache_god = cache_pub = None
+        guard = 0
+        while env.agents and guard < max_decisions * 6:
+            guard += 1
+            seat = env.agent_selection
+            if env.terminations[seat] or env.truncations[seat]:
+                env.step(None)
+                continue
+            base = env.observe(seat)
+            mask = base["action_mask"]
+            persp = base["observation"]
+            if seat == lseat:
+                g = env.g
+                did = env.decision_id
+                if did != cache_id:                        # engine advanced -> fresh encode
+                    cache_id, cache_god, cache_pub = did, encode_god(g), encode_public(g)
+                    god, pub = cache_god, cache_pub
+                else:                                      # frozen state (compound sub-step)
+                    god, pub = cache_god.copy(), cache_pub.copy()
+                if use_belief:
+                    guess = _belief_guess(learner.guesser, persp, prev[seat], ldev)
+                    prev[seat] = guess
+                else:
+                    guess = zeros.copy()
+                x_act = np.concatenate([persp, guess]).astype(np.float32)
+                action, logp = learn_act({"observation": x_act, "action_mask": mask})
+                buf.add(Step(
+                    seat=seat, x_act=x_act,
+                    mask=mask.astype(np.int8), action=action, logp=logp,
+                    value=0.0, god_feat=god, pub_feat=pub,
+                    guess_in=guess.astype(np.float32),
+                    cnt_target=opponent_hand_counts(g, seat),
+                ))
+            elif kind == "random":
+                action = int(rng.choice(np.flatnonzero(mask)))
+            elif kind == "attacker":
+                action = attacker_action(env.g, seat, mask, rng)
+            else:                                          # "self": frozen policy + own belief
+                if use_belief:
+                    guess = _belief_guess(opp_guesser, persp, prev[seat], opp_dev)
+                    prev[seat] = guess
+                else:
+                    guess = zeros
+                ox = torch.as_tensor(np.concatenate([persp, guess]), dtype=torch.float32).unsqueeze(0).to(opp_dev)
+                om = torch.as_tensor(mask, dtype=torch.float32).unsqueeze(0).to(opp_dev)
+                with torch.no_grad():
+                    action = int(torch.multinomial(opp_actor.log_probs(ox, om)[0].exp(), 1))
+            env.step(action)
+        winner = env.g.result.get("winner")
+        for i in range(start, len(buf)):
+            buf.steps[i].winner = winner
+    if critic is not None:
+        fill_critic_values(buf, critic)
+    return buf
+
+
 def collect_games(belief_env, act_fn, n_games, base_seed, critic=None,
                   max_decisions=2000) -> RolloutBuffer:
     buf = RolloutBuffer()

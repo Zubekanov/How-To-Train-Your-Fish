@@ -71,16 +71,19 @@ def test_train_writes_stats_report(tmp_path):
     from fishrl.train import stats as stats_io
 
     latest = ckpt.latest_path(str(tmp_path))
-    cfg = _cfg(iters=1, seed=5)                  # report_winrate_games=1 -> inline WR in record
+    cfg = _cfg(iters=1, seed=5)                  # report_winrate_games=1 -> inline panel -> eval row
     train(cfg, build_models(cfg), checkpoint_path=latest)
     with open(stats_io.stats_path(str(tmp_path))) as f:
         data = json.load(f)
     assert len(data["reports"]) == 1            # the final emit() appended one datapoint
     rec = data["reports"][0]
-    assert rec["it"] == 1
-    for k in ("policy_loss", "critic_loss", "entropy", "gmae", "wr_heuristic", "frozen_at"):
+    assert rec["it"] == 1 and rec["source"] == "live"
+    for k in ("policy_loss", "critic_loss", "entropy", "gmae"):
         assert k in rec
-    assert data["evals"] == []                   # trainer never touches the eval array
+    assert not any(k.startswith("wr_") for k in rec)   # win-rates are NOT on report rows
+    assert len(data["evals"]) == 1              # the inline panel went to the eval array instead
+    ev = data["evals"][0]
+    assert ev["it"] == 1 and ev["source"] == "inline" and "heuristic" in ev
 
 
 @slow

@@ -190,6 +190,10 @@ def train(cfg: Config, models: Models | None = None, log=print,
             f"gmae={gmae:.2f}" + wr_str
         )
         if checkpoint_path is not None:                  # dump this datapoint to stats.json
+            ckpt_dir = os.path.dirname(os.path.abspath(checkpoint_path))
+            # Reports are PURE trainer metrics (no win-rates) so every row has one schema;
+            # win-rates -- whether from the inline panel here or the out-of-band eval service --
+            # live only in the "evals" array.
             rec = {
                 "it": done, "elapsed_h": total_elapsed() / 3600.0, "wall_time": time.time(),
                 "iters": win_iters, "iters_per_h": win_iters / dt_h, "transitions": win_T,
@@ -198,14 +202,19 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 "guesser_loss": mean["guesser_loss"], "public_loss": mean["public_loss"],
                 "priv_acc": est.get("priv_acc"), "pub_acc": est.get("pub_acc"),
                 "priv_brier": est.get("priv_brier"), "pub_brier": est.get("pub_brier"),
-                "gmae": gmae,
+                "gmae": gmae, "source": "live",
             }
-            if wr is not None:                           # inline panel on -> carry win-rates too
-                rec["frozen_at"] = frozen_it
-                rec.update({f"wr_{k}": v for k, v in wr.items()})
             rec = {k: (None if isinstance(v, float) and not math.isfinite(v) else v)
                    for k, v in rec.items()}             # NaN/inf -> null (valid JSON)
-            stats_io.append_report(os.path.dirname(os.path.abspath(checkpoint_path)), rec)
+            stats_io.append_report(ckpt_dir, rec)
+            if wr is not None:                           # inline panel on -> an eval-array row
+                stats_io.append_eval(ckpt_dir, {
+                    "it": done, "frozen_at": frozen_it, "elapsed_h": total_elapsed() / 3600.0,
+                    "wall_time": time.time(), "n": cfg.report_winrate_games, "workers": 1,
+                    "took_s": eval_s, "frozen": wr.get("frozen"), "random": wr["random"],
+                    "attacker": wr["attacker"], "heuristic": wr["heuristic"],
+                    "new_best": False, "source": "inline",
+                })
         for k in KEYS:
             acc[k] = 0.0
         win_iters = win_T = 0

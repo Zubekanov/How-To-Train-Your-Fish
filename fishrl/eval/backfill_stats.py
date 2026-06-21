@@ -34,10 +34,12 @@ _STATUS = re.compile(
     r"priv\(acc=(?P<pacc>[-\d.naf]+),brier=(?P<pbri>[-\d.naf]+)\)\s+"
     r"pub\(acc=(?P<uacc>[-\d.naf]+),brier=(?P<ubri>[-\d.naf]+)\)\s+gmae=(?P<gmae>[-\d.naf]+)")
 
-# optional inline win-rates tail (older lines had it; newer say "WR via eval timer")
+# optional inline win-rate tail (older lines had it; newer say "WR via eval timer"). Captures the
+# panel size + eval seconds too, so the inline panel becomes a proper eval-array row.
 _STATUS_WR = re.compile(
     r"WR\s+frozen@(?P<fat>\d+)=(?P<frozen>[-\d.naf]+)\s+random=(?P<rand>[-\d.naf]+)\s+"
-    r"attacker=(?P<att>[-\d.naf]+)\s+heuristic=(?P<heu>[-\d.naf]+)")
+    r"attacker=(?P<att>[-\d.naf]+)\s+heuristic=(?P<heu>[-\d.naf]+)\s+"
+    r"\(n=(?P<n>\d+),\s+eval\s+(?P<es>[\d.]+)s\)")
 
 # `[eval it=2230 @9.20h n=100 w=6 took=87.8s] WR frozen@2034=0.540 random=0.940
 #  attacker=0.750 heuristic=0.070  *** NEW BEST ...`
@@ -70,17 +72,21 @@ def _journal(unit: str) -> list:
     return out.stdout.splitlines()
 
 
-def parse_reports(lines) -> list:
-    recs = []
+def parse_status(lines) -> tuple:
+    """Parse `[status ...]` lines into (reports, inline_evals). Reports are PURE trainer metrics;
+    where a line carried an inline win-rate panel, that panel is emitted as a separate eval-array
+    row (so win-rates live only in "evals", same as the live schema)."""
+    reports, inline_evals = [], []
     for line in lines:
         m = _STATUS.search(line)
         if not m:
             continue
         tag = m.group("tag")
-        rec = {
-            "it": int(m.group("it")),
-            "elapsed_h": None if tag == "final" else float(tag[:-1]),
-            "wall_time": _ts(line),
+        it = int(m.group("it"))
+        elapsed_h = None if tag == "final" else float(tag[:-1])
+        ts = _ts(line)
+        reports.append({
+            "it": it, "elapsed_h": elapsed_h, "wall_time": ts,
             "iters": int(m.group("iters")), "iters_per_h": _f(m.group("iph")),
             "transitions": int(m.group("T")),
             "policy_loss": _f(m.group("pi")), "critic_loss": _f(m.group("V")),
@@ -89,16 +95,18 @@ def parse_reports(lines) -> list:
             "priv_acc": _f(m.group("pacc")), "pub_acc": _f(m.group("uacc")),
             "priv_brier": _f(m.group("pbri")), "pub_brier": _f(m.group("ubri")),
             "gmae": _f(m.group("gmae")), "source": "journald",
-        }
+        })
         w = _STATUS_WR.search(line)
-        if w:                                            # older inline-panel lines
-            rec["frozen_at"] = int(w.group("fat"))
-            rec["wr_frozen"] = _f(w.group("frozen"))
-            rec["wr_random"] = _f(w.group("rand"))
-            rec["wr_attacker"] = _f(w.group("att"))
-            rec["wr_heuristic"] = _f(w.group("heu"))
-        recs.append(rec)
-    return recs
+        if w:                                            # older inline-panel era -> an eval row
+            inline_evals.append({
+                "it": it, "frozen_at": int(w.group("fat")), "elapsed_h": elapsed_h,
+                "wall_time": ts, "n": int(w.group("n")), "workers": 1,
+                "took_s": _f(w.group("es")), "frozen": _f(w.group("frozen")),
+                "random": _f(w.group("rand")), "attacker": _f(w.group("att")),
+                "heuristic": _f(w.group("heu")), "new_best": False,
+                "source": "journald-inline",
+            })
+    return reports, inline_evals
 
 
 def parse_evals(lines) -> list:
@@ -125,12 +133,20 @@ def main() -> None:
     ap.add_argument("--eval-unit", default="fishrl-eval")
     args = ap.parse_args()
 
-    reports = parse_reports(_journal(args.selfplay_unit))
-    evals = parse_evals(_journal(args.eval_unit))
-    print(f"[backfill] parsed {len(reports)} status lines, {len(evals)} eval lines from journald")
-    added = stats_io.merge(args.ckpt_dir, reports=reports, evals=evals)
+    reports, inline_evals = parse_status(_journal(args.selfplay_unit))
+    evals = parse_evals(_journal(args.eval_unit)) + inline_evals
+    print(f"[backfill] parsed {len(reports)} status lines "
+          f"({len(inline_evals)} with inline win-rates), {len(evals)} eval rows total")
+    # Regenerate the backfill-owned rows (so parser fixes re-apply) and stamp a source on any
+    # live rows written before the source field existed; never touch other live rows.
+    added = stats_io.merge(
+        args.ckpt_dir, reports=reports, evals=evals,
+        replace_sources={"journald", "journald-inline"},
+        live_source={"reports": "live", "evals": "eval"})
     print(f"[backfill] merged into {stats_io.stats_path(args.ckpt_dir)}: "
-          f"+{added['reports']} reports, +{added['evals']} evals (existing rows kept)")
+          f"reports {added['reports']['total']} (+{added['reports']['added']} backfilled), "
+          f"evals {added['evals']['total']} (+{added['evals']['added']} backfilled); "
+          f"live rows preserved")
 
 
 if __name__ == "__main__":

@@ -243,7 +243,7 @@ def main() -> None:
         "it": r["it"], "frozen_at": r["frozen_it"], "elapsed_h": r["elapsed_h"],
         "wall_time": time.time(), "n": r["n"], "workers": r["workers"], "took_s": r["took_s"],
         "frozen": r["frozen"], "random": r["random"], "attacker": r["attacker"],
-        "heuristic": r["heuristic"], "new_best": bool(r.get("new_best")),
+        "heuristic": r["heuristic"], "new_best": bool(r.get("new_best")), "source": "eval",
     })
     best = "  *** NEW BEST (heuristic) -> best.pt ***" if r.get("new_best") else ""
     print(

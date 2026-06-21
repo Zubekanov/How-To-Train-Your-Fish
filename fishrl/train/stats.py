@@ -84,19 +84,34 @@ def append_eval(ckpt_dir: str, record: dict) -> None:
     _append(ckpt_dir, "evals", record)
 
 
-def merge(ckpt_dir: str, reports=None, evals=None, key: str = "it") -> dict:
-    """Merge historic records into the file, deduping each array by `key` (existing entries win,
-    so re-running is idempotent and the live writers' rows are never overwritten). Both arrays end
-    up sorted by `key`. Runs under the same lock + atomic write as the appenders, so it is safe to
-    call while the trainer / eval service are live. Returns counts of rows added."""
+def merge(ckpt_dir: str, reports=None, evals=None, key: str = "it",
+          replace_sources=(), live_source=None) -> dict:
+    """Merge historic records into the file. For each array:
+
+      * drop existing rows whose ``source`` is in ``replace_sources`` (rows the caller owns and is
+        regenerating -- e.g. the backfill tool re-deriving its own rows from updated parse logic);
+      * stamp a ``source`` on any surviving row that lacks one, from ``live_source[name]`` (so
+        rows written before ``source`` existed get normalised);
+      * add the caller's rows that are not already present (deduped by ``key``, existing wins);
+      * sort by ``key``.
+
+    Runs under the same lock + atomic write as the appenders, so it is safe to call while the
+    trainer / eval service are live. Returns counts of rows added per array."""
+    replace_sources = set(replace_sources)
+    live_source = live_source or {}
     with _locked(ckpt_dir):
         d = _read(ckpt_dir)
         added = {}
         for name, new in (("reports", reports or []), ("evals", evals or [])):
-            have = {r.get(key) for r in d[name]}
+            kept = [r for r in d[name] if r.get("source") not in replace_sources]
+            if name in live_source:
+                for r in kept:
+                    r.setdefault("source", live_source[name])
+            have = {r.get(key) for r in kept}
             fresh = [r for r in new if r.get(key) not in have]
-            d[name].extend(fresh)
-            d[name].sort(key=lambda r: (r.get(key) is None, r.get(key)))
-            added[name] = len(fresh)
+            kept.extend(fresh)
+            kept.sort(key=lambda r: (r.get(key) is None, r.get(key)))
+            d[name] = kept
+            added[name] = {"added": len(fresh), "total": len(kept)}
         _atomic_write(ckpt_dir, d)
         return added

@@ -140,6 +140,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
     # heuristic). Reset each report alongside win_iters.
     OPP_CATS = ("self", "pastself", "heuristic", "attacker", "random")
     opp_mix = {k: 0 for k in OPP_CATS}
+    scen_mix: dict = {}            # scenario games played this window (DEBUG logging only)
     last_batch = None
     # PFSP opponent league: scripted anchors + a ring of frozen past selves, appended
     # at each report. In-memory only (never serialized), so resume refills it over the
@@ -251,11 +252,16 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 f"(self={opp_mix['self']} past={opp_mix['pastself']} "                # not parsed
                 f"heuristic={opp_mix['heuristic']} attacker={opp_mix['attacker']} "   # by the
                 f"random={opp_mix['random']}) | {league.summary()}")                  # collector
+        if cfg.scenario_frac > 0 and scen_mix:           # DEBUG ONLY — never a success metric
+            log(f"[scenario debug it={done}] games={sum(scen_mix.values())} "
+                f"mix={dict(sorted(scen_mix.items()))} (judge progress on vs-heuristic WR, "
+                f"not this)")
         for k in KEYS:
             acc[k] = 0.0
         win_iters = win_T = 0
         for k in OPP_CATS:
             opp_mix[k] = 0
+        scen_mix.clear()
         frozen = _snapshot(m)            # roll the anchor forward to the current policy
         league.add_snapshot(m, done)     # add this report's policy as a past-self member
         frozen_it = done
@@ -318,9 +324,14 @@ def train(cfg: Config, models: Models | None = None, log=print,
             # draw an opponent from the league (sampled by difficulty) and record only
             # the learner's transitions. Critic values are filled ONCE on the merged
             # buffer (each sub-collect runs critic=None). pool_frac<=0 -> pure self-play.
-            n_pool = int(round(cfg.games_per_iter * cfg.pool_frac))
-            n_pool = max(0, min(n_pool, cfg.games_per_iter))
-            n_self = cfg.games_per_iter - n_pool
+            # Carve scenario-seeded games out first; the rest splits self-play / PFSP pool
+            # exactly as before. scenario_frac <= 0 -> n_scen 0 -> unchanged behaviour.
+            n_scen = int(round(cfg.games_per_iter * cfg.scenario_frac)) if cfg.scenario_frac > 0 else 0
+            n_scen = max(0, min(n_scen, cfg.games_per_iter))
+            rest = cfg.games_per_iter - n_scen
+            n_pool = int(round(rest * cfg.pool_frac))
+            n_pool = max(0, min(n_pool, rest))
+            n_self = rest - n_pool
             seed = cfg.seed + 1000 + done * cfg.games_per_iter
             buf = collect_games(benv, actor_act_fn(m.actor), n_self, seed,
                                 critic=None, max_decisions=cfg.max_decisions)
@@ -352,6 +363,23 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     if winner in ("p1", "p2"):
                         league.update(member, winner == lseat)
                 buf.steps.extend(gbuf.steps)
+            # Scenario-seeded games: short, targeted start-states (terminal ±1 reward).
+            # Reuses the self-play collector via a belief-wrapped ScenarioEnv, so the
+            # transitions are identical in shape and merge into the same PPO buffer.
+            if n_scen > 0:
+                from fishrl.train.scenarios import (ScenarioEnv, get_scenario,
+                                                    sample_scenario_name)
+                scn_rng = np.random.default_rng(cfg.seed + 700_000 + done)
+                for sidx in range(n_scen):
+                    sname = sample_scenario_name(cfg.scenario_weights, scn_rng)
+                    senv = BeliefAugmentedEnv(
+                        m.guesser, belief=cfg.use_belief,
+                        env=ScenarioEnv(get_scenario(sname), max_decisions=cfg.max_decisions))
+                    sseed = cfg.seed + 300_000 + done * cfg.games_per_iter + sidx * 31
+                    sbuf = collect_games(senv, actor_act_fn(m.actor), 1, sseed,
+                                         critic=None, max_decisions=cfg.max_decisions)
+                    buf.steps.extend(sbuf.steps)
+                    scen_mix[sname] = scen_mix.get(sname, 0) + 1
             fill_critic_values(buf, m.critic)
             batch = buf.compute(cfg.gamma, cfg.lam)
             if max_seconds is not None:                  # anneal entropy over the budget

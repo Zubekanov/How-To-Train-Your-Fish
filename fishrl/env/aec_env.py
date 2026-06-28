@@ -69,6 +69,7 @@ class FishAEC(AECEnv):
         self.infos = {a: {} for a in self.agents}
         self._builder: CompoundBuilder | None = None
         self._decisions = 0
+        self._scenario_result: str | None = None   # set by a scenario terminator (subclass)
         self.agent_selection = self.possible_agents[0]
         self._refresh()
 
@@ -105,13 +106,34 @@ class FishAEC(AECEnv):
             return self._builder.mask()
         return atomic_mask(self.g, self.agent_selection)
 
+    # ── scenario hook ────────────────────────────────────────────────────────
+    def _terminal_override(self):
+        """Scenario subclasses return 'p1' / 'p2' / 'draw' to end the episode early
+        with that result (terminal ±1 reward, no shaping), or None to defer to the
+        normal engine game-end. Base env: always None, so behaviour is unchanged."""
+        return None
+
+    @property
+    def winner(self):
+        """Terminal winner seat, or None on a draw. A scenario terminator's result
+        (cached when it fired in `_refresh`) wins over the engine result; otherwise
+        the engine's terminal winner — identical to the previous behaviour."""
+        if self._scenario_result is not None:
+            return None if self._scenario_result == "draw" else self._scenario_result
+        return terminal_winner(self.g)
+
     # ── internal: advance to the next decision point ─────────────────────────
     def _refresh(self):
         g = self.g
         while True:
-            if is_terminal(g) or self._decisions >= self.max_decisions:
-                done = is_terminal(g)
-                winner = terminal_winner(g)
+            ov = self._terminal_override()
+            if ov is not None:
+                self._scenario_result = ov                # cache so `winner` is stable
+            if ov is not None or is_terminal(g) or self._decisions >= self.max_decisions:
+                if ov is not None:                        # scenario decided the outcome
+                    done, winner = True, (None if ov == "draw" else ov)
+                else:
+                    done, winner = is_terminal(g), terminal_winner(g)
                 for a in self.agents:
                     self.terminations[a] = done
                     self.truncations[a] = not done

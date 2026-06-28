@@ -45,6 +45,17 @@ class Config:
     pfsp_eps: float = 0.05
     pfsp_wr_ema: float = 0.1
 
+    # ── Scenario-based curriculum (opt-in; 0.0 -> no scenarios, behaviour unchanged) ──
+    # Fraction of each iteration's games seeded from a short, targeted SCENARIO start-
+    # state instead of a full game. Scenarios shape only the initial-state distribution
+    # + termination; reward stays terminal ±1. The remaining (1 - scenario_frac) games
+    # split into self-play / PFSP pool exactly as before. Judge progress on the full-game
+    # vs-heuristic eval ONLY — scenario win-rates are debug, never a success metric.
+    scenario_frac: float = 0.0
+    # relative sampling weights over registered scenarios (see fishrl.train.scenarios)
+    scenario_weights: dict = field(
+        default_factory=lambda: {"free_attack": 1.0, "establish_clock": 1.0})
+
     # PPO
     clip: float = 0.2
     ppo_epochs: int = 4

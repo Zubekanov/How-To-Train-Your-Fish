@@ -281,7 +281,7 @@ def collect_games(belief_env, act_fn, n_games, base_seed, critic=None,
                 cnt_target=opponent_hand_counts(g, agent),
             ))
             belief_env.step(action)
-        winner = belief_env.g.result.get("winner")
+        winner = belief_env.winner            # scenario terminator result, or engine winner
         for i in range(start, len(buf)):
             buf.steps[i].winner = winner
     if critic is not None:

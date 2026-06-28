@@ -17,8 +17,10 @@ from fishrl.obs import vocab as V
 
 
 class BeliefAugmentedEnv:
-    def __init__(self, guesser, belief: bool = True, **env_kwargs):
-        self.env = FishAEC(**env_kwargs)
+    def __init__(self, guesser, belief: bool = True, env=None, **env_kwargs):
+        # `env` lets a caller inject a pre-built FishAEC subclass (e.g. a scenario env);
+        # default constructs a plain FishAEC so existing callers are unchanged.
+        self.env = env if env is not None else FishAEC(**env_kwargs)
         self.guesser = guesser
         self.belief = belief          # when False, feed zeros for the belief channel
         self.last_guess: dict[str, np.ndarray] = {}
@@ -39,6 +41,12 @@ class BeliefAugmentedEnv:
     @property
     def decision_id(self) -> int:
         return self.env.decision_id
+
+    @property
+    def winner(self):
+        # Scenario terminator result if one fired, else the engine's terminal winner
+        # (identical to g.result's winner for normal self-play).
+        return self.env.winner
 
     @property
     def terminations(self):

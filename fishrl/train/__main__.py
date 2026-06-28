@@ -35,6 +35,10 @@ def main():
                          "'var' favours even matchups")
     ap.add_argument("--league-size", type=int, default=Config.league_size,
                     help="ring length of frozen past-self league members (0 = anchors only)")
+    ap.add_argument("--scenario-frac", type=float, default=Config.scenario_frac,
+                    help="fraction of each iteration's games seeded from a curriculum "
+                         "scenario start-state (0 = off). Mixed INTO self-play; reward stays "
+                         "terminal. Judge progress on vs-heuristic WR, NOT scenario win-rate.")
     ENC = ["flat", "entity", "attention"]
     ap.add_argument("--encoder", choices=ENC, default="flat",
                     help="base encoder for any net without a per-net override")
@@ -70,7 +74,7 @@ def main():
     common = dict(device=resolve_device(args.gpu), iters=args.iters,
                   games_per_iter=args.games_per_iter, warmup_games=args.warmup_games,
                   pool_frac=args.pool_frac, pfsp_mode=args.pfsp_mode,
-                  league_size=args.league_size,
+                  league_size=args.league_size, scenario_frac=args.scenario_frac,
                   ckpt_dir=args.ckpt_dir, report_every_seconds=args.report_every_seconds,
                   report_winrate_games=args.report_winrate_games,
                   checkpoint_every_seconds=args.checkpoint_every_seconds)

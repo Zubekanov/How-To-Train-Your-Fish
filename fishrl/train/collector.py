@@ -150,7 +150,7 @@ def _belief_guess(guesser, persp, prev, dev):
 
 def collect_vs_opponent(learner, opponent, n_games, base_seed, critic=None,
                         use_belief=True, max_decisions=2000,
-                        learner_seat=None) -> RolloutBuffer:
+                        learner_seat=None, enforce_free_attack=False) -> RolloutBuffer:
     """Collect rollouts where the LEARNER plays a fixed pool ``opponent`` through the
     two-seat AEC env, recording ONLY the learner's transitions (the opponent is
     off-policy and must never enter the PPO buffer). Seat-balanced: the learner plays
@@ -188,7 +188,7 @@ def collect_vs_opponent(learner, opponent, n_games, base_seed, critic=None,
         # Seat-balance across games unless the caller pins a seat (single-game pool calls
         # alternate the seat themselves so the parity isn't always p1).
         lseat = learner_seat or ("p1" if gi % 2 == 0 else "p2")
-        env = FishAEC(max_decisions=max_decisions)
+        env = FishAEC(max_decisions=max_decisions, enforce_free_attack=enforce_free_attack)
         env.reset(seed=base_seed + gi)
         prev = {"p1": zeros.copy(), "p2": zeros.copy()}   # per-seat belief carry
         start = len(buf)

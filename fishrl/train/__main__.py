@@ -39,6 +39,10 @@ def main():
                     help="fraction of each iteration's games seeded from a curriculum "
                          "scenario start-state (0 = off). Mixed INTO self-play; reward stays "
                          "terminal. Judge progress on vs-heuristic WR, NOT scenario win-rate.")
+    ap.add_argument("--enforce-free-attack", default=Config.enforce_free_attack,
+                    action=argparse.BooleanOptionalAction,
+                    help="hard rule across all training: declaring fewer than all eligible "
+                         "attackers into an empty opposing board is an instant loss")
     ENC = ["flat", "entity", "attention"]
     ap.add_argument("--encoder", choices=ENC, default="flat",
                     help="base encoder for any net without a per-net override")
@@ -75,6 +79,7 @@ def main():
                   games_per_iter=args.games_per_iter, warmup_games=args.warmup_games,
                   pool_frac=args.pool_frac, pfsp_mode=args.pfsp_mode,
                   league_size=args.league_size, scenario_frac=args.scenario_frac,
+                  enforce_free_attack=args.enforce_free_attack,
                   ckpt_dir=args.ckpt_dir, report_every_seconds=args.report_every_seconds,
                   report_winrate_games=args.report_winrate_games,
                   checkpoint_every_seconds=args.checkpoint_every_seconds)

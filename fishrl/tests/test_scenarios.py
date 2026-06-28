@@ -14,8 +14,6 @@ from fishrl.spaces import action_space as A
 from fishrl.train.scenarios import ScenarioEnv, sample_scenario_name, scenario_names
 from fishrl.train.scenarios.board_presence import BoardPresenceScenario, _creatures
 from fishrl.train.scenarios.deckout import DeckoutScenario
-from fishrl.train.scenarios.establish_clock import EstablishClockScenario
-from fishrl.train.scenarios.free_attack import FreeAttackScenario
 from fishrl.train.scenarios.known_threat import THREAT, TOOL, KnownThreatScenario
 
 
@@ -55,8 +53,7 @@ def test_base_env_terminal_override_is_none_and_winner_matches():
 
 
 # ── pools build from real play and every state satisfies the predicate ───────
-@pytest.mark.parametrize("scn_cls", [FreeAttackScenario, EstablishClockScenario,
-                                     BoardPresenceScenario, DeckoutScenario])
+@pytest.mark.parametrize("scn_cls", [BoardPresenceScenario, DeckoutScenario])
 def test_pool_builds_and_states_match_predicate(scn_cls):
     scn = _small(scn_cls)
     assert scn.ensure_pool() >= 1
@@ -64,35 +61,62 @@ def test_pool_builds_and_states_match_predicate(scn_cls):
         assert scn.predicate(SimpleNamespace(g=g))
 
 
-# ── free-attack: attacking wins, declining loses (the deliberate hard rule) ───
-def test_free_attack_win_on_attack():
-    scn = _small(FreeAttackScenario)
-    env = ScenarioEnv(scn, max_decisions=600)
-    env.reset(seed=0)
-    assert env.g.pending.type == "declare_attackers" and env.agent_selection == "p1"
-    picks = [int(a) for a in _legal(env) if A.decode(int(a))[0] == "PICK_A"]
-    assert picks, "expected at least one eligible attacker to declare"
-    env.step(picks[0])                 # declare the attacker
-    env.step(A.aid("COMMIT"))          # finalize -> combat resolves
-    assert env.winner == "p1"
+# ── free-attack hard rule (env-level, all training): short declare -> loss ────
+def _install(g, enforce):
+    import copy
+    from fishrl.env.driver import STOPS_MODES
+    from fishrl.forgetful_fish import engine as E
+    env = FishAEC(max_decisions=600, enforce_free_attack=enforce)
+    g = copy.deepcopy(g)
+    for pid in env.possible_agents:
+        E.set_player_stops(g, pid, STOPS_MODES["default"])
+    env.g = g
+    env.agents = list(env.possible_agents)
+    env.rewards = {a: 0.0 for a in env.agents}
+    env._cumulative_rewards = {a: 0.0 for a in env.agents}
+    env.terminations = {a: False for a in env.agents}
+    env.truncations = {a: False for a in env.agents}
+    env.infos = {a: {} for a in env.agents}
+    env._builder = None
+    env._decisions = 0
+    env._scenario_result = None
+    env._forced_result = None
+    env.agent_selection = env.possible_agents[0]
+    env._refresh()
+    return env
 
 
-def test_free_attack_loss_on_decline():
-    scn = _small(FreeAttackScenario)
-    env = ScenarioEnv(scn, max_decisions=600)
-    env.reset(seed=0)
-    env.step(A.aid("COMMIT"))          # declare ZERO attackers -> unused attacker
+def test_free_attack_rule_short_declare_loses():
+    from fishrl.forgetful_fish import engine as E
+    from fishrl.train.scenarios.pool import build_snapshots
+
+    def pred(env):
+        g = env.g
+        p = g.pending
+        return (p is not None and p.type == "declare_attackers" and p.player == "p1"
+                and len(p.context.get("eligible", [])) >= 1
+                and not any(E._is_creature(g.objects[i]) for i in g.players["p2"].battlefield
+                            if i in g.objects))
+    states, _ = build_snapshots(pred, 3, seed=101, max_games=2500)
+    assert states, "expected a free-attack state in the budget"
+    g = states[0]
+    # declaring ZERO with the rule ON -> the seat loses; rule OFF -> no forced loss
+    env = _install(g, True)
+    env.step(A.aid("COMMIT"))
     assert env.winner == "p2"
-
-
-# ── establish-a-clock: terminates with a structural race result ──────────────
-def test_establish_clock_terminates_with_result():
-    scn = _small(EstablishClockScenario)
-    env = ScenarioEnv(scn, max_decisions=1500)
-    env.reset(seed=0)
-    _play_random(env, np.random.default_rng(3))
-    assert not env.agents or all(env.terminations.values()) or all(env.truncations.values())
-    assert env.winner in ("p1", "p2", None)
+    env = _install(g, False)
+    env.step(A.aid("COMMIT"))
+    assert env.winner != "p2" or terminal_winner(env.g) == "p2"
+    # declaring ALL eligible -> no forced loss
+    env = _install(g, True)
+    while True:
+        ls = _legal(env)
+        picks = [a for a in ls if A.decode(int(a))[0] == "PICK_A"]
+        if not picks:
+            break
+        env.step(int(picks[0]))
+    env.step(A.aid("COMMIT"))
+    assert env._forced_result is None
 
 
 # ── scenario winner flows through belief wrapper + collector into the buffer ──
@@ -100,13 +124,12 @@ def test_scenario_winner_propagates_to_buffer():
     from fishrl.train.belief_env import BeliefAugmentedEnv
     from fishrl.train.collector import collect_games, random_act_fn
 
-    scn = _small(FreeAttackScenario)
+    scn = _small(BoardPresenceScenario)
     senv = BeliefAugmentedEnv(None, belief=False, env=ScenarioEnv(scn, max_decisions=600))
     buf = collect_games(senv, random_act_fn(np.random.default_rng(0)), 4, 0,
                         critic=None, max_decisions=600)
     assert buf.steps
-    # free-attack always resolves to a terminal win/loss (never a None draw)
-    assert all(s.winner in ("p1", "p2") for s in buf.steps)
+    assert all(s.winner in ("p1", "p2", None) for s in buf.steps)
 
 
 # ── known-threat denial: surgery is sound and denial flips the outcome ───────
@@ -222,8 +245,7 @@ def test_deckout_creatureless_halved_and_resolves():
 # ── registry / weighted sampling ─────────────────────────────────────────────
 def test_sample_scenario_name_respects_weights():
     rng = np.random.default_rng(0)
-    only = {"free_attack": 1.0, "establish_clock": 0.0}
+    only = {"known_threat": 1.0, "board_presence": 0.0, "deckout": 0.0}
     picks = {sample_scenario_name(only, rng) for _ in range(50)}
-    assert picks == {"free_attack"}
-    assert set(scenario_names()) == {"free_attack", "establish_clock", "known_threat",
-                                     "board_presence", "deckout"}
+    assert picks == {"known_threat"}
+    assert set(scenario_names()) == {"known_threat", "board_presence", "deckout"}

@@ -310,7 +310,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
             log(f"[warmup] {w}")
             frozen = _snapshot(m)
 
-        benv = BeliefAugmentedEnv(m.guesser, belief=cfg.use_belief, max_decisions=cfg.max_decisions)
+        benv = BeliefAugmentedEnv(m.guesser, belief=cfg.use_belief, max_decisions=cfg.max_decisions,
+                                  enforce_free_attack=cfg.enforce_free_attack)
         run_start = time.perf_counter()         # exclude warmup/resume setup from elapsed
         last_report = last_ckpt = run_start
 
@@ -357,7 +358,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     gbuf = collect_vs_opponent(m, member, 1, oseed, critic=None,
                                                use_belief=cfg.use_belief,
                                                max_decisions=cfg.max_decisions,
-                                               learner_seat=lseat)
+                                               learner_seat=lseat,
+                                               enforce_free_attack=cfg.enforce_free_attack)
                 if gbuf.steps:                              # update the member's learner win-rate
                     winner = gbuf.steps[-1].winner
                     if winner in ("p1", "p2"):
@@ -374,7 +376,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     sname = sample_scenario_name(cfg.scenario_weights, scn_rng)
                     senv = BeliefAugmentedEnv(
                         m.guesser, belief=cfg.use_belief,
-                        env=ScenarioEnv(get_scenario(sname), max_decisions=cfg.max_decisions))
+                        env=ScenarioEnv(get_scenario(sname), max_decisions=cfg.max_decisions,
+                                        enforce_free_attack=cfg.enforce_free_attack))
                     sseed = cfg.seed + 300_000 + done * cfg.games_per_iter + sidx * 31
                     sbuf = collect_games(senv, actor_act_fn(m.actor), 1, sseed,
                                          critic=None, max_decisions=cfg.max_decisions)

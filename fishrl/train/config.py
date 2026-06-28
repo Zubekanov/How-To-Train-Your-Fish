@@ -54,9 +54,13 @@ class Config:
     scenario_frac: float = 0.0
     # relative sampling weights over registered scenarios (see fishrl.train.scenarios)
     scenario_weights: dict = field(
-        default_factory=lambda: {"free_attack": 1.0, "establish_clock": 1.0,
-                                 "known_threat": 1.0, "board_presence": 1.0,
+        default_factory=lambda: {"known_threat": 1.0, "board_presence": 1.0,
                                  "deckout": 1.0})
+    # Degenerate-correct hard rule wired into ALL training games (not a scenario):
+    # declaring fewer than all eligible attackers into an empty opposing board = instant
+    # loss. Attacking into an empty board is 100% correct in this format. Default on;
+    # disable with --no-enforce-free-attack.
+    enforce_free_attack: bool = True
 
     # PPO
     clip: float = 0.2

@@ -55,7 +55,8 @@ class Config:
     # relative sampling weights over registered scenarios (see fishrl.train.scenarios)
     scenario_weights: dict = field(
         default_factory=lambda: {"free_attack": 1.0, "establish_clock": 1.0,
-                                 "known_threat": 1.0})
+                                 "known_threat": 1.0, "board_presence": 1.0,
+                                 "deckout": 1.0})
 
     # PPO
     clip: float = 0.2

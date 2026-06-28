@@ -18,6 +18,31 @@ def basics(g, seat: str, subtype: str = "Island") -> int:
                if iid in g.objects and subtype in (g.objects[iid].type_line or ""))
 
 
+def clear_battlefield_creatures(g) -> int:
+    """Move every creature off both battlefields into the graveyard (a legal zone),
+    e.g. to force a creatureless deckout race. Returns how many were moved."""
+    moved = 0
+    for pid in g.players:
+        for iid in list(g.players[pid].battlefield):
+            o = g.objects.get(iid)
+            if o is not None and E._is_creature(o):
+                g.players[pid].battlefield.remove(iid)
+                g.graveyard.append(iid)
+                moved += 1
+    return moved
+
+
+def trim_library(g, n: int) -> int:
+    """Shrink the shared library to its top `n` cards, exiling the rest (instances
+    stay valid in a real zone). Returns how many were removed."""
+    removed = 0
+    while len(g.library) > n:
+        slot = g.library.pop()          # from the bottom
+        g.exile.append(slot.instance_id)
+        removed += 1
+    return removed
+
+
 def clear_hand_of(g, name: str, seat: str) -> int:
     """Move every `name` out of `seat`'s hand to the bottom of the shared library, so
     a placed-on-top copy is the only one in play. Returns how many were moved."""

@@ -12,6 +12,8 @@ from fishrl.env.aec_env import FishAEC
 from fishrl.env.driver import terminal_winner
 from fishrl.spaces import action_space as A
 from fishrl.train.scenarios import ScenarioEnv, sample_scenario_name, scenario_names
+from fishrl.train.scenarios.board_presence import BoardPresenceScenario, _creatures
+from fishrl.train.scenarios.deckout import DeckoutScenario, LIBRARY
 from fishrl.train.scenarios.establish_clock import EstablishClockScenario
 from fishrl.train.scenarios.free_attack import FreeAttackScenario
 from fishrl.train.scenarios.known_threat import THREAT, TOOL, KnownThreatScenario
@@ -53,7 +55,8 @@ def test_base_env_terminal_override_is_none_and_winner_matches():
 
 
 # ── pools build from real play and every state satisfies the predicate ───────
-@pytest.mark.parametrize("scn_cls", [FreeAttackScenario, EstablishClockScenario])
+@pytest.mark.parametrize("scn_cls", [FreeAttackScenario, EstablishClockScenario,
+                                     BoardPresenceScenario, DeckoutScenario])
 def test_pool_builds_and_states_match_predicate(scn_cls):
     scn = _small(scn_cls)
     assert scn.ensure_pool() >= 1
@@ -173,10 +176,38 @@ def test_known_threat_denial_flips_outcome():
     assert counter.count("p1") > passive.count("p1"), "countering must deny more than passivity"
 
 
+# ── board presence: a real fight that ends decisively on an empty board ──────
+def test_board_presence_fight_is_decisive():
+    scn = _small(BoardPresenceScenario)
+    env = ScenarioEnv(scn, max_decisions=800)
+    env.reset(seed=0)
+    assert _creatures(env.g, "p1") >= 1 and _creatures(env.g, "p2") >= 1   # both start with board
+    winners = []
+    for s in range(6):
+        e = _reset(scn, s)
+        _play_random(e, np.random.default_rng(s))
+        winners.append(e.winner)
+    assert all(w in ("p1", "p2", None) for w in winners)
+    assert any(w in ("p1", "p2") for w in winners)        # the fight resolves decisively
+
+
+# ── deckout: surgery forces a creatureless, trimmed-library deckout race ──────
+def test_deckout_surgery_and_resolution():
+    scn = _small(DeckoutScenario)
+    env = ScenarioEnv(scn, max_decisions=800)
+    env.reset(seed=0)
+    g = env.g
+    assert _creatures(g, "p1") == 0 and _creatures(g, "p2") == 0   # battlefields cleared
+    assert len(g.library) <= LIBRARY                              # library trimmed
+    _play_random(env, np.random.default_rng(0))
+    assert env.winner in ("p1", "p2", None)                       # resolves to a terminal
+
+
 # ── registry / weighted sampling ─────────────────────────────────────────────
 def test_sample_scenario_name_respects_weights():
     rng = np.random.default_rng(0)
     only = {"free_attack": 1.0, "establish_clock": 0.0}
     picks = {sample_scenario_name(only, rng) for _ in range(50)}
     assert picks == {"free_attack"}
-    assert set(scenario_names()) == {"free_attack", "establish_clock", "known_threat"}
+    assert set(scenario_names()) == {"free_attack", "establish_clock", "known_threat",
+                                     "board_presence", "deckout"}

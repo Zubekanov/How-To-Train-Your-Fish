@@ -12,13 +12,16 @@ from __future__ import annotations
 
 import numpy as np
 
+from fishrl.train.scenarios.board_presence import BoardPresenceScenario
+from fishrl.train.scenarios.deckout import DeckoutScenario
 from fishrl.train.scenarios.env import ScenarioEnv
 from fishrl.train.scenarios.establish_clock import EstablishClockScenario
 from fishrl.train.scenarios.free_attack import FreeAttackScenario
 from fishrl.train.scenarios.known_threat import KnownThreatScenario
 
 _REGISTRY = {c.name: c for c in (FreeAttackScenario, EstablishClockScenario,
-                                 KnownThreatScenario)}
+                                 KnownThreatScenario, BoardPresenceScenario,
+                                 DeckoutScenario)}
 _INSTANCES: dict = {}
 
 

@@ -18,17 +18,29 @@ def basics(g, seat: str, subtype: str = "Island") -> int:
                if iid in g.objects and subtype in (g.objects[iid].type_line or ""))
 
 
-def clear_battlefield_creatures(g) -> int:
-    """Move every creature off both battlefields into the graveyard (a legal zone),
-    e.g. to force a creatureless deckout race. Returns how many were moved."""
+def remove_all_creatures(g) -> int:
+    """Exile every creature from EVERY zone — battlefields, hands, and the shared
+    library — so combat is impossible and the game can only resolve through the
+    deckout / card-advantage race. (Exile keeps the instances in a real zone.)
+    Returns how many were removed."""
     moved = 0
     for pid in g.players:
-        for iid in list(g.players[pid].battlefield):
-            o = g.objects.get(iid)
-            if o is not None and E._is_creature(o):
-                g.players[pid].battlefield.remove(iid)
-                g.graveyard.append(iid)
-                moved += 1
+        for zone in (g.players[pid].battlefield, g.players[pid].hand):
+            for iid in list(zone):
+                o = g.objects.get(iid)
+                if o is not None and E._is_creature(o):
+                    zone.remove(iid)
+                    g.exile.append(iid)
+                    moved += 1
+    keep = []
+    for slot in g.library:
+        o = g.objects.get(slot.instance_id)
+        if o is not None and E._is_creature(o):
+            g.exile.append(slot.instance_id)
+            moved += 1
+        else:
+            keep.append(slot)
+    g.library = keep
     return moved
 
 

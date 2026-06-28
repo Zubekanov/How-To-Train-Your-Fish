@@ -13,7 +13,7 @@ from fishrl.env.driver import terminal_winner
 from fishrl.spaces import action_space as A
 from fishrl.train.scenarios import ScenarioEnv, sample_scenario_name, scenario_names
 from fishrl.train.scenarios.board_presence import BoardPresenceScenario, _creatures
-from fishrl.train.scenarios.deckout import DeckoutScenario, LIBRARY
+from fishrl.train.scenarios.deckout import DeckoutScenario
 from fishrl.train.scenarios.establish_clock import EstablishClockScenario
 from fishrl.train.scenarios.free_attack import FreeAttackScenario
 from fishrl.train.scenarios.known_threat import THREAT, TOOL, KnownThreatScenario
@@ -192,15 +192,31 @@ def test_board_presence_fight_is_decisive():
 
 
 # ── deckout: surgery forces a creatureless, trimmed-library deckout race ──────
-def test_deckout_surgery_and_resolution():
+def _all_creatures(g):
+    from fishrl.forgetful_fish import engine as E
+    ids = ([s.instance_id for s in g.library]
+           + g.players["p1"].hand + g.players["p2"].hand
+           + g.players["p1"].battlefield + g.players["p2"].battlefield)
+    return sum(1 for i in ids if g.objects.get(i) and E._is_creature(g.objects[i]))
+
+
+def test_deckout_creatureless_halved_and_resolves():
+    import copy
+    from fishrl.train.scenarios.surgery import remove_all_creatures, trim_library
     scn = _small(DeckoutScenario)
-    env = ScenarioEnv(scn, max_decisions=800)
-    env.reset(seed=0)
-    g = env.g
-    assert _creatures(g, "p1") == 0 and _creatures(g, "p2") == 0   # battlefields cleared
-    assert len(g.library) <= LIBRARY                              # library trimmed
+    scn.ensure_pool()
+    for src in scn._pool[:4]:                       # mirror sample()'s surgery order
+        g = copy.deepcopy(src)
+        remove_all_creatures(g)
+        base = len(g.library)
+        trim_library(g, base // 2)
+        assert base >= 2
+        assert _all_creatures(g) == 0              # truly creatureless: every zone
+        assert len(g.library) == base // 2         # half-sized (relative, not arbitrary)
+    env = _reset(scn, 0)                            # and a real episode resolves
+    assert _all_creatures(env.g) == 0
     _play_random(env, np.random.default_rng(0))
-    assert env.winner in ("p1", "p2", None)                       # resolves to a terminal
+    assert env.winner in ("p1", "p2", None)
 
 
 # ── registry / weighted sampling ─────────────────────────────────────────────

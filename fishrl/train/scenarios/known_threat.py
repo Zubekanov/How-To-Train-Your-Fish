@@ -1,11 +1,12 @@
 """Scenario #3 — known-threat denial (manufactured; deny the opponent's card advantage).
 
-The opponent is a minimal bot: exactly 10 untapped Islands, NO cards in hand, no
-creatures, driven by the engine heuristic — so on its turn it draws the top card and
-(having nothing else) casts it. A card-advantage spell sits on top of the shared
-library, so by default the bot draws it, resolves it, and gains cards. The scenario
-starts on the AGENT's turn (also with 10 untapped Islands) and ends at the end of the
-bot's first turn; the agent LOSES if the bot's hand ever exceeds two cards. The agent
+The opponent is a minimal bot: 10 random untapped lands (every land in this mono-blue
+deck taps for U), NO cards in hand, no creatures, driven by the engine heuristic — so
+on its turn it draws the top card and (having nothing else) casts it. A card-advantage
+spell sits on top of the shared library, so by default the bot draws it, resolves it,
+and gains cards. The scenario starts on the AGENT's turn (also with 10 random untapped
+lands; the unused lands stay in the library) and ends at the end of the bot's first
+turn; the agent LOSES if the bot's hand ever exceeds two cards. The agent
 must therefore either manipulate a dud to the top of the deck before the bot draws, or
 counter the bot's spell (it is handed a Memory Lapse + manipulation, with the mana).
 
@@ -25,9 +26,13 @@ from fishrl.train.scenarios.surgery import make_engine_heuristic, pool_all_zones
 
 THREAT = "Day's Undoing"     # card-advantage spell: drawn + cast -> bot hand >> 2
 TOOL = "Memory Lapse"        # the counter the agent is handed
-MANIP = ("Brainstorm", "Ponder", "Predict", "Halimar Depths")  # top-of-deck manipulation
-P2_ISLANDS = 10
-P1_ISLANDS = 10
+MANIP = ("Brainstorm", "Ponder", "Predict")   # top-of-deck manipulation spells in the curated grip
+# Mana base per seat: a RANDOM selection of lands from the deck (every land in this
+# mono-blue deck taps for U), not Islands specifically; the unused lands stay in the
+# library. Halimar Depths is one such land (it manipulates the top on ETB, but here
+# it is just a mana source unless drawn and replayed).
+P2_LANDS = 10
+P1_LANDS = 10
 P1_HAND = 7
 
 
@@ -55,14 +60,14 @@ class KnownThreatScenario(Scenario):
 
     def _manufacture(self, g, rng) -> None:
         pool = pool_all_zones(g)
-        islands, threat, tools, manip, other = [], None, [], [], []
+        lands, threat, tools, manip, other = [], None, [], [], []
         for iid in pool:
             o = g.objects.get(iid)
             if o is None:
                 continue
             nm = o.name
-            if nm == "Island":
-                islands.append(iid)
+            if "Land" in (o.type_line or ""):      # any land -> the random mana-base pool
+                lands.append(iid)
             elif nm == THREAT and threat is None:
                 threat = iid
             elif nm == TOOL:
@@ -71,25 +76,25 @@ class KnownThreatScenario(Scenario):
                 manip.append(iid)
             else:
                 other.append(iid)
-        rng.shuffle(islands); rng.shuffle(other); rng.shuffle(manip)
+        rng.shuffle(lands); rng.shuffle(other); rng.shuffle(manip)
 
-        def put_island(seat):
-            if not islands:
+        def put_land(seat):
+            if not lands:
                 return
-            iid = islands.pop()
+            iid = lands.pop()
             o = g.objects[iid]
             o.tapped = False; o.controller = seat; o.entered_this_turn = False
             g.players[seat].battlefield.append(iid)
 
-        for _ in range(P2_ISLANDS):                # the bot: 10 untapped Islands, empty hand
-            put_island("p2")
+        for _ in range(P2_LANDS):                  # the bot: 10 random untapped lands, empty hand
+            put_land("p2")
         g.players["p2"].hand = []
-        for _ in range(P1_ISLANDS):                # the agent: ample mana to answer the threat
-            put_island("p1")
+        for _ in range(P1_LANDS):                  # the agent: ample mana to answer the threat
+            put_land("p1")
         if self.RANDOM_HAND:
             # variant: a RANDOM 7-card grip (no curated answers) — does the agent
             # answer the known threat with whatever it happens to hold?
-            leftover = islands + tools + manip + other
+            leftover = lands + tools + manip + other
             rng.shuffle(leftover)
             hand = [leftover.pop() for _ in range(min(P1_HAND, len(leftover)))]
             rest = leftover
@@ -101,7 +106,7 @@ class KnownThreatScenario(Scenario):
                 hand.append(manip.pop())
             while len(hand) < P1_HAND and other:
                 hand.append(other.pop())
-            rest = islands + tools + manip + other
+            rest = lands + tools + manip + other     # leftover lands stay in the library
         for iid in hand:
             g.objects[iid].controller = "p1"
         g.players["p1"].hand = hand

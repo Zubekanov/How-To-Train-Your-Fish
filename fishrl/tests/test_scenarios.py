@@ -177,13 +177,12 @@ def test_known_threat_manufacture():
     env = ScenarioEnv(scn, max_decisions=800)
     env.reset(seed=0)
     g = env.g
-    # the bot: exactly 10 Islands, empty hand, no creatures, engine-driven
-    isl = sum(1 for i in g.players["p2"].battlefield if g.objects[i].name == "Island")
-    assert isl == 10 and len(g.players["p2"].hand) == 0
+    # the bot: 10 random untapped lands (any type), empty hand, no creatures, engine-driven
+    assert _lands(g, "p2") == 10 and len(g.players["p2"].hand) == 0
     assert not any(E._is_creature(g.objects[i]) for i in g.players["p2"].battlefield)
     assert g.players["p2"].is_ai
-    # the agent also has 10 Islands (ample mana to answer)
-    assert sum(1 for i in g.players["p1"].battlefield if g.objects[i].name == "Island") == 10
+    # the agent also has 10 lands (ample mana to answer)
+    assert _lands(g, "p1") == 10
     # the threat on top, the agent holding its counter (curated grip)
     assert g.objects[g.library[0].instance_id].name == THREAT
     assert any(g.objects[i].name == TOOL for i in g.players["p1"].hand)
@@ -194,14 +193,18 @@ def test_known_threat_random_manufacture():
     env = ScenarioEnv(scn, max_decisions=800)
     env.reset(seed=0)
     g = env.g
-    # same denial frame: bot with 10 Islands + empty hand, agent with 10 Islands,
+    # same denial frame: bot with 10 random lands + empty hand, agent with 10 lands,
     # the threat on top of the shared library...
-    assert sum(1 for i in g.players["p2"].battlefield if g.objects[i].name == "Island") == 10
-    assert len(g.players["p2"].hand) == 0
-    assert sum(1 for i in g.players["p1"].battlefield if g.objects[i].name == "Island") == 10
+    assert _lands(g, "p2") == 10 and len(g.players["p2"].hand) == 0
+    assert _lands(g, "p1") == 10
     assert g.objects[g.library[0].instance_id].name == THREAT
     # ...but a RANDOM 7-card grip rather than the curated counter + manipulation.
     assert len(g.players["p1"].hand) == 7
+    # the mana base is a random mix, not Islands only -> non-Island lands appear too
+    nonbasic = sum(1 for i in (g.players["p1"].battlefield + g.players["p2"].battlefield)
+                   if "Land" in (g.objects[i].type_line or "")
+                   and g.objects[i].name != "Island")
+    assert nonbasic >= 1
 
 
 def _reset(scn, seed):

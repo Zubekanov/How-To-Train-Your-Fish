@@ -4,9 +4,11 @@ Surgery forces the game to resolve through the deckout race rather than combat:
 EXILE every creature from all zones (a truly creatureless deck, so no Dandân can be
 redrawn and recast into a combat win) and HALVE the remaining shared library (a
 principled size relative to the actual game state — not an arbitrary fixed count),
-with p2 on the heuristic. With no creatures, the game can only end by decking, so
-the terminator defers to the natural result (the env's max_decisions truncates the
-rare library-refill loop, e.g. Day's Undoing, as a draw). Reward is the natural
+with p2 on the heuristic. With no creatures the game can only end by decking, and a
+deckout is GUARANTEED to arrive: the one refill effect (Day's Undoing) exiles itself
+on resolution, so it's a one-shot not a loop, and it only reshuffles hands+graveyard
+— never the exile where the creatures went — so the deck stays creatureless. The
+terminator therefore just defers to the natural result; reward is the natural
 terminal winner — the agent practises the late-game card/deckout race deliberately.
 
 NOTE (honest limitation): the library is SHARED, so the deckout outcome is heavily
@@ -41,6 +43,7 @@ class DeckoutScenario(Scenario):
         return g
 
     def terminator(self, env):
-        # Creatureless -> the only resolution is a deckout; defer to the natural
-        # engine result (max_decisions truncates a pathological refill loop as a draw).
+        # Creatureless -> the only resolution is a deckout, and it always arrives
+        # (Day's Undoing exiles itself, so refills are one-shot and never reintroduce
+        # the exiled creatures). Defer entirely to the natural engine result.
         return None

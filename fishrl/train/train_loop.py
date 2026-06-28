@@ -201,6 +201,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
         # Proportion of this window's games played vs a TRAINED (neural) opponent --
         # the mirror self-play policy + frozen past-selves -- vs scripted/engine bots.
         mix_total = sum(opp_mix.values()) or 1
+        scen_total = sum(scen_mix.values())
+        grand_total = mix_total + scen_total             # all games this window, incl. scenarios
         trained_frac = (opp_mix["self"] + opp_mix["pastself"]) / mix_total
         opp_str = f" | opp trained={trained_frac:.2f}"
         log(
@@ -226,14 +228,20 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 "priv_acc": est.get("priv_acc"), "pub_acc": est.get("pub_acc"),
                 "priv_brier": est.get("priv_brier"), "pub_brier": est.get("pub_brier"),
                 "gmae": gmae,
-                # Opponent mix for this window, as shares of total games (~sum to 1) --
-                # mirrors the website's [status]/[league] columns. opp_self+opp_past==opp_trained.
-                "opp_trained": trained_frac,
-                "opp_self": opp_mix["self"] / mix_total,
-                "opp_past": opp_mix["pastself"] / mix_total,
-                "opp_heuristic": opp_mix["heuristic"] / mix_total,
-                "opp_attacker": opp_mix["attacker"] / mix_total,
-                "opp_random": opp_mix["random"] / mix_total,
+                # Window composition as shares of ALL games incl. scenario-seeded ones, so the
+                # league slices + opp_scenario partition the window (~sum to 1) and the website's
+                # stacked mix shows scenarios. opp_self+opp_past==opp_trained. NOTE: these use the
+                # grand-total denominator (mix_total+scen_total); the human [status]/[league] log
+                # lines stay league-normalized (share of self-play/PFSP games only). scenario_mix
+                # breaks the opp_scenario slice down per manufactured scenario (same denominator).
+                "opp_trained": (opp_mix["self"] + opp_mix["pastself"]) / grand_total,
+                "opp_self": opp_mix["self"] / grand_total,
+                "opp_past": opp_mix["pastself"] / grand_total,
+                "opp_heuristic": opp_mix["heuristic"] / grand_total,
+                "opp_attacker": opp_mix["attacker"] / grand_total,
+                "opp_random": opp_mix["random"] / grand_total,
+                "opp_scenario": scen_total / grand_total,
+                "scenario_mix": {k: v / grand_total for k, v in sorted(scen_mix.items())},
                 "source": "live",
             }
             rec = {k: (None if isinstance(v, float) and not math.isfinite(v) else v)

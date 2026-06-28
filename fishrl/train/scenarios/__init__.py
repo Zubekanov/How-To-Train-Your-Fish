@@ -15,8 +15,10 @@ import numpy as np
 from fishrl.train.scenarios.env import ScenarioEnv
 from fishrl.train.scenarios.establish_clock import EstablishClockScenario
 from fishrl.train.scenarios.free_attack import FreeAttackScenario
+from fishrl.train.scenarios.known_threat import KnownThreatScenario
 
-_REGISTRY = {c.name: c for c in (FreeAttackScenario, EstablishClockScenario)}
+_REGISTRY = {c.name: c for c in (FreeAttackScenario, EstablishClockScenario,
+                                 KnownThreatScenario)}
 _INSTANCES: dict = {}
 
 

@@ -14,6 +14,7 @@ from fishrl.spaces import action_space as A
 from fishrl.train.scenarios import ScenarioEnv, sample_scenario_name, scenario_names
 from fishrl.train.scenarios.establish_clock import EstablishClockScenario
 from fishrl.train.scenarios.free_attack import FreeAttackScenario
+from fishrl.train.scenarios.known_threat import THREAT, TOOL, KnownThreatScenario
 
 
 def _small(scn_cls):
@@ -105,10 +106,77 @@ def test_scenario_winner_propagates_to_buffer():
     assert all(s.winner in ("p1", "p2") for s in buf.steps)
 
 
+# ── known-threat denial: surgery is sound and denial flips the outcome ───────
+def _drive_known_threat(env, rng, counter: bool):
+    """Play p1 to maximally PASS, optionally countering the threat with the held
+    Memory Lapse whenever it is on the stack."""
+    guard = 0
+    while env.agents and guard < 5000:
+        guard += 1
+        a = env.agent_selection
+        if env.terminations[a] or env.truncations[a]:
+            env.step(None)
+            continue
+        ls = _legal(env)
+        if ls.size == 0:
+            env.step(None)
+            continue
+        g = env.g
+        act = None
+        if counter and g.pending and g.pending.type == "choose_targets" \
+                and g.pending.context.get("name") == TOOL:
+            for idx, tid in enumerate(g.pending.context.get("legal", [])):
+                if g.objects.get(tid) and g.objects[tid].name == THREAT:
+                    cand = [x for x in ls if A.decode(int(x)) == ("PICK_SINGLE", idx)]
+                    act = int(cand[0]) if cand else None
+        if counter and act is None and g.pending and g.pending.type == "priority" \
+                and any(s.kind == "spell" and s.controller == "p2"
+                        and g.objects[s.source_instance_id].name == THREAT for s in g.stack):
+            ml = [i for i in g.players["p1"].hand if g.objects[i].name == TOOL]
+            if ml:
+                hi = g.players["p1"].hand.index(ml[0])
+                cand = [x for x in ls if A.decode(int(x)) == ("PLAY_HAND", hi)]
+                act = int(cand[0]) if cand else None
+        if act is None:
+            passes = [x for x in ls if A.decode(int(x))[0] == "PASS"]
+            act = int(passes[0]) if passes else int(rng.choice(ls))
+        env.step(act)
+    return env.winner
+
+
+def test_known_threat_surgery_preconditions():
+    scn = _small(KnownThreatScenario)
+    env = ScenarioEnv(scn, max_decisions=800)
+    env.reset(seed=0)
+    g = env.g
+    assert g.library and g.objects[g.library[0].instance_id].name == THREAT   # threat on top
+    assert any(g.objects[i].name == TOOL for i in g.players["p1"].hand)        # learner holds the counter
+    assert not any(g.objects[i].name == THREAT for i in g.players["p2"].hand)  # p2's copies cleared
+    assert g.players["p2"].is_ai                                              # opponent is engine-driven
+
+
+def _reset(scn, seed):
+    env = ScenarioEnv(scn, max_decisions=800)
+    env.reset(seed=seed)
+    return env
+
+
+def test_known_threat_denial_flips_outcome():
+    scn = _small(KnownThreatScenario)
+    seeds = range(8)
+    passive = [_drive_known_threat(_reset(scn, s), np.random.default_rng(s), counter=False)
+               for s in seeds]
+    counter = [_drive_known_threat(_reset(scn, s), np.random.default_rng(s), counter=True)
+               for s in seeds]
+    # undefended the threat lands (p2 wins); countering denies it for more seeds.
+    assert passive.count("p2") >= 1, "threat should land when p1 is passive"
+    assert counter.count("p1") > passive.count("p1"), "countering must deny more than passivity"
+
+
 # ── registry / weighted sampling ─────────────────────────────────────────────
 def test_sample_scenario_name_respects_weights():
     rng = np.random.default_rng(0)
     only = {"free_attack": 1.0, "establish_clock": 0.0}
     picks = {sample_scenario_name(only, rng) for _ in range(50)}
     assert picks == {"free_attack"}
-    assert set(scenario_names()) == {"free_attack", "establish_clock"}
+    assert set(scenario_names()) == {"free_attack", "establish_clock", "known_threat"}

@@ -14,7 +14,8 @@ from fishrl.spaces import action_space as A
 from fishrl.train.scenarios import ScenarioEnv, sample_scenario_name, scenario_names
 from fishrl.train.scenarios.board_presence import BoardPresenceScenario, _creatures
 from fishrl.train.scenarios.deckout import DeckoutScenario
-from fishrl.train.scenarios.known_threat import THREAT, TOOL, KnownThreatScenario
+from fishrl.train.scenarios.known_threat import (THREAT, TOOL, KnownThreatScenario,
+                                                 KnownThreatRandomScenario)
 
 
 def _small(scn_cls):
@@ -176,14 +177,31 @@ def test_known_threat_manufacture():
     env = ScenarioEnv(scn, max_decisions=800)
     env.reset(seed=0)
     g = env.g
-    # the bot: exactly 4 Islands, empty hand, no creatures, engine-driven
+    # the bot: exactly 10 Islands, empty hand, no creatures, engine-driven
     isl = sum(1 for i in g.players["p2"].battlefield if g.objects[i].name == "Island")
-    assert isl == 4 and len(g.players["p2"].hand) == 0
+    assert isl == 10 and len(g.players["p2"].hand) == 0
     assert not any(E._is_creature(g.objects[i]) for i in g.players["p2"].battlefield)
     assert g.players["p2"].is_ai
-    # the threat on top, the agent holding its counter
+    # the agent also has 10 Islands (ample mana to answer)
+    assert sum(1 for i in g.players["p1"].battlefield if g.objects[i].name == "Island") == 10
+    # the threat on top, the agent holding its counter (curated grip)
     assert g.objects[g.library[0].instance_id].name == THREAT
     assert any(g.objects[i].name == TOOL for i in g.players["p1"].hand)
+
+
+def test_known_threat_random_manufacture():
+    scn = _small(KnownThreatRandomScenario)
+    env = ScenarioEnv(scn, max_decisions=800)
+    env.reset(seed=0)
+    g = env.g
+    # same denial frame: bot with 10 Islands + empty hand, agent with 10 Islands,
+    # the threat on top of the shared library...
+    assert sum(1 for i in g.players["p2"].battlefield if g.objects[i].name == "Island") == 10
+    assert len(g.players["p2"].hand) == 0
+    assert sum(1 for i in g.players["p1"].battlefield if g.objects[i].name == "Island") == 10
+    assert g.objects[g.library[0].instance_id].name == THREAT
+    # ...but a RANDOM 7-card grip rather than the curated counter + manipulation.
+    assert len(g.players["p1"].hand) == 7
 
 
 def _reset(scn, seed):
@@ -215,6 +233,13 @@ def test_board_presence_manufacture_and_resolves():
     assert g.players["p1"].life == 4 and g.players["p2"].life == 4   # 4 life each
     assert _lands(g, "p1") == _lands(g, "p2") and 4 <= _lands(g, "p1") <= 10  # equal random Islands
     assert sum(E._is_creature(g.objects[s.instance_id]) for s in g.library) == 0  # creatureless deck
+    # no cards are dropped: non-Island lands stay in the library, so every instance
+    # is accounted for across the zones (only creatures leave, to exile).
+    accounted = (len(g.library) + len(g.graveyard) + len(g.exile) + len(g.stack)
+                 + sum(len(g.players[p].hand) + len(g.players[p].battlefield) for p in ("p1", "p2")))
+    assert accounted == len(g.objects)
+    assert any("Island" not in (g.objects[s.instance_id].type_line or "")
+               and "Land" in (g.objects[s.instance_id].type_line or "") for s in g.library)
     winners = []
     for s in range(6):
         e = ScenarioEnv(scn, max_decisions=2000)
@@ -261,4 +286,5 @@ def test_sample_scenario_name_respects_weights():
     only = {"known_threat": 1.0, "board_presence": 0.0, "deckout": 0.0}
     picks = {sample_scenario_name(only, rng) for _ in range(50)}
     assert picks == {"known_threat"}
-    assert set(scenario_names()) == {"known_threat", "board_presence", "deckout"}
+    assert set(scenario_names()) == {"known_threat", "known_threat_random",
+                                     "board_presence", "deckout"}

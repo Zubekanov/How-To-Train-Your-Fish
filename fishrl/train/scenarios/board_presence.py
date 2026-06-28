@@ -46,7 +46,7 @@ class BoardPresenceScenario(Scenario):
     def _manufacture(self, g, rng) -> None:
         n = int(rng.integers(LANDS_MIN, LANDS_MAX + 1))
         pool = pool_all_zones(g)
-        creatures, islands, spells = [], [], []
+        creatures, islands, spells, other_lands = [], [], [], []
         for iid in pool:
             o = g.objects.get(iid)
             if o is None:
@@ -55,10 +55,12 @@ class BoardPresenceScenario(Scenario):
                 creatures.append(iid)
             elif "Island" in (o.type_line or ""):
                 islands.append(iid)
-            elif "Land" not in (o.type_line or ""):
+            elif "Land" in (o.type_line or ""):
+                other_lands.append(iid)           # non-Island lands stay in the deck (library)
+            else:
                 spells.append(iid)
-            # non-Island lands are dropped from the manufactured deck (kept simple)
         rng.shuffle(creatures); rng.shuffle(islands); rng.shuffle(spells)
+        rng.shuffle(other_lands)
 
         def put(seat, iid, tapped=False):
             o = g.objects[iid]
@@ -83,7 +85,7 @@ class BoardPresenceScenario(Scenario):
                 g.objects[iid].controller = seat
                 g.players[seat].hand.append(iid)
             g.players[seat].life = LIFE
-        remaining = islands + spells              # creatureless library
+        remaining = islands + spells + other_lands   # creatureless library (non-Island lands kept)
         rng.shuffle(remaining)
         g.library = [LibrarySlot(instance_id=iid, known_by={"p1": False, "p2": False})
                      for iid in remaining]

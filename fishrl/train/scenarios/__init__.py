@@ -15,10 +15,11 @@ import numpy as np
 from fishrl.train.scenarios.board_presence import BoardPresenceScenario
 from fishrl.train.scenarios.deckout import DeckoutScenario
 from fishrl.train.scenarios.env import ScenarioEnv
-from fishrl.train.scenarios.known_threat import KnownThreatScenario
+from fishrl.train.scenarios.known_threat import (KnownThreatScenario,
+                                                  KnownThreatRandomScenario)
 
-_REGISTRY = {c.name: c for c in (KnownThreatScenario, BoardPresenceScenario,
-                                 DeckoutScenario)}
+_REGISTRY = {c.name: c for c in (KnownThreatScenario, KnownThreatRandomScenario,
+                                 BoardPresenceScenario, DeckoutScenario)}
 _INSTANCES: dict = {}
 
 

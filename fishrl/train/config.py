@@ -54,8 +54,8 @@ class Config:
     scenario_frac: float = 0.0
     # relative sampling weights over registered scenarios (see fishrl.train.scenarios)
     scenario_weights: dict = field(
-        default_factory=lambda: {"known_threat": 1.0, "board_presence": 1.0,
-                                 "deckout": 1.0})
+        default_factory=lambda: {"known_threat": 1.0, "known_threat_random": 1.0,
+                                 "board_presence": 1.0, "deckout": 1.0})
     # Degenerate-correct hard rule wired into ALL training games (not a scenario):
     # declaring fewer than all eligible attackers into an empty opposing board = instant
     # loss. Attacking into an empty board is 100% correct in this format. Default on;

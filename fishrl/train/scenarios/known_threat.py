@@ -1,16 +1,20 @@
 """Scenario #3 — known-threat denial (manufactured; deny the opponent's card advantage).
 
-The opponent is a minimal bot: exactly 4 untapped Islands, NO cards in hand, no
+The opponent is a minimal bot: exactly 10 untapped Islands, NO cards in hand, no
 creatures, driven by the engine heuristic — so on its turn it draws the top card and
 (having nothing else) casts it. A card-advantage spell sits on top of the shared
 library, so by default the bot draws it, resolves it, and gains cards. The scenario
-starts on the AGENT's turn and ends at the end of the bot's first turn; the agent
-LOSES if the bot's hand ever exceeds two cards. The agent must therefore either
-manipulate a dud to the top of the deck before the bot draws, or counter the bot's
-spell (it is handed a Memory Lapse + manipulation, with the mana for them).
+starts on the AGENT's turn (also with 10 untapped Islands) and ends at the end of the
+bot's first turn; the agent LOSES if the bot's hand ever exceeds two cards. The agent
+must therefore either manipulate a dud to the top of the deck before the bot draws, or
+counter the bot's spell (it is handed a Memory Lapse + manipulation, with the mana).
 
 The "> 2 cards" test is card-agnostic: it fires for any genuine card-advantage line
 (Day's Undoing draws 7, Fact or Fiction nets ≥3, ...) and not for a card-neutral one.
+
+`KnownThreatRandomScenario` is the same denial test but deals the agent a RANDOM
+7-card grip instead of the curated counter + manipulation — measuring whether it can
+answer (or recognise it can't) the known threat with whatever it happens to hold.
 """
 from __future__ import annotations
 
@@ -22,14 +26,15 @@ from fishrl.train.scenarios.surgery import make_engine_heuristic, pool_all_zones
 THREAT = "Day's Undoing"     # card-advantage spell: drawn + cast -> bot hand >> 2
 TOOL = "Memory Lapse"        # the counter the agent is handed
 MANIP = ("Brainstorm", "Ponder", "Predict", "Halimar Depths")  # top-of-deck manipulation
-P2_ISLANDS = 4
-P1_ISLANDS = 5
+P2_ISLANDS = 10
+P1_ISLANDS = 10
 P1_HAND = 7
 
 
 class KnownThreatScenario(Scenario):
     name = "known_threat"
     pool_seed = 303
+    RANDOM_HAND = False          # subclass flips this for the random-grip variant
 
     def predicate(self, env) -> bool:
         # Any clean p1 main-phase priority; the manufacture rebuilds both seats and
@@ -69,28 +74,38 @@ class KnownThreatScenario(Scenario):
         rng.shuffle(islands); rng.shuffle(other); rng.shuffle(manip)
 
         def put_island(seat):
+            if not islands:
+                return
             iid = islands.pop()
             o = g.objects[iid]
             o.tapped = False; o.controller = seat; o.entered_this_turn = False
             g.players[seat].battlefield.append(iid)
 
-        for _ in range(P2_ISLANDS):                # the bot: just 4 untapped Islands, empty hand
+        for _ in range(P2_ISLANDS):                # the bot: 10 untapped Islands, empty hand
             put_island("p2")
         g.players["p2"].hand = []
-        for _ in range(P1_ISLANDS):                # the agent: mana for the counter
+        for _ in range(P1_ISLANDS):                # the agent: ample mana to answer the threat
             put_island("p1")
-        hand = []                                  # agent hand: a counter + manipulation + filler
-        if tools:
-            hand.append(tools.pop())
-        if manip:
-            hand.append(manip.pop())
-        while len(hand) < P1_HAND and other:
-            hand.append(other.pop())
+        if self.RANDOM_HAND:
+            # variant: a RANDOM 7-card grip (no curated answers) — does the agent
+            # answer the known threat with whatever it happens to hold?
+            leftover = islands + tools + manip + other
+            rng.shuffle(leftover)
+            hand = [leftover.pop() for _ in range(min(P1_HAND, len(leftover)))]
+            rest = leftover
+        else:
+            hand = []                              # curated grip: a counter + manipulation + filler
+            if tools:
+                hand.append(tools.pop())
+            if manip:
+                hand.append(manip.pop())
+            while len(hand) < P1_HAND and other:
+                hand.append(other.pop())
+            rest = islands + tools + manip + other
         for iid in hand:
             g.objects[iid].controller = "p1"
         g.players["p1"].hand = hand
         # library: the threat on TOP, the rest below
-        rest = islands + tools + manip + other
         rng.shuffle(rest)
         g.library = [LibrarySlot(instance_id=threat, known_by={"p1": True, "p2": False})]
         g.library += [LibrarySlot(instance_id=iid, known_by={"p1": False, "p2": False})
@@ -110,3 +125,12 @@ class KnownThreatScenario(Scenario):
         if c["p2_seen"] and g.active_player == "p1":  # bot's turn ended with hand <=2 -> denied
             return "p1"
         return None
+
+
+class KnownThreatRandomScenario(KnownThreatScenario):
+    """known_threat with a RANDOM 7-card grip instead of the curated counter +
+    manipulation. Same threat-on-top denial test and terminator; the agent must
+    answer the threat (or recognise it can't) with whatever a random hand holds."""
+    name = "known_threat_random"
+    pool_seed = 313
+    RANDOM_HAND = True

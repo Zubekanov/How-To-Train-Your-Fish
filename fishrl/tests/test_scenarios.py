@@ -170,15 +170,20 @@ def _drive_known_threat(env, rng, counter: bool):
     return env.winner
 
 
-def test_known_threat_surgery_preconditions():
+def test_known_threat_manufacture():
+    from fishrl.forgetful_fish import engine as E
     scn = _small(KnownThreatScenario)
     env = ScenarioEnv(scn, max_decisions=800)
     env.reset(seed=0)
     g = env.g
-    assert g.library and g.objects[g.library[0].instance_id].name == THREAT   # threat on top
-    assert any(g.objects[i].name == TOOL for i in g.players["p1"].hand)        # learner holds the counter
-    assert not any(g.objects[i].name == THREAT for i in g.players["p2"].hand)  # p2's copies cleared
-    assert g.players["p2"].is_ai                                              # opponent is engine-driven
+    # the bot: exactly 4 Islands, empty hand, no creatures, engine-driven
+    isl = sum(1 for i in g.players["p2"].battlefield if g.objects[i].name == "Island")
+    assert isl == 4 and len(g.players["p2"].hand) == 0
+    assert not any(E._is_creature(g.objects[i]) for i in g.players["p2"].battlefield)
+    assert g.players["p2"].is_ai
+    # the threat on top, the agent holding its counter
+    assert g.objects[g.library[0].instance_id].name == THREAT
+    assert any(g.objects[i].name == TOOL for i in g.players["p1"].hand)
 
 
 def _reset(scn, seed):
@@ -199,19 +204,25 @@ def test_known_threat_denial_flips_outcome():
     assert counter.count("p1") > passive.count("p1"), "countering must deny more than passivity"
 
 
-# ── board presence: a real fight that ends decisively on an empty board ──────
-def test_board_presence_fight_is_decisive():
+# ── board presence: manufactured 4-life / one-creature fight, then deckout ───
+def test_board_presence_manufacture_and_resolves():
+    from fishrl.forgetful_fish import engine as E
     scn = _small(BoardPresenceScenario)
-    env = ScenarioEnv(scn, max_decisions=800)
+    env = ScenarioEnv(scn, max_decisions=2000)
     env.reset(seed=0)
-    assert _creatures(env.g, "p1") >= 1 and _creatures(env.g, "p2") >= 1   # both start with board
+    g = env.g
+    assert _creatures(g, "p1") == 1 and _creatures(g, "p2") == 1     # exactly one creature each
+    assert g.players["p1"].life == 4 and g.players["p2"].life == 4   # 4 life each
+    assert _lands(g, "p1") == _lands(g, "p2") and 4 <= _lands(g, "p1") <= 10  # equal random Islands
+    assert sum(E._is_creature(g.objects[s.instance_id]) for s in g.library) == 0  # creatureless deck
     winners = []
     for s in range(6):
-        e = _reset(scn, s)
+        e = ScenarioEnv(scn, max_decisions=2000)
+        e.reset(seed=s)
         _play_random(e, np.random.default_rng(s))
         winners.append(e.winner)
     assert all(w in ("p1", "p2", None) for w in winners)
-    assert any(w in ("p1", "p2") for w in winners)        # the fight resolves decisively
+    assert any(w in ("p1", "p2") for w in winners)        # resolves decisively
 
 
 # ── deckout: surgery forces a creatureless, trimmed-library deckout race ──────
@@ -223,21 +234,23 @@ def _all_creatures(g):
     return sum(1 for i in ids if g.objects.get(i) and E._is_creature(g.objects[i]))
 
 
-def test_deckout_creatureless_halved_and_resolves():
-    import copy
-    from fishrl.train.scenarios.surgery import remove_all_creatures, trim_library
+def _lands(g, seat):
+    return sum(1 for i in g.players[seat].battlefield
+               if "Land" in (g.objects[i].type_line or ""))
+
+
+def test_deckout_manufacture_and_resolves():
     scn = _small(DeckoutScenario)
-    scn.ensure_pool()
-    for src in scn._pool[:4]:                       # mirror sample()'s surgery order
-        g = copy.deepcopy(src)
-        remove_all_creatures(g)
-        base = len(g.library)
-        trim_library(g, base // 2)
-        assert base >= 2
-        assert _all_creatures(g) == 0              # truly creatureless: every zone
-        assert len(g.library) == base // 2         # half-sized (relative, not arbitrary)
-    env = _reset(scn, 0)                            # and a real episode resolves
-    assert _all_creatures(env.g) == 0
+    for s in range(4):
+        env = ScenarioEnv(scn, max_decisions=1500)
+        env.reset(seed=s)
+        g = env.g
+        assert _lands(g, "p1") == _lands(g, "p2") and 4 <= _lands(g, "p1") <= 10  # equal random 4..10
+        assert len(g.players["p1"].hand) == 7 and len(g.players["p2"].hand) == 7  # 7-card hands
+        assert len(g.library) <= 40                  # ~40-card library (rest in graveyard)
+        assert _all_creatures(g) == 0                # truly creatureless: every zone
+    env = ScenarioEnv(scn, max_decisions=1500)
+    env.reset(seed=0)
     _play_random(env, np.random.default_rng(0))
     assert env.winner in ("p1", "p2", None)
 

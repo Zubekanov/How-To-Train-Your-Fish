@@ -1,23 +1,24 @@
-"""Scenario #2 — condensed board fight (the pivotal-creature interaction).
+"""Scenario #2 — condensed board / stack fight over the pivotal creature (manufactured).
 
-Both seats start with a creature on board (mid-game), p2 driven by the heuristic.
-The pivotal element is board presence: the FIRST seat to an empty board loses
-(casting creatures is allowed — you're meant to protect/replace the load-bearing
-creature, not hoard it). This directly drills the attrition pattern the diagnosis
-found the agent losing: its Dandâns get removed (land-type changers / combat) and
-it fails to maintain a board.
-
-Why-it-matters is varied by snapshot diversity (different life totals, hands, and
-board states across instances) rather than hard-coded, so the agent learns
-"protect the element load-bearing for the win," not "creatures are sacred."
+Manufacture, don't fish from self-play: pool the whole deck, then give BOTH seats
+4 life, exactly one creature on the battlefield, an equal random number of untapped
+Islands (4–10), and a 7-card nonland grip — and remove every OTHER creature from the
+deck. At 4 life a single 4-power Dandân is lethal, so the game is a tight fight over
+that one creature (protect yours / remove theirs / counter the removal). There is no
+"empty board = loss" rule (that would teach "creatures are sacred"): if both
+creatures die, the deck is creatureless, so the game simply continues to a deckout.
+p2 is the heuristic; the terminator defers to the natural result.
 """
 from __future__ import annotations
 
 from fishrl.forgetful_fish import engine as E
+from fishrl.forgetful_fish.state import LibrarySlot
 from fishrl.train.scenarios.base import Scenario
-from fishrl.train.scenarios.surgery import make_engine_heuristic
+from fishrl.train.scenarios.surgery import make_engine_heuristic, pool_all_zones
 
-HORIZON = 4          # p1 turn-numbers before the fight is scored on remaining board
+LANDS_MIN, LANDS_MAX = 4, 10
+HAND = 7
+LIFE = 4
 
 
 def _creatures(g, seat) -> int:
@@ -34,29 +35,60 @@ class BoardPresenceScenario(Scenario):
         p = g.pending
         return (p is not None and p.player == "p1" and p.type == "priority"
                 and g.current_step in ("main1", "main2")
-                and 4 <= g.turn_number <= 9
-                and _creatures(g, "p1") >= 1 and _creatures(g, "p2") >= 1)
+                and not g.stack and 2 <= g.turn_number <= 12)
 
     def sample(self, rng):
         g = super().sample(rng)
+        self._manufacture(g, rng)
         make_engine_heuristic(g, "p2")
         return g
 
-    def on_reset(self, env) -> None:
-        env.scn_ctx["turn0"] = env.g.turn_number
+    def _manufacture(self, g, rng) -> None:
+        n = int(rng.integers(LANDS_MIN, LANDS_MAX + 1))
+        pool = pool_all_zones(g)
+        creatures, islands, spells = [], [], []
+        for iid in pool:
+            o = g.objects.get(iid)
+            if o is None:
+                continue
+            if E._is_creature(o):
+                creatures.append(iid)
+            elif "Island" in (o.type_line or ""):
+                islands.append(iid)
+            elif "Land" not in (o.type_line or ""):
+                spells.append(iid)
+            # non-Island lands are dropped from the manufactured deck (kept simple)
+        rng.shuffle(creatures); rng.shuffle(islands); rng.shuffle(spells)
+
+        def put(seat, iid, tapped=False):
+            o = g.objects[iid]
+            o.tapped = tapped; o.controller = seat; o.entered_this_turn = False
+            g.players[seat].battlefield.append(iid)
+
+        for seat in ("p1", "p2"):                 # one creature each (ready to attack)
+            if creatures:
+                put(seat, creatures.pop())
+        for iid in creatures:                     # every OTHER creature off the deck
+            g.exile.append(iid)
+        for seat in ("p1", "p2"):                 # N untapped Islands each (lethal is on)
+            for _ in range(n):
+                if not islands:
+                    break
+                put(seat, islands.pop())
+        for seat in ("p1", "p2"):                 # 7-card nonland grip
+            for _ in range(HAND):
+                if not spells:
+                    break
+                iid = spells.pop()
+                g.objects[iid].controller = seat
+                g.players[seat].hand.append(iid)
+            g.players[seat].life = LIFE
+        remaining = islands + spells              # creatureless library
+        rng.shuffle(remaining)
+        g.library = [LibrarySlot(instance_id=iid, known_by={"p1": False, "p2": False})
+                     for iid in remaining]
+        g.graveyard = []
 
     def terminator(self, env):
-        g = env.g
-        c = env.scn_ctx
-        cp1, cp2 = _creatures(g, "p1"), _creatures(g, "p2")
-        # First to an empty board loses the pivotal-creature fight.
-        if cp1 == 0 and cp2 > 0:
-            return "p2"
-        if cp2 == 0 and cp1 > 0:
-            return "p1"
-        if cp1 == 0 and cp2 == 0:
-            return "draw"
-        # Horizon: whoever holds the larger board after a few turns has won the fight.
-        if g.turn_number - c["turn0"] >= HORIZON:
-            return "p1" if cp1 > cp2 else ("p2" if cp2 > cp1 else "draw")
+        # No empty-board rule: natural result (creature fight, or deckout if both die).
         return None

@@ -1,26 +1,25 @@
-"""Scenario #4 — deckout / card-advantage race.
+"""Scenario #4 — deckout / card-advantage race (manufactured from the full 80 deck).
 
-Surgery forces the game to resolve through the deckout race rather than combat:
-EXILE every creature from all zones (a truly creatureless deck, so no Dandân can be
-redrawn and recast into a combat win) and HALVE the remaining shared library (a
-principled size relative to the actual game state — not an arbitrary fixed count),
-with p2 on the heuristic. With no creatures the game can only end by decking, and a
-deckout is GUARANTEED to arrive: the one refill effect (Day's Undoing) exiles itself
-on resolution, so it's a one-shot not a loop, and it only reshuffles hands+graveyard
-— never the exile where the creatures went — so the deck stays creatureless. The
-terminator therefore just defers to the natural result; reward is the natural
-terminal winner — the agent practises the late-game card/deckout race deliberately.
-
-NOTE (honest limitation): the library is SHARED, so the deckout outcome is heavily
-influenced by turn parity and the few mill/draw levers; treat this as "exposure to
-deckout-race states" rather than a crisp single skill.
+Rather than fishing a low-library state out of self-play, we MANUFACTURE it: pool
+every card across all zones, exile the creatures (so no combat path exists), then
+deal each seat an equal random number of untapped lands (4–10, taken from the
+deck) and a 7-card hand (any cards), keep 40 cards in the shared library, and put
+the rest in the graveyard. p2 is the heuristic. With no creatures the game can only
+resolve by decking, so the terminator defers to the natural result.
 """
 from __future__ import annotations
 
+from fishrl.forgetful_fish import engine as E
+from fishrl.forgetful_fish.state import LibrarySlot
 from fishrl.train.scenarios.base import Scenario
-from fishrl.train.scenarios.surgery import (
-    make_engine_heuristic, remove_all_creatures, trim_library,
-)
+from fishrl.train.scenarios.surgery import make_engine_heuristic
+
+LIBRARY = 40         # cards kept in the shared library (half of the 80-card deck)
+HAND = 7
+
+
+def _is_land(o) -> bool:
+    return "Land" in (o.type_line or "")
 
 
 class DeckoutScenario(Scenario):
@@ -28,22 +27,71 @@ class DeckoutScenario(Scenario):
     pool_seed = 505
 
     def predicate(self, env) -> bool:
+        # Any clean p1 main-phase priority (empty stack) — the manufacture rebuilds
+        # every zone, so the snapshot only needs to be a safe decision point.
         g = env.g
         p = g.pending
         return (p is not None and p.player == "p1" and p.type == "priority"
                 and g.current_step in ("main1", "main2")
-                and 4 <= g.turn_number <= 10
-                and len(g.library) >= 4)         # enough that halving still leaves a race
+                and not g.stack and 2 <= g.turn_number <= 12)
 
     def sample(self, rng):
         g = super().sample(rng)
-        remove_all_creatures(g)                  # truly creatureless -> no combat path
-        trim_library(g, len(g.library) // 2)     # half-sized deck (relative, not arbitrary)
+        self._manufacture(g, rng)
         make_engine_heuristic(g, "p2")
         return g
 
+    def _manufacture(self, g, rng) -> None:
+        n = int(rng.integers(4, 11))          # equal random lands per seat, 4..10
+        # 1) pool every instance, emptying every zone
+        pool = []
+        for pid in g.players:
+            pool += g.players[pid].hand; g.players[pid].hand = []
+            pool += g.players[pid].battlefield; g.players[pid].battlefield = []
+        pool += [s.instance_id for s in g.library]; g.library = []
+        pool += list(g.graveyard); g.graveyard = []
+        pool += list(g.exile); g.exile = []
+        pool += [s.source_instance_id for s in g.stack if s.source_instance_id]
+        g.stack = []
+        # 2) exile creatures; split the rest into lands / nonlands
+        lands, nonlands = [], []
+        for iid in pool:
+            o = g.objects.get(iid)
+            if o is None:
+                continue
+            if E._is_creature(o):
+                g.exile.append(iid)
+            elif _is_land(o):
+                lands.append(iid)
+            else:
+                nonlands.append(iid)
+        rng.shuffle(lands); rng.shuffle(nonlands)
+        # 3) N untapped lands per seat
+        for seat in ("p1", "p2"):
+            for _ in range(n):
+                if not lands:
+                    break
+                iid = lands.pop()
+                o = g.objects[iid]
+                o.tapped = False; o.controller = seat; o.entered_this_turn = False
+                g.players[seat].battlefield.append(iid)
+        # 4) 7-card hands (any cards), then 40-card library, rest to graveyard
+        remaining = lands + nonlands
+        rng.shuffle(remaining)
+        for seat in ("p1", "p2"):
+            for _ in range(HAND):
+                if not remaining:
+                    break
+                iid = remaining.pop()
+                g.objects[iid].controller = seat
+                g.players[seat].hand.append(iid)
+        for i, iid in enumerate(remaining):
+            if i < LIBRARY:
+                g.library.append(LibrarySlot(instance_id=iid, known_by={"p1": False, "p2": False}))
+            else:
+                g.graveyard.append(iid)
+
     def terminator(self, env):
-        # Creatureless -> the only resolution is a deckout, and it always arrives
-        # (Day's Undoing exiles itself, so refills are one-shot and never reintroduce
-        # the exiled creatures). Defer entirely to the natural engine result.
+        # Creatureless -> deckout is the only resolution, and it always arrives
+        # (Day's Undoing exiles itself; nothing reintroduces the exiled creatures).
         return None

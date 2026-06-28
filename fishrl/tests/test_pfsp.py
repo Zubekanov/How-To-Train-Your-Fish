@@ -65,6 +65,41 @@ def test_empty_league_returns_none():
     assert PFSPLeague().sample(np.random.default_rng(0)) is None
 
 
+def test_member_weight_biases_sampling():
+    # Equal win-rates, but a 4x prior weight -> ~4x the picks.
+    lg = PFSPLeague(mode="hard", p=2.0, eps=0.01,
+                    anchors=[LeagueMember("a", "scenario", wr=0.5, weight=1.0),
+                             LeagueMember("b", "scenario", wr=0.5, weight=4.0)])
+    rng = np.random.default_rng(0)
+    picks = [lg.sample(rng).name for _ in range(2000)]
+    assert picks.count("b") > picks.count("a") * 2
+
+
+# ── scenario PFSP league ──────────────────────────────────────────────────────
+def test_scenario_league_filters_by_weight_and_carries_prior():
+    cfg = Config()
+    cfg.scenario_weights = {"known_threat": 1.0, "board_presence": 0.0, "deckout": 2.0}
+    names = ["known_threat", "board_presence", "deckout", "unlisted"]
+    sl = PFSPLeague.scenario_league(cfg, names)
+    # board_presence (weight 0) is dropped; unlisted defaults to weight 1.0 and is kept.
+    assert {m.name for m in sl.members()} == {"known_threat", "deckout", "unlisted"}
+    assert all(m.kind == "scenario" for m in sl.members())
+    assert {m.name: m.weight for m in sl.members()}["deckout"] == 2.0
+
+
+def test_scenario_league_favours_the_losing_scenario():
+    cfg = Config()
+    sl = PFSPLeague.scenario_league(cfg, ["known_threat", "deckout"])
+    hard = next(m for m in sl.members() if m.name == "deckout")
+    easy = next(m for m in sl.members() if m.name == "known_threat")
+    for _ in range(50):
+        sl.update(hard, learner_won=False)   # the agent keeps losing 'deckout'
+        sl.update(easy, learner_won=True)    # ...and mastering 'known_threat'
+    rng = np.random.default_rng(0)
+    picks = [sl.sample(rng).name for _ in range(2000)]
+    assert picks.count("deckout") > picks.count("known_threat") * 3
+
+
 # ── collector records only the learner, seat-balanced ─────────────────────────
 def test_collect_vs_random_records_only_learner_p1():
     learner = _learner()

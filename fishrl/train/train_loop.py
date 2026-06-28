@@ -146,6 +146,12 @@ def train(cfg: Config, models: Models | None = None, log=print,
     # at each report. In-memory only (never serialized), so resume refills it over the
     # first few reports. Unused when cfg.pool_frac <= 0.
     league = PFSPLeague.from_config(cfg)
+    # Scenario PFSP: one league member per registered scenario, sampled within the
+    # scenario-game budget by the learner's per-scenario difficulty (not a fixed share).
+    scen_league = None
+    if cfg.scenario_frac > 0:
+        from fishrl.train.scenarios import scenario_names
+        scen_league = PFSPLeague.scenario_league(cfg, scenario_names())
     run_start = last_report = last_ckpt = time.perf_counter()
 
     def total_elapsed() -> float:
@@ -260,10 +266,16 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 f"(self={opp_mix['self']} past={opp_mix['pastself']} "                # not parsed
                 f"heuristic={opp_mix['heuristic']} attacker={opp_mix['attacker']} "   # by the
                 f"random={opp_mix['random']}) | {league.summary()}")                  # collector
-        if cfg.scenario_frac > 0 and scen_mix:           # DEBUG ONLY — never a success metric
-            log(f"[scenario debug it={done}] games={sum(scen_mix.values())} "
-                f"mix={dict(sorted(scen_mix.items()))} (judge progress on vs-heuristic WR, "
-                f"not this)")
+        if cfg.scenario_frac > 0 and scen_league is not None and scen_league.members():
+            # Per-scenario games this window + the PFSP win-rate driving selection.
+            # Every registered scenario is listed (0 games shown too); win-rates are a
+            # CURRICULUM signal (what to practise), not a success metric — judge real
+            # progress on the vs-heuristic eval.
+            counts = " ".join(f"{m.name}={scen_mix.get(m.name, 0)}"
+                              for m in scen_league.members())
+            wrs = " ".join(f"{m.name}={m.wr:.2f}({m.games})"
+                           for m in sorted(scen_league.members(), key=lambda m: m.wr))
+            log(f"[scenario it={done}] games={scen_total} ({counts}) | wr {wrs}")
         for k in KEYS:
             acc[k] = 0.0
         win_iters = win_T = 0
@@ -376,12 +388,12 @@ def train(cfg: Config, models: Models | None = None, log=print,
             # Scenario-seeded games: short, targeted start-states (terminal ±1 reward).
             # Reuses the self-play collector via a belief-wrapped ScenarioEnv, so the
             # transitions are identical in shape and merge into the same PPO buffer.
-            if n_scen > 0:
-                from fishrl.train.scenarios import (ScenarioEnv, get_scenario,
-                                                    sample_scenario_name)
+            if n_scen > 0 and scen_league is not None and scen_league.members():
+                from fishrl.train.scenarios import ScenarioEnv, get_scenario
                 scn_rng = np.random.default_rng(cfg.seed + 700_000 + done)
                 for sidx in range(n_scen):
-                    sname = sample_scenario_name(cfg.scenario_weights, scn_rng)
+                    member = scen_league.sample(scn_rng)    # PFSP over scenarios by difficulty
+                    sname = member.name
                     senv = BeliefAugmentedEnv(
                         m.guesser, belief=cfg.use_belief,
                         env=ScenarioEnv(get_scenario(sname), max_decisions=cfg.max_decisions,
@@ -391,6 +403,10 @@ def train(cfg: Config, models: Models | None = None, log=print,
                                          critic=None, max_decisions=cfg.max_decisions)
                     buf.steps.extend(sbuf.steps)
                     scen_mix[sname] = scen_mix.get(sname, 0) + 1
+                    if sbuf.steps:                          # the learner is p1 (p2 is the engine bot)
+                        winner = sbuf.steps[-1].winner
+                        if winner in ("p1", "p2"):
+                            scen_league.update(member, winner == "p1")
             fill_critic_values(buf, m.critic)
             batch = buf.compute(cfg.gamma, cfg.lam)
             if max_seconds is not None:                  # anneal entropy over the budget

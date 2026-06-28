@@ -37,10 +37,11 @@ SCRIPTED_KINDS = ("random", "attacker", "heuristic")
 @dataclass
 class LeagueMember:
     name: str
-    kind: str                    # "random" | "attacker" | "heuristic" | "self"
+    kind: str                    # "random" | "attacker" | "heuristic" | "self" | "scenario"
     models: object = None        # frozen actor+guesser holder (kind == "self"); else None
-    wr: float = 0.5              # EMA win-rate OF THE LEARNER vs this member
+    wr: float = 0.5              # EMA win-rate OF THE LEARNER vs this member / scenario
     games: int = 0               # pool games played vs this member (diagnostics)
+    weight: float = 1.0          # fixed prior multiplier on the sampling priority (config bias)
 
 
 @dataclass
@@ -94,6 +95,20 @@ class PFSPLeague:
                    wr_ema=cfg.pfsp_wr_ema, anchors=anchors,
                    selves=deque(maxlen=max(0, int(cfg.league_size))))
 
+    @classmethod
+    def scenario_league(cls, cfg, names) -> "PFSPLeague":
+        """A dedicated PFSP league over the curriculum SCENARIOS (one member each,
+        `names` with a positive `scenario_weights` entry). Reuses the same priority
+        sampler + EMA win-rate as the opponent league, so within the scenario-game
+        budget each scenario is drawn by the learner's difficulty on it (``hard``
+        favours scenarios it is losing) rather than a fixed share. `scenario_weights`
+        survives as a fixed prior multiplier (and as the on/off switch via 0)."""
+        anchors = [LeagueMember(name=n, kind="scenario",
+                                weight=float(cfg.scenario_weights.get(n, 1.0)))
+                   for n in names if cfg.scenario_weights.get(n, 1.0) > 0]
+        return cls(mode=cfg.pfsp_mode, p=cfg.pfsp_p, eps=cfg.pfsp_eps,
+                   wr_ema=cfg.pfsp_wr_ema, anchors=anchors, selves=deque(maxlen=0))
+
     def add_snapshot(self, models, it: int) -> None:
         """Append a frozen snapshot of the current learner as a past-self member
         (no-op when the ring is disabled, i.e. league_size == 0)."""
@@ -109,7 +124,7 @@ class PFSPLeague:
         members = self.members()
         if not members:
             return None
-        weights = np.array([priority(m.wr, self.mode, self.p) + self.eps
+        weights = np.array([(priority(m.wr, self.mode, self.p) + self.eps) * m.weight
                             for m in members], dtype=np.float64)
         total = weights.sum()
         if not np.isfinite(total) or total <= 0:

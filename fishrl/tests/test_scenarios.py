@@ -234,23 +234,26 @@ def test_board_presence_manufacture_and_resolves():
     g = env.g
     assert _creatures(g, "p1") == 1 and _creatures(g, "p2") == 1     # exactly one creature each
     assert g.players["p1"].life == 4 and g.players["p2"].life == 4   # 4 life each
-    assert _lands(g, "p1") == _lands(g, "p2") and 4 <= _lands(g, "p1") <= 10  # equal random Islands
+    assert _lands(g, "p1") == _lands(g, "p2") and 4 <= _lands(g, "p1") <= 10  # equal random lands
     assert sum(E._is_creature(g.objects[s.instance_id]) for s in g.library) == 0  # creatureless deck
-    # no cards are dropped: non-Island lands stay in the library, so every instance
+    # no cards are dropped: leftover lands stay in the library, so every instance
     # is accounted for across the zones (only creatures leave, to exile).
     accounted = (len(g.library) + len(g.graveyard) + len(g.exile) + len(g.stack)
                  + sum(len(g.players[p].hand) + len(g.players[p].battlefield) for p in ("p1", "p2")))
     assert accounted == len(g.objects)
-    assert any("Island" not in (g.objects[s.instance_id].type_line or "")
-               and "Land" in (g.objects[s.instance_id].type_line or "") for s in g.library)
     winners = []
+    base_types = set()
     for s in range(6):
         e = ScenarioEnv(scn, max_decisions=2000)
         e.reset(seed=s)
+        base_types |= {e.g.objects[i].name for p in ("p1", "p2")
+                       for i in e.g.players[p].battlefield
+                       if "Land" in (e.g.objects[i].type_line or "")}
         _play_random(e, np.random.default_rng(s))
         winners.append(e.winner)
     assert all(w in ("p1", "p2", None) for w in winners)
     assert any(w in ("p1", "p2") for w in winners)        # resolves decisively
+    assert len(base_types) > 1                            # a random mana base, not Islands only
 
 
 # ── deckout: surgery forces a creatureless, trimmed-library deckout race ──────

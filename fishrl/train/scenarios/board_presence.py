@@ -2,8 +2,9 @@
 
 Manufacture, don't fish from self-play: pool the whole deck, then give BOTH seats
 4 life, exactly one creature on the battlefield, an equal random number of untapped
-Islands (4–10), and a 7-card nonland grip — and remove every OTHER creature from the
-deck. At 4 life a single 4-power Dandân is lethal, so the game is a tight fight over
+lands (4–10, a random mix of land types — every land taps for U; the unused lands
+stay in the library), and a 7-card nonland grip — and remove every OTHER creature
+from the deck. At 4 life a single 4-power Dandân is lethal, so the game is a tight fight over
 that one creature (protect yours / remove theirs / counter the removal). There is no
 "empty board = loss" rule (that would teach "creatures are sacred"): if both
 creatures die, the deck is creatureless, so the game simply continues to a deckout.
@@ -46,21 +47,18 @@ class BoardPresenceScenario(Scenario):
     def _manufacture(self, g, rng) -> None:
         n = int(rng.integers(LANDS_MIN, LANDS_MAX + 1))
         pool = pool_all_zones(g)
-        creatures, islands, spells, other_lands = [], [], [], []
+        creatures, lands, spells = [], [], []
         for iid in pool:
             o = g.objects.get(iid)
             if o is None:
                 continue
             if E._is_creature(o):
                 creatures.append(iid)
-            elif "Island" in (o.type_line or ""):
-                islands.append(iid)
-            elif "Land" in (o.type_line or ""):
-                other_lands.append(iid)           # non-Island lands stay in the deck (library)
+            elif "Land" in (o.type_line or ""):   # any land -> the random mana-base pool
+                lands.append(iid)
             else:
                 spells.append(iid)
-        rng.shuffle(creatures); rng.shuffle(islands); rng.shuffle(spells)
-        rng.shuffle(other_lands)
+        rng.shuffle(creatures); rng.shuffle(lands); rng.shuffle(spells)
 
         def put(seat, iid, tapped=False):
             o = g.objects[iid]
@@ -72,11 +70,11 @@ class BoardPresenceScenario(Scenario):
                 put(seat, creatures.pop())
         for iid in creatures:                     # every OTHER creature off the deck
             g.exile.append(iid)
-        for seat in ("p1", "p2"):                 # N untapped Islands each (lethal is on)
+        for seat in ("p1", "p2"):                 # N random untapped lands each (lethal is on)
             for _ in range(n):
-                if not islands:
+                if not lands:
                     break
-                put(seat, islands.pop())
+                put(seat, lands.pop())
         for seat in ("p1", "p2"):                 # 7-card nonland grip
             for _ in range(HAND):
                 if not spells:
@@ -85,7 +83,7 @@ class BoardPresenceScenario(Scenario):
                 g.objects[iid].controller = seat
                 g.players[seat].hand.append(iid)
             g.players[seat].life = LIFE
-        remaining = islands + spells + other_lands   # creatureless library (non-Island lands kept)
+        remaining = lands + spells                # creatureless library (leftover lands kept)
         rng.shuffle(remaining)
         g.library = [LibrarySlot(instance_id=iid, known_by={"p1": False, "p2": False})
                      for iid in remaining]

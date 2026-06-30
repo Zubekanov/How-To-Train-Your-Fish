@@ -16,6 +16,9 @@ from fishrl.train.scenarios.board_presence import BoardPresenceScenario, _creatu
 from fishrl.train.scenarios.deckout import DeckoutScenario
 from fishrl.train.scenarios.known_threat import (THREAT, TOOL, KnownThreatScenario,
                                                  KnownThreatRandomScenario)
+from fishrl.train.scenarios.survive_lethal import (DANDAN, P1_LIFE, VISION,
+                                                   SurviveLethalScenario,
+                                                   SurviveLethalVisionScenario)
 
 
 def _small(scn_cls):
@@ -54,7 +57,8 @@ def test_base_env_terminal_override_is_none_and_winner_matches():
 
 
 # ── pools build from real play and every state satisfies the predicate ───────
-@pytest.mark.parametrize("scn_cls", [BoardPresenceScenario, DeckoutScenario])
+@pytest.mark.parametrize("scn_cls", [BoardPresenceScenario, DeckoutScenario,
+                                     SurviveLethalScenario, SurviveLethalVisionScenario])
 def test_pool_builds_and_states_match_predicate(scn_cls):
     scn = _small(scn_cls)
     assert scn.ensure_pool() >= 1
@@ -286,6 +290,94 @@ def test_deckout_manufacture_and_resolves():
     assert env.winner in ("p1", "p2", None)
 
 
+# ── survive-lethal: a telegraphed Dandân swing the agent must survive ────────
+def _dandans(g, seat):
+    return [i for i in g.players[seat].battlefield
+            if i in g.objects and g.objects[i].name == DANDAN]
+
+
+def test_survive_lethal_manufacture():
+    from fishrl.forgetful_fish import engine as E
+    scn = _small(SurviveLethalScenario)
+    env = ScenarioEnv(scn, max_decisions=800)
+    env.reset(seed=0)
+    g = env.g
+    # the bot: 1–3 ready Dandâns, a random 4–10 land mana base, empty hand, engine-driven
+    nd = _dandans(g, "p2")
+    assert 1 <= len(nd) <= 3
+    assert all(not g.objects[i].tapped and not g.objects[i].entered_this_turn for i in nd)
+    assert 4 <= _lands(g, "p2") <= 10 and len(g.players["p2"].hand) == 0
+    assert g.players["p2"].is_ai
+    # both sides hold at least one Island: the bot so its Dandâns aren't sacrificed,
+    # the agent so the Dandâns are allowed to attack it
+    for seat in ("p1", "p2"):
+        assert any("Island" in (g.objects[i].type_line or "") for i in g.players[seat].battlefield)
+    # the agent: at 4 life (a single Dandân is lethal), a random 4–10 land base, and a
+    # random 4–7 card NONLAND grip
+    assert g.players["p1"].life == P1_LIFE
+    assert 4 <= _lands(g, "p1") <= 10
+    assert 4 <= len(g.players["p1"].hand) <= 7
+    assert all("Land" not in (g.objects[i].type_line or "") for i in g.players["p1"].hand)
+    # the eligible-attacker rule agrees: with the agent on an Island the Dandâns can swing
+    assert E._eligible_attackers(g, "p2"), "Dandâns should be able to attack a defender with an Island"
+    # nothing is dropped: every instance is accounted for across the zones
+    accounted = (len(g.library) + len(g.graveyard) + len(g.exile) + len(g.stack)
+                 + sum(len(g.players[p].hand) + len(g.players[p].battlefield) for p in ("p1", "p2")))
+    assert accounted == len(g.objects)
+
+
+def test_survive_lethal_passive_agent_dies_to_the_swing():
+    # An agent that just passes keeps its Island, so the heuristic finds the lethal
+    # Dandân attack: the natural result is a p2 win for most seeds.
+    scn = _small(SurviveLethalScenario)
+    winners = []
+    for s in range(8):
+        env = ScenarioEnv(scn, max_decisions=800)
+        env.reset(seed=s)
+        _play_passive(env)
+        winners.append(env.winner)
+    assert all(w in ("p1", "p2", None) for w in winners)
+    assert winners.count("p2") >= 1, "a passive agent on 4 life should die to the Dandân swing"
+
+
+def _play_passive(env, max_steps=5000):
+    """Drive p1 to PASS at every priority (and otherwise take the first legal action),
+    so the only thing that happens is the bot's turn — the survival baseline."""
+    n = 0
+    while env.agents and n < max_steps:
+        n += 1
+        s = env.agent_selection
+        if env.terminations[s] or env.truncations[s]:
+            env.step(None)
+            continue
+        ls = _legal(env)
+        if ls.size == 0:
+            env.step(None)
+            continue
+        passes = [x for x in ls if A.decode(int(x))[0] == "PASS"]
+        env.step(int(passes[0]) if passes else int(ls[0]))
+
+
+def test_survive_lethal_vision_grip_holds_the_answer():
+    from fishrl.forgetful_fish import engine as E
+    scn = _small(SurviveLethalVisionScenario)
+    for s in range(4):
+        env = ScenarioEnv(scn, max_decisions=800)
+        env.reset(seed=s)
+        g = env.g
+        hand_names = [g.objects[i].name for i in g.players["p1"].hand]
+        # the curated answer is guaranteed in hand; the rest of the grip stays random nonland
+        assert VISION in hand_names
+        assert 4 <= len(hand_names) <= 7
+        assert all("Land" not in (g.objects[i].type_line or "") for i in g.players["p1"].hand)
+        # same lethal frame as the base: a live Dandân swing the agent must answer
+        assert 1 <= len(_dandans(g, "p2")) <= 3
+        assert g.players["p1"].life == P1_LIFE
+        assert E._eligible_attackers(g, "p2")           # the swing is live by default
+        # {U} is payable: the agent controls an Island to cast the charm from
+        assert any("Island" in (g.objects[i].type_line or "") for i in g.players["p1"].battlefield)
+
+
 # ── registry / weighted sampling ─────────────────────────────────────────────
 def test_sample_scenario_name_respects_weights():
     rng = np.random.default_rng(0)
@@ -293,4 +385,5 @@ def test_sample_scenario_name_respects_weights():
     picks = {sample_scenario_name(only, rng) for _ in range(50)}
     assert picks == {"known_threat"}
     assert set(scenario_names()) == {"known_threat", "known_threat_random",
-                                     "board_presence", "deckout"}
+                                     "board_presence", "deckout", "survive_lethal",
+                                     "survive_lethal_vision"}

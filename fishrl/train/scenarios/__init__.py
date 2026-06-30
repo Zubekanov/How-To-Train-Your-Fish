@@ -17,9 +17,12 @@ from fishrl.train.scenarios.deckout import DeckoutScenario
 from fishrl.train.scenarios.env import ScenarioEnv
 from fishrl.train.scenarios.known_threat import (KnownThreatScenario,
                                                   KnownThreatRandomScenario)
+from fishrl.train.scenarios.survive_lethal import (SurviveLethalScenario,
+                                                   SurviveLethalVisionScenario)
 
 _REGISTRY = {c.name: c for c in (KnownThreatScenario, KnownThreatRandomScenario,
-                                 BoardPresenceScenario, DeckoutScenario)}
+                                 BoardPresenceScenario, DeckoutScenario,
+                                 SurviveLethalScenario, SurviveLethalVisionScenario)}
 _INSTANCES: dict = {}
 
 

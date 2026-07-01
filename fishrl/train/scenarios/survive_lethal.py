@@ -7,14 +7,17 @@ NO cards in hand, driven by the engine heuristic. The agent starts on 4 life —
 a SINGLE Dandân is exactly lethal — with its own random 4–10 land mana base that
 likewise includes an Island (the one the Dandâns need to be able to attack it) and
 a RANDOM 4–7 card NONLAND grip. The scenario starts on the AGENT's turn and ends
-when the bot's first turn passes back to the agent.
+once the bot's first turn has FULLY passed (tracked by the engine's per-player-turn
+counter, so a bot turn containing no agent decision at all — e.g. the bot just
+draws a land — still ends the scenario on time, before the bot can dig into a fresh
+Dandân on a later turn).
 
 By default the attack is live: the agent controls an Island, so on its turn the
 heuristic declares the Dandâns and swings for lethal. The agent wins only by
 SURVIVING — remove or bounce the Dandâns, deploy a blocker, gain life past the
-swing, or strip itself of Islands so the Dandâns can't attack at all. If the bot
-finds no attack and its turn passes back to the agent (still alive), the agent is
-credited the win; otherwise the lethal swing resolves to the natural p2 win.
+swing, or strip itself of Islands so the Dandâns can't attack at all. If the bot's
+turn passes with the agent still alive, the agent is credited the win; otherwise
+the lethal swing resolves to the natural p2 win.
 
 Like ``known_threat_random`` this is a denial/recognition test with a random grip:
 the measure is whether the agent answers (or recognises it can't answer) a known,
@@ -22,9 +25,10 @@ telegraphed lethal threat with whatever it happens to hold.
 """
 from __future__ import annotations
 
-from fishrl.forgetful_fish.state import LibrarySlot
 from fishrl.train.scenarios.base import Scenario
-from fishrl.train.scenarios.surgery import make_engine_heuristic, pool_all_zones
+from fishrl.train.scenarios.surgery import (is_island, is_land, pool_all_zones,
+                                            put_battlefield, put_hand,
+                                            rebuild_library)
 
 DANDAN = "Dandân"            # 4/1; can't attack unless the DEFENDER controls an Island
 P1_LIFE = 4                  # a single 4-power Dandân is exactly lethal
@@ -37,7 +41,8 @@ LANDS_MIN, LANDS_MAX = 4, 10  # random mana base per side (every land taps for U
 
 class SurviveLethalScenario(Scenario):
     name = "survive_lethal"
-    pool_seed = 505
+    pool_seed = 606
+    engine_seat = "p2"
     CURATED_CARD = None          # a subclass names a card to guarantee in the agent's grip
 
     def predicate(self, env) -> bool:
@@ -53,17 +58,11 @@ class SurviveLethalScenario(Scenario):
             o = g.objects[iid]
             if o.name == DANDAN:
                 has_dandan = True
-            elif "Island" in (o.type_line or ""):
+            elif is_island(o):
                 has_island = True
             if has_dandan and has_island:
                 return True
         return False
-
-    def sample(self, rng):
-        g = super().sample(rng)
-        self._manufacture(g, rng)
-        make_engine_heuristic(g, "p2")
-        return g
 
     def _manufacture(self, g, rng) -> None:
         pool = pool_all_zones(g)
@@ -72,44 +71,40 @@ class SurviveLethalScenario(Scenario):
             o = g.objects.get(iid)
             if o is None:
                 continue
-            tl = o.type_line or ""
-            if "Island" in tl:                     # the basic the Dandâns key off of
+            if is_island(o):                       # the basic the Dandâns key off of
                 islands.append(iid)
-            elif "Land" in tl:                     # other lands -> library only (not the enabler)
+            elif is_land(o):                       # other lands -> library only (not the enabler)
                 other_lands.append(iid)
             elif o.name == DANDAN:
                 dandans.append(iid)
             else:
                 nonland.append(iid)
+        assert dandans, "survive_lethal: no Dandân in the deck"
+        assert len(islands) >= 2, "survive_lethal: need an Island per seat"
         rng.shuffle(islands); rng.shuffle(other_lands)
         rng.shuffle(dandans); rng.shuffle(nonland)
 
-        def put(seat, iid):                        # an untapped, ready (not sick) permanent
-            o = g.objects[iid]
-            o.tapped = False; o.controller = seat; o.entered_this_turn = False
-            g.players[seat].battlefield.append(iid)
-
         # the bot: 1–3 ready Dandâns, empty hand
-        n_dandan = int(rng.integers(N_DANDAN_MIN, N_DANDAN_MAX + 1))
+        n_dandan = min(int(rng.integers(N_DANDAN_MIN, N_DANDAN_MAX + 1)), len(dandans))
         for _ in range(n_dandan):
-            if dandans:
-                put("p2", dandans.pop())
-        g.players["p2"].hand = []
+            put_battlefield(g, "p2", dandans.pop())
+        assert sum(1 for i in g.players["p2"].battlefield
+                   if g.objects[i].name == DANDAN) == n_dandan >= N_DANDAN_MIN
 
         # both sides: at least one Island (the agent so the Dandâns can attack, the bot
         # so they aren't sacrificed), then a random mana base on top (4–10 lands each,
         # any land type — every land taps for U; unused lands stay in the library)
         n_lands = {seat: int(rng.integers(LANDS_MIN, LANDS_MAX + 1)) for seat in ("p1", "p2")}
         for seat in ("p1", "p2"):
-            if islands:
-                put(seat, islands.pop())
-                n_lands[seat] -= 1
+            put_battlefield(g, seat, islands.pop())
+            n_lands[seat] -= 1
         mana_base = islands + other_lands           # leftover lands, a random mix
+        assert len(mana_base) >= n_lands["p1"] + n_lands["p2"], "survive_lethal: short on lands"
         rng.shuffle(mana_base)
         for seat in ("p1", "p2"):
             for _ in range(max(0, n_lands[seat])):
-                if mana_base:
-                    put(seat, mana_base.pop())
+                put_battlefield(g, seat, mana_base.pop())
+            assert any(is_island(g.objects[i]) for i in g.players[seat].battlefield)
 
         # the agent: 4 life and a 4–7 card NONLAND grip (leftover Dandâns count as
         # nonland cards too — a possible blocker). A curated subclass guarantees one
@@ -122,33 +117,36 @@ class SurviveLethalScenario(Scenario):
         if self.CURATED_CARD is not None:
             idx = next((i for i, iid in enumerate(grip_pool)
                         if g.objects[iid].name == self.CURATED_CARD), None)
-            if idx is not None:
-                hand.append(grip_pool.pop(idx))
+            assert idx is not None, \
+                f"survive_lethal: curated card {self.CURATED_CARD!r} not found in the deck"
+            hand.append(grip_pool.pop(idx))
         while len(hand) < n_hand and grip_pool:
             hand.append(grip_pool.pop())
         for iid in hand:
-            g.objects[iid].controller = "p1"
-        g.players["p1"].hand = hand
+            put_hand(g, "p1", iid)
+        assert len(g.players["p1"].hand) >= HAND_MIN, "survive_lethal: short grip"
 
         # library: everything left (undealt lands + leftover grip); nothing stacked on top
         rest = mana_base + grip_pool
         rng.shuffle(rest)
-        g.library = [LibrarySlot(instance_id=iid, known_by={"p1": False, "p2": False})
-                     for iid in rest]
-        g.graveyard = []
+        rebuild_library(g, rest)
 
     def on_reset(self, env) -> None:
-        env.scn_ctx["p2_seen"] = False
+        env.scn_ctx["turn0"] = env.g.turn_number   # the agent's turn at scenario start
 
     def terminator(self, env):
         g = env.g
-        c = env.scn_ctx
-        if g.active_player == "p2":
-            c["p2_seen"] = True
-        # the bot's turn passed back to a still-living agent -> the swing was denied
-        if c["p2_seen"] and g.active_player == "p1" and g.players["p1"].life > 0:
-            return "p1"
-        return None        # a lethal swing instead resolves to the natural p2 win
+        # `turn_number` increments once per PLAYER-turn (engine._begin_turn), so the
+        # bot's turn is turn0+1 and it has FULLY passed once the count reaches
+        # turn0+2 with the agent active again. Counting turns (rather than sampling
+        # `active_player` at agent decision points) is robust to a bot turn that
+        # contains no agent decision at all — with default stops the engine
+        # fast-forwards straight through such a turn, and crediting the win late
+        # would let the bot draw into a fresh Dandân and flip a deserved win.
+        if (g.active_player == "p1" and g.turn_number >= env.scn_ctx["turn0"] + 2
+                and g.players["p1"].life > 0):
+            return "p1"        # the bot's turn passed back to a still-living agent
+        return None            # a lethal swing instead resolves to the natural p2 win
 
 
 VISION = "Vision Charm"      # {U} instant; its land mode rewrites a basic land type

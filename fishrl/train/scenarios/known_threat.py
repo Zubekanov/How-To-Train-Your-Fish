@@ -5,10 +5,12 @@ deck taps for U), NO cards in hand, no creatures, driven by the engine heuristic
 on its turn it draws the top card and (having nothing else) casts it. A card-advantage
 spell sits on top of the shared library, so by default the bot draws it, resolves it,
 and gains cards. The scenario starts on the AGENT's turn (also with 10 random untapped
-lands; the unused lands stay in the library) and ends at the end of the bot's first
-turn; the agent LOSES if the bot's hand ever exceeds two cards. The agent
-must therefore either manipulate a dud to the top of the deck before the bot draws, or
-counter the bot's spell (it is handed a Memory Lapse + manipulation, with the mana).
+lands; the unused lands stay in the library) and ends once the bot's first turn has
+fully passed (tracked by the engine's per-player-turn counter, so a bot turn that
+contains no agent decision at all still ends the scenario on time); the agent LOSES if
+the bot's hand ever exceeds two cards. The agent must therefore either manipulate a dud
+to the top of the deck before the bot draws, or counter the bot's spell (it is handed a
+Memory Lapse + manipulation, with the mana).
 
 The "> 2 cards" test is card-agnostic: it fires for any genuine card-advantage line
 (Day's Undoing draws 7, Fact or Fiction nets ≥3, ...) and not for a card-neutral one.
@@ -19,10 +21,9 @@ answer (or recognise it can't) the known threat with whatever it happens to hold
 """
 from __future__ import annotations
 
-from fishrl.forgetful_fish import engine as E
-from fishrl.forgetful_fish.state import LibrarySlot
 from fishrl.train.scenarios.base import Scenario
-from fishrl.train.scenarios.surgery import make_engine_heuristic, pool_all_zones
+from fishrl.train.scenarios.surgery import (is_land, pool_all_zones, put_battlefield,
+                                            put_hand, rebuild_library)
 
 THREAT = "Day's Undoing"     # card-advantage spell: drawn + cast -> bot hand >> 2
 TOOL = "Memory Lapse"        # the counter the agent is handed
@@ -39,6 +40,7 @@ P1_HAND = 7
 class KnownThreatScenario(Scenario):
     name = "known_threat"
     pool_seed = 303
+    engine_seat = "p2"
     RANDOM_HAND = False          # subclass flips this for the random-grip variant
 
     def predicate(self, env) -> bool:
@@ -52,12 +54,6 @@ class KnownThreatScenario(Scenario):
         names = {g.objects[i].name for i in g.objects}
         return THREAT in names and TOOL in names
 
-    def sample(self, rng):
-        g = super().sample(rng)
-        self._manufacture(g, rng)
-        make_engine_heuristic(g, "p2")
-        return g
-
     def _manufacture(self, g, rng) -> None:
         pool = pool_all_zones(g)
         lands, threat, tools, manip, other = [], None, [], [], []
@@ -66,7 +62,7 @@ class KnownThreatScenario(Scenario):
             if o is None:
                 continue
             nm = o.name
-            if "Land" in (o.type_line or ""):      # any land -> the random mana-base pool
+            if is_land(o):                         # any land -> the random mana-base pool
                 lands.append(iid)
             elif nm == THREAT and threat is None:
                 threat = iid
@@ -76,21 +72,15 @@ class KnownThreatScenario(Scenario):
                 manip.append(iid)
             else:
                 other.append(iid)
+        # invariants the docstring promises (cheap; once per reset)
+        assert threat is not None, "known_threat: the threat card is missing from the deck"
+        assert len(lands) >= P2_LANDS + P1_LANDS, "known_threat: not enough lands to deal"
         rng.shuffle(lands); rng.shuffle(other); rng.shuffle(manip)
 
-        def put_land(seat):
-            if not lands:
-                return
-            iid = lands.pop()
-            o = g.objects[iid]
-            o.tapped = False; o.controller = seat; o.entered_this_turn = False
-            g.players[seat].battlefield.append(iid)
-
         for _ in range(P2_LANDS):                  # the bot: 10 random untapped lands, empty hand
-            put_land("p2")
-        g.players["p2"].hand = []
+            put_battlefield(g, "p2", lands.pop())
         for _ in range(P1_LANDS):                  # the agent: ample mana to answer the threat
-            put_land("p1")
+            put_battlefield(g, "p1", lands.pop())
         if self.RANDOM_HAND:
             # variant: a RANDOM 7-card grip (no curated answers) — does the agent
             # answer the known threat with whatever it happens to hold?
@@ -100,35 +90,35 @@ class KnownThreatScenario(Scenario):
             rest = leftover
         else:
             hand = []                              # curated grip: a counter + manipulation + filler
-            if tools:
-                hand.append(tools.pop())
-            if manip:
-                hand.append(manip.pop())
+            assert tools and manip, "known_threat: curated grip needs a counter + manipulation"
+            hand.append(tools.pop())
+            hand.append(manip.pop())
             while len(hand) < P1_HAND and other:
                 hand.append(other.pop())
             rest = lands + tools + manip + other     # leftover lands stay in the library
         for iid in hand:
-            g.objects[iid].controller = "p1"
-        g.players["p1"].hand = hand
-        # library: the threat on TOP, the rest below
+            put_hand(g, "p1", iid)
+        assert len(g.players["p1"].hand) == P1_HAND, "known_threat: short grip"
+        # library: the threat on TOP (the SLOT known to p1 — that is what the obs
+        # encoder's library visibility reads), the rest below, all unknown
         rng.shuffle(rest)
-        g.library = [LibrarySlot(instance_id=threat, known_by={"p1": True, "p2": False})]
-        g.library += [LibrarySlot(instance_id=iid, known_by={"p1": False, "p2": False})
-                      for iid in rest]
-        g.graveyard = []
+        rebuild_library(g, rest, top=threat, top_known_by=("p1",))
 
     def on_reset(self, env) -> None:
-        env.scn_ctx["p2_seen"] = False
+        env.scn_ctx["turn0"] = env.g.turn_number   # the agent's turn at scenario start
 
     def terminator(self, env):
         g = env.g
-        c = env.scn_ctx
         if len(g.players["p2"].hand) > 2:          # bot gained card advantage -> loss
             return "p2"
-        if g.active_player == "p2":
-            c["p2_seen"] = True
-        if c["p2_seen"] and g.active_player == "p1":  # bot's turn ended with hand <=2 -> denied
-            return "p1"
+        # `turn_number` increments once per PLAYER-turn (engine._begin_turn), so the
+        # bot's turn is turn0+1 and it has FULLY passed once the count reaches
+        # turn0+2 with the agent active again. Counting turns (rather than sampling
+        # `active_player` at agent decision points) is robust to a bot turn that
+        # contains no agent decision at all — with default stops the engine
+        # fast-forwards straight through such a turn between checks.
+        if g.active_player == "p1" and g.turn_number >= env.scn_ctx["turn0"] + 2:
+            return "p1"                            # bot's turn ended with hand <=2 -> denied
         return None
 
 

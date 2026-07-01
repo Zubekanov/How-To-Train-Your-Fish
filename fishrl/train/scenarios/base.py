@@ -3,15 +3,21 @@
 A Scenario shapes the INITIAL-STATE DISTRIBUTION (which states the agent practices
 from) and the TERMINATION/win-condition — never the reward type. Reward stays
 terminal ±1 (the env applies it from `terminator`'s result). Each scenario:
-  * `predicate(env)`   — when (during pool building) a state is a valid start-state.
-  * `on_reset(env)`    — capture scenario-start references into `env.scn_ctx`.
-  * `terminator(env)`  — return 'p1'/'p2'/'draw' to end early (terminal win/loss),
-                         or None to keep playing (natural game-end still applies).
-The pool is built lazily on first `sample` and cached on the instance.
+  * `predicate(env)`    — when (during pool building) a state is a valid start-state.
+  * `_manufacture(g, rng)` — (optional) rewrite the sampled snapshot in place into
+                          the scenario's constructed start-state (state surgery).
+  * `on_reset(env)`     — capture scenario-start references into `env.scn_ctx`.
+  * `terminator(env)`   — return 'p1'/'p2'/'draw' to end early (terminal win/loss),
+                          or None to keep playing (natural game-end still applies).
+The pool is built lazily on first `sample` and cached on the instance. `sample` is
+a template method: deep-copy a pool state, `_manufacture` it, then hand
+`engine_seat` (if set) to the engine's heuristic AI.
 """
 from __future__ import annotations
 
 import copy
+
+from fishrl.train.scenarios.surgery import make_engine_heuristic
 
 
 class Scenario:
@@ -21,6 +27,9 @@ class Scenario:
     pool_seed = 12345
     pool_max_games = 6000
     pool_max_decisions = 400
+    # Seat handed to the engine's heuristic AI after `_manufacture` (None: both
+    # seats stay learner-controlled — the base self-play contract).
+    engine_seat: str | None = None
 
     def __init__(self):
         self._pool = None
@@ -29,6 +38,9 @@ class Scenario:
     # ── to override ──────────────────────────────────────────────────────────
     def predicate(self, env) -> bool:
         raise NotImplementedError
+
+    def _manufacture(self, g, rng) -> None:
+        """Rewrite the sampled snapshot in place. Base: no-op (snapshot as-is)."""
 
     def on_reset(self, env) -> None:
         pass
@@ -50,6 +62,11 @@ class Scenario:
         return len(self._pool)
 
     def sample(self, rng):
-        """A fresh (deep-copied, independently mutable) start-state from the pool."""
+        """A fresh (deep-copied, independently mutable) start-state from the pool,
+        `_manufacture`d, with `engine_seat` (if any) handed to the heuristic AI."""
         self.ensure_pool()
-        return copy.deepcopy(self._pool[int(rng.integers(len(self._pool)))])
+        g = copy.deepcopy(self._pool[int(rng.integers(len(self._pool)))])
+        self._manufacture(g, rng)
+        if self.engine_seat is not None:
+            make_engine_heuristic(g, self.engine_seat)
+        return g

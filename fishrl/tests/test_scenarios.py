@@ -58,12 +58,21 @@ def test_base_env_terminal_override_is_none_and_winner_matches():
 
 # ── pools build from real play and every state satisfies the predicate ───────
 @pytest.mark.parametrize("scn_cls", [BoardPresenceScenario, DeckoutScenario,
-                                     SurviveLethalScenario, SurviveLethalVisionScenario])
+                                     SurviveLethalScenario, SurviveLethalVisionScenario,
+                                     KnownThreatScenario, KnownThreatRandomScenario])
 def test_pool_builds_and_states_match_predicate(scn_cls):
     scn = _small(scn_cls)
     assert scn.ensure_pool() >= 1
     for g in scn._pool:
         assert scn.predicate(SimpleNamespace(g=g))
+
+
+def _accounted(g) -> int:
+    """Instances reachable across every zone — must equal len(g.objects) if the
+    manufacture drops nothing."""
+    return (len(g.library) + len(g.graveyard) + len(g.exile) + len(g.stack)
+            + sum(len(g.players[p].hand) + len(g.players[p].battlefield)
+                  for p in ("p1", "p2")))
 
 
 # ── free-attack hard rule (env-level, all training): short declare -> loss ────
@@ -190,6 +199,8 @@ def test_known_threat_manufacture():
     # the threat on top, the agent holding its counter (curated grip)
     assert g.objects[g.library[0].instance_id].name == THREAT
     assert any(g.objects[i].name == TOOL for i in g.players["p1"].hand)
+    # nothing is dropped: every instance is accounted for across the zones
+    assert _accounted(g) == len(g.objects)
 
 
 def test_known_threat_random_manufacture():
@@ -242,9 +253,11 @@ def test_board_presence_manufacture_and_resolves():
     assert sum(E._is_creature(g.objects[s.instance_id]) for s in g.library) == 0  # creatureless deck
     # no cards are dropped: leftover lands stay in the library, so every instance
     # is accounted for across the zones (only creatures leave, to exile).
-    accounted = (len(g.library) + len(g.graveyard) + len(g.exile) + len(g.stack)
-                 + sum(len(g.players[p].hand) + len(g.players[p].battlefield) for p in ("p1", "p2")))
-    assert accounted == len(g.objects)
+    assert _accounted(g) == len(g.objects)
+    # both seats keep an Island-TYPED land, so neither Dandân is state-sacrificed
+    for seat in ("p1", "p2"):
+        assert any("Island" in (g.objects[i].type_line or "")
+                   for i in g.players[seat].battlefield)
     winners = []
     base_types = set()
     for s in range(6):
@@ -284,6 +297,7 @@ def test_deckout_manufacture_and_resolves():
         assert len(g.players["p1"].hand) == 7 and len(g.players["p2"].hand) == 7  # 7-card hands
         assert len(g.library) <= 40                  # ~40-card library (rest in graveyard)
         assert _all_creatures(g) == 0                # truly creatureless: every zone
+        assert _accounted(g) == len(g.objects)       # nothing dropped across the zones
     env = ScenarioEnv(scn, max_decisions=1500)
     env.reset(seed=0)
     _play_random(env, np.random.default_rng(0))
@@ -321,14 +335,12 @@ def test_survive_lethal_manufacture():
     # the eligible-attacker rule agrees: with the agent on an Island the Dandâns can swing
     assert E._eligible_attackers(g, "p2"), "Dandâns should be able to attack a defender with an Island"
     # nothing is dropped: every instance is accounted for across the zones
-    accounted = (len(g.library) + len(g.graveyard) + len(g.exile) + len(g.stack)
-                 + sum(len(g.players[p].hand) + len(g.players[p].battlefield) for p in ("p1", "p2")))
-    assert accounted == len(g.objects)
+    assert _accounted(g) == len(g.objects)
 
 
 def test_survive_lethal_passive_agent_dies_to_the_swing():
     # An agent that just passes keeps its Island, so the heuristic finds the lethal
-    # Dandân attack: the natural result is a p2 win for most seeds.
+    # Dandân attack: the natural result is a p2 win for a solid majority of seeds.
     scn = _small(SurviveLethalScenario)
     winners = []
     for s in range(8):
@@ -337,7 +349,8 @@ def test_survive_lethal_passive_agent_dies_to_the_swing():
         _play_passive(env)
         winners.append(env.winner)
     assert all(w in ("p1", "p2", None) for w in winners)
-    assert winners.count("p2") >= 1, "a passive agent on 4 life should die to the Dandân swing"
+    assert winners.count("p2") >= 6, \
+        f"a passive agent on 4 life should die to the Dandân swing (winners: {winners})"
 
 
 def _play_passive(env, max_steps=5000):
@@ -376,6 +389,102 @@ def test_survive_lethal_vision_grip_holds_the_answer():
         assert E._eligible_attackers(g, "p2")           # the swing is live by default
         # {U} is payable: the agent controls an Island to cast the charm from
         assert any("Island" in (g.objects[i].type_line or "") for i in g.players["p1"].battlefield)
+
+
+def _drive_vision_answer(env, max_steps=800):
+    """Scripted success line for survive_lethal_vision: cast the held Vision Charm in
+    its LAND mode (PLAY_HAND_ALT), pay {U} by tapping a land, choose Island -> Plains
+    at resolution (every Island loses the type, so the bot's Dandâns are
+    state-sacrificed), then PASS everywhere."""
+    cast = False
+    n = 0
+    while env.agents and n < max_steps:
+        n += 1
+        s = env.agent_selection
+        if env.terminations[s] or env.truncations[s]:
+            env.step(None)
+            continue
+        ls = _legal(env)
+        if ls.size == 0:
+            env.step(None)
+            continue
+        g = env.g
+        act = None
+        if s == "p1" and g.pending is not None:
+            t = g.pending.type
+            if t == "priority" and not cast:
+                vc = next((i for i, iid in enumerate(g.players["p1"].hand)
+                           if g.objects[iid].name == VISION), None)
+                if vc is not None:
+                    cand = [x for x in ls if A.decode(int(x)) == ("PLAY_HAND_ALT", vc)]
+                    if cand:
+                        act, cast = int(cand[0]), True
+            elif t == "pay":
+                pays = [x for x in ls if A.decode(int(x))[0] in ("TAP_LAND", "ALLOC_MANA")]
+                if pays:
+                    act = int(pays[0])
+            elif t == "choose_text_change":
+                li = A.BASICS.index("Island") * len(A.BASICS) + A.BASICS.index("Plains")
+                want = A.aid("TEXT_CHANGE", li)
+                if want in ls:
+                    act = want
+        if act is None:
+            passes = [x for x in ls if A.decode(int(x))[0] == "PASS"]
+            act = int(passes[0]) if passes else int(ls[0])
+        env.step(act)
+    return n
+
+
+def test_survive_lethal_vision_scripted_answer_credits_win_on_time():
+    """The success path END-TO-END: the charm answers the Dandâns, and the win must
+    be credited the moment the bot's (possibly agent-decision-free) turn has passed
+    — i.e. by turn0 + 2 on the engine's per-player-turn counter. A terminator that
+    only samples `active_player` at p1 decision points misses a bot turn in which
+    the bot just draws a land (no p1 stop), credits the win turns late, and can even
+    flip it to a loss if the bot draws a fresh Dandân meanwhile."""
+    scn = _small(SurviveLethalVisionScenario)
+    for s in range(6):
+        env = ScenarioEnv(scn, max_decisions=800)
+        env.reset(seed=s)
+        turn0 = env.scn_ctx["turn0"]
+        _drive_vision_answer(env)
+        assert env.winner == "p1", f"seed {s}: the scripted Vision Charm answer should win"
+        assert env.g.turn_number <= turn0 + 2, (
+            f"seed {s}: win credited late (turn {env.g.turn_number} > {turn0 + 2}) — "
+            "the terminator must count the bot's turn even when it contains no p1 decision")
+
+
+# ── determinism: same reset seed -> byte-identical start-state ────────────────
+def test_scenario_reset_is_deterministic():
+    scn = _small(SurviveLethalScenario)
+    a = ScenarioEnv(scn, max_decisions=800); a.reset(seed=11)
+    b = ScenarioEnv(scn, max_decisions=800); b.reset(seed=11)
+    for seat in ("p1", "p2"):
+        assert a.g.players[seat].battlefield == b.g.players[seat].battlefield
+        assert a.g.players[seat].hand == b.g.players[seat].hand
+    assert ([s.instance_id for s in a.g.library]
+            == [s.instance_id for s in b.g.library])
+
+
+# ── manufactured states carry no stale per-card state ────────────────────────
+@pytest.mark.parametrize("scn_cls", [KnownThreatScenario, BoardPresenceScenario,
+                                     DeckoutScenario, SurviveLethalScenario])
+def test_manufactured_states_are_scrubbed(scn_cls):
+    scn = _small(scn_cls)
+    env = ScenarioEnv(scn, max_decisions=800)
+    env.reset(seed=2)
+    g = env.g
+    for o in g.objects.values():
+        assert not o.known_by, f"stale card-level knowledge on {o.name}"
+        assert o.damage_marked == 0, f"stale damage on {o.name}"
+        assert not o.counters, f"stale counters on {o.name}"
+        assert not o.text_changes and not o.text_orig, f"stale text change on {o.name}"
+    if scn_cls is KnownThreatScenario:
+        # the deliberate "threat on top is known" mechanic is SLOT-level knowledge
+        # (what the obs encoder reads for the library) and must survive the scrub
+        assert g.library[0].known_by == {"p1": True, "p2": False}
+        assert all(not s.known_by.get("p1") and not s.known_by.get("p2")
+                   for s in g.library[1:])
 
 
 # ── registry / weighted sampling ─────────────────────────────────────────────

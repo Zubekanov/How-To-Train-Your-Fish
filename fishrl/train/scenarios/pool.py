@@ -19,7 +19,11 @@ def build_snapshots(predicate, n: int, seed: int = 0, max_games: int = 6000,
                     max_decisions: int = 400, per_game_cap: int = 3):
     """Random self-play until `n` states satisfy `predicate(env)` (or `max_games`
     exhausted). Returns (states, games_played). `per_game_cap` limits snapshots per
-    game so the pool isn't dominated by one long correlated rollout."""
+    game so the pool isn't dominated by one long correlated rollout, and at most ONE
+    snapshot is taken per (game, turn) — consecutive qualifying decision points within
+    a turn are near-identical states, so the cap is spread across the game instead.
+    Deterministic: predicate/snapshotting never touches `rng`, so the same seed
+    replays the same rollouts and freezes the same states."""
     rng = np.random.default_rng(seed)
     out: list = []
     gi = 0
@@ -28,6 +32,7 @@ def build_snapshots(predicate, n: int, seed: int = 0, max_games: int = 6000,
         env.reset(seed=seed * 1_000_003 + gi)
         gi += 1
         taken = 0
+        taken_turns: set = set()
         guard = 0
         while env.agents and guard < max_decisions * 6 and len(out) < n:
             guard += 1
@@ -35,9 +40,11 @@ def build_snapshots(predicate, n: int, seed: int = 0, max_games: int = 6000,
             if env.terminations[s] or env.truncations[s]:
                 env.step(None)
                 continue
-            if taken < per_game_cap and predicate(env):
+            if (taken < per_game_cap and env.g.turn_number not in taken_turns
+                    and predicate(env)):
                 out.append(copy.deepcopy(env.g))
                 taken += 1
+                taken_turns.add(env.g.turn_number)
             mask = env.observe(s)["action_mask"]
             legal = np.flatnonzero(mask)
             if legal.size == 0:

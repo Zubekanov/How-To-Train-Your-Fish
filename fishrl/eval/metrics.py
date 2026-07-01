@@ -4,6 +4,11 @@ The privileged estimator (full info) should be better-calibrated than the public
 one; the policy's win-rate vs the random and heuristic baselines should rise with
 training. Evaluation runs the actor through the belief augmentation so its inputs
 match training time.
+
+Draw convention: every win-rate here counts a drawn or decision-cap-truncated game
+as a LOSS for the evaluated agent (numerator = strict wins, denominator = ALL games
+played). This holds for ALL anchors — random, attacker, heuristic, AND frozen-self —
+so cross-anchor numbers are comparable and match the best.pt ratchet's semantics.
 """
 from __future__ import annotations
 
@@ -13,7 +18,16 @@ import torch
 from fishrl.models import device_of
 from fishrl.obs import vocab as V
 from fishrl.train.belief_env import BeliefAugmentedEnv
-from fishrl.train.collector import actor_act_fn, collect_games, random_act_fn
+from fishrl.train.collector import actor_act_fn, collect_games
+
+# Deliberate policy: evaluation runs WITHOUT enforce_free_attack. That flag is a
+# TRAIN-TIME shaping rule (Config.enforce_free_attack, threaded into the collector's
+# envs); eval measures the policy under the plain game rules. The FishAEC /
+# BeliefAugmentedEnv instances built here rely on the constructor default
+# enforce_free_attack=False (HeuristicMatch has no such knob — it is always plain
+# rules). If that default ever flips, eval must start passing
+# enforce_free_attack=False explicitly — do not let train-time shaping leak into the
+# gate metric.
 
 
 def collect_eval_batch(models, n_games=8, seed=10_000, max_decisions=2000):
@@ -175,13 +189,13 @@ def winrate_vs_frozen(models, frozen, n_games=40, seed=500_000, max_decisions=20
                       use_belief=True, frozen_use_belief=True) -> float:
     """Seat-balanced win-rate of `models` vs a frozen snapshot `frozen` (a Models-like
     holder with `.actor`/`.guesser`) — the agent against an earlier self. Half the games
-    with `models` as p1, half as p2, to cancel first-player bias; ties are dropped."""
+    with `models` as p1, half as p2, to cancel first-player bias. Draws/truncations
+    count as losses for `models` (the module-wide convention — see the docstring), so
+    this number is comparable with the other anchors and the best.pt ratchet."""
     half = max(1, n_games // 2)
-    mw1, fw1 = _match_models(models, use_belief, frozen, frozen_use_belief, half, seed, max_decisions)
-    fw2, mw2 = _match_models(frozen, frozen_use_belief, models, use_belief, half, seed + 10_000, max_decisions)
-    mw = mw1 + mw2
-    dec = mw1 + fw1 + fw2 + mw2
-    return mw / dec if dec else 0.5
+    mw1, _fw1 = _match_models(models, use_belief, frozen, frozen_use_belief, half, seed, max_decisions)
+    _fw2, mw2 = _match_models(frozen, frozen_use_belief, models, use_belief, half, seed + 10_000, max_decisions)
+    return (mw1 + mw2) / (2 * half)
 
 
 def panel_winrates(models, frozen=None, n_games=30, max_decisions=2000,

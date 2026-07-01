@@ -189,7 +189,18 @@ def _priority_mask(g, viewer: str, m) -> None:
 
 def _pay_mask(g, viewer: str, ctx: dict, m) -> None:
     """Offer only payment actions that keep the cost completable — never a tap that
-    would strand the payment (there is no CANCEL_PAY to bail out)."""
+    would strand the payment (there is no CANCEL_PAY to bail out).
+
+    The rule is per-OPTION completability: an option is offered iff floating mana +
+    THIS option's mana + every OTHER untapped source at its MAX covers the remaining
+    cost. That preserves the anti-stall guarantee — taking an offered option leaves a
+    remainder that is still affordable from floating + remaining sources at max, and
+    in any affordable state each remaining source's MAX option passes this very test
+    (this-at-max + others-at-max IS the affordability pool), so the mask can never go
+    empty mid-payment. But unlike the old "required source -> only its MAX option"
+    rule, it does not over-force: with Svyelunite Temple + Island paying {U}{U}, the
+    Temple is required, yet its tap-for-one still completes (1 + the Island's 1), so
+    the agent may tap instead of being forced into an unnecessary sacrifice."""
     need = ctx.get("need", {})
     generic = ctx.get("generic", 0)
     source = ctx.get("source")
@@ -203,11 +214,14 @@ def _pay_mask(g, viewer: str, ctx: dict, m) -> None:
     def can_pay(sym: str) -> bool:
         return need.get(sym, 0) > 0 or generic > 0
 
-    def others_cover(skip_iid) -> bool:
-        """Can the remaining cost be paid WITHOUT this source (others at max)?"""
+    def completable(this_iid, this_sym: str, this_amt: int) -> bool:
+        """Can the remaining cost be paid from floating + THIS option's mana + every
+        OTHER source at max? (This option taps its source, so the source's other —
+        possibly larger — options are forgone.)"""
         pool = dict(floating)
+        pool[this_sym] = pool.get(this_sym, 0) + this_amt
         for iid, (sym, amt) in src_max.items():
-            if iid == skip_iid:
+            if iid == this_iid:
                 continue
             pool[sym] = pool.get(sym, 0) + amt
         return E._can_afford(pool, need, generic)
@@ -215,8 +229,8 @@ def _pay_mask(g, viewer: str, ctx: dict, m) -> None:
     for iid, action, sym, amt in opts:
         if not can_pay(sym):                            # this mana can't pay anything left
             continue
-        if not others_cover(iid) and amt < src_max[iid][1]:
-            continue                                    # source is required -> only its MAX option
+        if not completable(iid, sym, amt):
+            continue                                    # this option would strand the payment
         i = idx_of.get(iid)
         if i is None or i >= A.BF:
             continue

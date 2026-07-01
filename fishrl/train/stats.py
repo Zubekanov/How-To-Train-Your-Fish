@@ -95,7 +95,10 @@ def merge(ckpt_dir: str, reports=None, evals=None, key: str = "it",
       * for each surviving row, fill any field named in ``fill`` that is missing/``None`` from the
         incoming row of the same ``key`` (so columns added later -- e.g. the opponent mix -- can be
         back-populated onto pre-existing rows without overwriting anything already set);
-      * add the caller's rows that are not already present (deduped by ``key``, existing wins);
+      * add the caller's rows that are not already present, existing wins. Reports dedupe on
+        ``key`` alone; evals dedupe on ``(key, wall_time)`` -- the eval service can legitimately
+        re-score the same iteration at a later time (e.g. after a restart), and both datapoints
+        are wanted. Duplicates WITHIN the incoming batch are dropped the same way;
       * sort by ``key``.
 
     Runs under the same lock + atomic write as the appenders, so it is safe to call while the
@@ -124,8 +127,16 @@ def merge(ckpt_dir: str, reports=None, evals=None, key: str = "it",
                             r[f] = src[f]
                             touched = True
                     filled += touched
-            have = {r.get(key) for r in kept}
-            fresh = [r for r in new if r.get(key) not in have]
+            def dk(r):     # evals: (it, wall_time) -- same-it re-evals at a new time are kept
+                return (r.get(key), r.get("wall_time")) if name == "evals" else r.get(key)
+
+            have = {dk(r) for r in kept}
+            fresh = []
+            for r in new:                # extend `have` as we add: in-batch dupes drop too
+                k = dk(r)
+                if k not in have:
+                    have.add(k)
+                    fresh.append(r)
             kept.extend(fresh)
             kept.sort(key=lambda r: (r.get(key) is None, r.get(key)))
             d[name] = kept

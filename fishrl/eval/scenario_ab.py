@@ -21,7 +21,7 @@ import shutil
 from fishrl.eval.metrics import winrate_vs_heuristic
 from fishrl.train import checkpoint as ckpt
 from fishrl.train.config import Config, resolve_device
-from fishrl.train.train_loop import build_models, train
+from fishrl.train.train_loop import Models, build_models, train
 
 NETS = ("actor", "critic", "guesser", "public")
 
@@ -37,7 +37,7 @@ def _cfg_from_base(base: str, device: str, **over) -> Config:
 
 
 def _run_branch(name, base, out_dir, device, iters, scenario_frac,
-                report_every_seconds) -> float:
+                report_every_seconds) -> Models:
     bdir = os.path.join(out_dir, name)
     os.makedirs(bdir, exist_ok=True)
     latest = ckpt.latest_path(bdir)
@@ -69,15 +69,20 @@ def main():
     device = resolve_device(args.gpu)
     os.makedirs(args.out_dir, exist_ok=True)
     eseed = 900_000                              # fixed eval seed -> comparable across branches
+    # Evaluate with the settings the base checkpoint resolves to (a belief-off base must
+    # be scored belief-off — defaulting use_belief=True would feed a stale guesser).
+    ecfg = _cfg_from_base(args.base_ckpt, device)
+    ekw = dict(n_games=args.eval_games, seed=eseed,
+               max_decisions=ecfg.max_decisions, use_belief=ecfg.use_belief)
 
     control = _run_branch("control", args.base_ckpt, args.out_dir, device,
                           args.iters, 0.0, args.report_every_seconds)
-    wr_ctrl = winrate_vs_heuristic(control, n_games=args.eval_games, seed=eseed)
+    wr_ctrl = winrate_vs_heuristic(control, **ekw)
     print(f"[control] vs-heuristic WR = {wr_ctrl:.3f} (n={args.eval_games})", flush=True)
 
     treatment = _run_branch("treatment", args.base_ckpt, args.out_dir, device,
                             args.iters, args.scenario_frac, args.report_every_seconds)
-    wr_treat = winrate_vs_heuristic(treatment, n_games=args.eval_games, seed=eseed)
+    wr_treat = winrate_vs_heuristic(treatment, **ekw)
     print(f"[treatment] vs-heuristic WR = {wr_treat:.3f} (n={args.eval_games})", flush=True)
 
     print("\n==== SCENARIO A/B (vs-heuristic win-rate is the gate) ====")

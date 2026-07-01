@@ -113,6 +113,36 @@ def test_pay_mask_no_strand_offers_only_the_sacrifice():
     assert m[A.aid("CANCEL_PAY")] == 0
 
 
+def test_pay_mask_required_source_may_use_smaller_option():
+    """Per-option completability: Svyelunite Temple + Island paying {U}{U}. The Temple
+    is REQUIRED (the Island alone can't cover {U}{U}), but its tap-for-one option still
+    completes the cost (its 1 + the Island's 1 = {U}{U}), so it must be offered — the
+    old required->MAX rule suppressed it and forced an unnecessary sacrifice the policy
+    could never learn around."""
+    g = _game()
+    _put(g, "Svyelunite Temple", "Land")             # slot 0: {T}:U  OR  {T},Sac:UU
+    _put(g, "Island", "Basic Land - Island")         # slot 1: {U}
+    _pay_pending(g, {"U": 2}, 0)
+    m = M.atomic_mask(g, "p1")
+    assert m[A.aid("TAP_LAND", 0)] == 1              # Temple tap-for-one: completable now
+    assert m[A.aid("ACTIVATE", 0)] == 1              # same option via the ability menu
+    assert m[A.aid("ACTIVATE", 1)] == 1              # the sacrifice stays on offer too
+    assert m[A.aid("TAP_LAND", 1)] == 1              # and the Island
+
+
+def test_pay_mask_sole_temple_paying_uu_still_forces_sacrifice():
+    """Sole-source case: Temple alone paying {U}{U}. Tap-for-one strands (no other
+    source can add the second {U}), so only the sacrifice may be offered — the
+    per-option rule must not be MORE permissive than the anti-stall invariant allows."""
+    g = _game()
+    _put(g, "Svyelunite Temple", "Land")
+    _pay_pending(g, {"U": 2}, 0)
+    m = M.atomic_mask(g, "p1")
+    assert m[A.aid("ACTIVATE", 1)] == 1              # {T},Sac:UU completes
+    assert m[A.aid("ACTIVATE", 0)] == 0              # tap-for-one would strand
+    assert m[A.aid("TAP_LAND", 0)] == 0
+
+
 def test_pay_mask_two_islands_both_tappable():
     g = _game()
     _put(g, "Island", "Basic Land - Island")

@@ -168,6 +168,10 @@ def train(cfg: Config, models: Models | None = None, log=print,
             "optim": {"ppo": opt_ppo.state_dict(), "g": opt_g.state_dict(),
                       "p": opt_p.state_dict()},
             "rng": _rng_state(cfg.device),
+            # League continuity across restarts: member EMAs + the past-self ring.
+            # Absent in pre-persistence checkpoints (resume tolerates that).
+            "league": league.state_dict(),
+            "scen_league": scen_league.state_dict() if scen_league is not None else None,
         }
 
     def _checkpoint(milestone: bool = False) -> None:
@@ -324,7 +328,19 @@ def train(cfg: Config, models: Models | None = None, log=print,
             frozen_it = int(payload.get("frozen_it", done))
             elapsed_offset = float(payload.get("elapsed", 0.0))
             _set_rng_state(payload["rng"])
-            log(f"[resume] from {resume_path} at it={done} (elapsed {elapsed_offset / 3600.0:.2f}h)")
+            # Restore league continuity (EMA win-rates + past-self ring). Older
+            # checkpoints carry no league keys -> fresh leagues, the old behaviour.
+            def _opponent_nets():
+                actor = MaskedActor(cfg.hidden, cfg.enc_for("actor")).to(cfg.device)
+                guesser = HandGuesser(cfg.hidden, cfg.enc_for("guesser")).to(cfg.device)
+                return actor, guesser
+            if payload.get("league"):
+                league.load_state_dict(payload["league"], make_nets=_opponent_nets)
+            if scen_league is not None and payload.get("scen_league"):
+                scen_league.load_state_dict(payload["scen_league"])
+            n_selves = len(league.selves)
+            log(f"[resume] from {resume_path} at it={done} (elapsed {elapsed_offset / 3600.0:.2f}h, "
+                f"league selves={n_selves})")
         else:
             w = warmup(m.guesser, m.critic, m.public, cfg, seed=cfg.seed)
             log(f"[warmup] {w}")
@@ -365,7 +381,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     opp_mix["self"] += 1
                     gbuf = collect_games(benv, actor_act_fn(m.actor), 1, oseed,
                                          critic=None, max_decisions=cfg.max_decisions)
-                    buf.steps.extend(gbuf.steps)
+                    buf.merge(gbuf)
                     continue
                 opp_mix["pastself" if member.kind == "self" else member.kind] += 1
                 if member.kind == "heuristic":              # engine-driven -> learner is p1
@@ -380,11 +396,13 @@ def train(cfg: Config, models: Models | None = None, log=print,
                                                max_decisions=cfg.max_decisions,
                                                learner_seat=lseat,
                                                enforce_free_attack=cfg.enforce_free_attack)
-                if gbuf.steps:                              # update the member's learner win-rate
-                    winner = gbuf.steps[-1].winner
-                    if winner in ("p1", "p2"):
-                        league.update(member, winner == lseat)
-                buf.steps.extend(gbuf.steps)
+                # Update the member's learner win-rate from the recorded game result —
+                # buf.games counts a game even when the learner never got a decision
+                # (losing before your first priority is still a loss; skipping those
+                # biased the EMA upward exactly against fast-killing opponents).
+                if gbuf.games and gbuf.games[-1] in ("p1", "p2"):
+                    league.update(member, gbuf.games[-1] == lseat)
+                buf.merge(gbuf)
             # Scenario-seeded games: short, targeted start-states (terminal ±1 reward).
             # Reuses the self-play collector via a belief-wrapped ScenarioEnv, so the
             # transitions are identical in shape and merge into the same PPO buffer.
@@ -401,12 +419,12 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     sseed = cfg.seed + 300_000 + done * cfg.games_per_iter + sidx * 31
                     sbuf = collect_games(senv, actor_act_fn(m.actor), 1, sseed,
                                          critic=None, max_decisions=cfg.max_decisions)
-                    buf.steps.extend(sbuf.steps)
+                    buf.merge(sbuf)
                     scen_mix[sname] = scen_mix.get(sname, 0) + 1
-                    if sbuf.steps:                          # the learner is p1 (p2 is the engine bot)
-                        winner = sbuf.steps[-1].winner
-                        if winner in ("p1", "p2"):
-                            scen_league.update(member, winner == "p1")
+                    # the learner is p1 (p2 is the engine bot); count the game even if
+                    # the learner never got a decision before it ended
+                    if sbuf.games and sbuf.games[-1] in ("p1", "p2"):
+                        scen_league.update(member, sbuf.games[-1] == "p1")
             fill_critic_values(buf, m.critic)
             batch = buf.compute(cfg.gamma, cfg.lam)
             if max_seconds is not None:                  # anneal entropy over the budget
@@ -414,7 +432,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 ent = cfg.ent_start + frac * (cfg.ent_end - cfg.ent_start)
             else:
                 ent = cfg.ent_coef(done)
-            ppo_stats = ppo_update(batch, m.actor, m.critic, opt_ppo, cfg, ent)
+            ppo_stats = ppo_update(batch, m.actor, m.critic, opt_ppo, cfg, ent, rng_seed=done)
             aux_stats = aux_update(batch, m.guesser, m.public, opt_g, opt_p, cfg.aux_steps)
             for k in ("policy_loss", "critic_loss", "entropy", "approx_kl"):
                 acc[k] += ppo_stats[k]

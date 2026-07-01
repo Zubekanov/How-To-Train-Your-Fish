@@ -29,15 +29,18 @@ def seat_outcome(winner, seat: str) -> float:
     return 1.0 if winner == seat else -1.0
 
 
-def gae(values: np.ndarray, rewards: np.ndarray, gamma: float, lam: float):
-    """GAE over one seat's ordered subsequence. `values`/`rewards` are seat-frame;
-    the bootstrap value after the last decision is 0 (the game has ended).
+def gae(values: np.ndarray, rewards: np.ndarray, gamma: float, lam: float,
+        bootstrap: float = 0.0):
+    """GAE over one seat's ordered subsequence WITHIN one game. `values`/`rewards`
+    are seat-frame. `bootstrap` is the value after the last decision: 0 for a
+    finished game (the episode has ended), or the critic's estimate for a
+    TRUNCATED one (decision cap) so the cut isn't scored as a draw.
     Returns (advantages, returns)."""
     T = len(values)
     adv = np.zeros(T, dtype=np.float32)
     last = 0.0
     for t in reversed(range(T)):
-        v_next = values[t + 1] if t + 1 < T else 0.0
+        v_next = values[t + 1] if t + 1 < T else bootstrap
         delta = rewards[t] + gamma * v_next - values[t]
         last = delta + gamma * lam * last
         adv[t] = last

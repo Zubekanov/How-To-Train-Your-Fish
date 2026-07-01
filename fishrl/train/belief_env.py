@@ -24,6 +24,10 @@ class BeliefAugmentedEnv:
         self.guesser = guesser
         self.belief = belief          # when False, feed zeros for the belief channel
         self.last_guess: dict[str, np.ndarray] = {}
+        # The input the guesser consumed at each seat's latest observe() — i.e. the
+        # carried PREVIOUS guess. The collector buffers this as the training-time
+        # guesser input so training conditions on exactly what inference fed.
+        self.last_prev: dict[str, np.ndarray] = {}
 
     # ── delegated state ──────────────────────────────────────────────────────
     @property
@@ -64,6 +68,7 @@ class BeliefAugmentedEnv:
         self.env.reset(seed=seed, options=options)
         z = np.zeros(V.N_NAMES, dtype=np.float32)
         self.last_guess = {a: z.copy() for a in self.env.possible_agents}
+        self.last_prev = {a: z.copy() for a in self.env.possible_agents}
 
     def agent_iter(self, max_iter: int = 2 ** 31):
         i = 0
@@ -79,9 +84,11 @@ class BeliefAugmentedEnv:
         persp = base["observation"]
         if not self.belief:                       # ablation: no belief, no guesser forward
             z = np.zeros(V.N_NAMES, dtype=np.float32)
+            self.last_prev[agent] = z
             return {"observation": np.concatenate([persp, z]).astype(np.float32),
                     "action_mask": base["action_mask"]}
         prev = self.last_guess.get(agent, np.zeros(V.N_NAMES, dtype=np.float32))
+        self.last_prev[agent] = prev
         dev = device_of(self.guesser)
         with torch.no_grad():
             guess = self.guesser(

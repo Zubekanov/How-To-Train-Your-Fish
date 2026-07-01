@@ -112,7 +112,11 @@ def main():
     # games each). Skipped for the unbounded service, which exits via signal and shouldn't
     # spend tens of seconds on eval during shutdown.
     if cfg.iters > 0:
-        print("final win-rates:", panel_winrates(models, n_games=100), flush=True)
+        # thread the run's belief/decision settings through — a belief-off run
+        # evaluated with belief ON feeds live guesser output to an actor trained on zeros
+        print("final win-rates:",
+              panel_winrates(models, n_games=100, use_belief=cfg.use_belief,
+                             max_decisions=cfg.max_decisions), flush=True)
         print("estimators:", estimator_metrics(models, collect_eval_batch(models, n_games=8)), flush=True)
 
 

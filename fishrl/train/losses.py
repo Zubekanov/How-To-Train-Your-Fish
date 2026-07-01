@@ -7,7 +7,7 @@ import torch.nn.functional as Fn
 from fishrl.models.policy import MaskedActor
 
 
-def ppo_actor_loss(logp_all, mask, action, old_logp, adv, clip):
+def ppo_actor_loss(logp_all, action, old_logp, adv, clip):
     """Masked PPO clip objective + mean entropy (over legal actions)."""
     logp = logp_all.gather(-1, action.unsqueeze(-1)).squeeze(-1)
     ratio = torch.exp(logp - old_logp)

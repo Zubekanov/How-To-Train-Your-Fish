@@ -8,15 +8,17 @@ from fishrl.models import device_of
 from fishrl.train.losses import guesser_poisson, outcome_bce, ppo_actor_loss
 
 
-def ppo_update(batch, actor, critic, opt, cfg, ent_coef) -> dict:
+def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0) -> dict:
     """K-epoch minibatched PPO over the actor and the privileged critic.
 
     The rollout batch lives on CPU (collection is CPU-bound); each minibatch is
-    moved to the model's device for the update."""
+    moved to the model's device for the update. `rng_seed` varies the minibatch
+    shuffle per call (the trainer passes the iteration counter) — a fixed stream
+    would replay the identical permutation every update."""
     dev = device_of(actor)
     M = batch["x_act"].shape[0]
     idx = np.arange(M)
-    rng = np.random.default_rng(0)
+    rng = np.random.default_rng(rng_seed)
     stats = {"policy_loss": 0.0, "critic_loss": 0.0, "entropy": 0.0, "approx_kl": 0.0, "n": 0}
     for _ in range(cfg.ppo_epochs):
         rng.shuffle(idx)
@@ -24,7 +26,7 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef) -> dict:
             mb = idx[s:s + cfg.minibatch]
             logp_all = actor.log_probs(batch["x_act"][mb].to(dev), batch["mask"][mb].to(dev))
             ploss, ent, kl = ppo_actor_loss(
-                logp_all, batch["mask"][mb].to(dev), batch["action"][mb].to(dev),
+                logp_all, batch["action"][mb].to(dev),
                 batch["old_logp"][mb].to(dev), batch["adv"][mb].to(dev), cfg.clip)
             critic_logit = critic(batch["god"][mb].to(dev))
             closs = outcome_bce(critic_logit, batch["y_p1"][mb].to(dev), batch["valid"][mb].to(dev))

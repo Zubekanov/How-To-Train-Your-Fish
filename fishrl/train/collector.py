@@ -47,6 +47,24 @@ def actor_act_fn(actor):
     return act
 
 
+def _stamp_game(buf: RolloutBuffer, start: int, winner, truncated: bool = False) -> None:
+    """Back-fill one finished game's outcome onto its steps and register the game.
+
+    Every step gets the winner label plus a buffer-local game_id so GAE segments
+    per game (never bootstrapping across a boundary), and `truncated` marks a
+    decision-cap cut (winner None but not a decided draw) so the advantage tail
+    bootstraps from the critic instead of scoring the cut as a draw. The winner is
+    ALSO recorded in `buf.games` even when the game produced zero learner steps —
+    league win-rate updates must count games the learner lost before its first
+    decision."""
+    gid = len(buf.games)
+    for i in range(start, len(buf.steps)):
+        buf.steps[i].winner = winner
+        buf.steps[i].game_id = gid
+        buf.steps[i].truncated = truncated
+    buf.games.append(winner)
+
+
 def fill_critic_values(buf: RolloutBuffer, critic, batch: int = 8192) -> None:
     """Batched post-collection value pass for the privileged critic.
 
@@ -125,14 +143,14 @@ def collect_heuristic_games(guesser, actor, n_games, base_seed, critic=None,
                 seat=SEAT, x_act=x_act,
                 mask=mask.astype(np.int8), action=action, logp=logp,
                 value=0.0, god_feat=god, pub_feat=pub,
-                guess_in=guess.astype(np.float32),
+                guess_in=prev_guess.astype(np.float32),   # the guesser's INPUT (carried prev)
                 cnt_target=opponent_hand_counts(g, SEAT),
             ))
             prev_guess = guess
             obs, _reward, done, _info = match.step(action)
         winner = match.g.result.get("winner")
-        for i in range(start, len(buf)):
-            buf.steps[i].winner = winner
+        _stamp_game(buf, start, winner,
+                    truncated=winner is None and match.g.result.get("status") == "ongoing")
     if critic is not None:
         fill_critic_values(buf, critic)
     return buf
@@ -211,8 +229,9 @@ def collect_vs_opponent(learner, opponent, n_games, base_seed, critic=None,
                     god, pub = cache_god, cache_pub
                 else:                                      # frozen state (compound sub-step)
                     god, pub = cache_god.copy(), cache_pub.copy()
+                prev_in = prev[seat]
                 if use_belief:
-                    guess = _belief_guess(learner.guesser, persp, prev[seat], ldev)
+                    guess = _belief_guess(learner.guesser, persp, prev_in, ldev)
                     prev[seat] = guess
                 else:
                     guess = zeros.copy()
@@ -222,7 +241,7 @@ def collect_vs_opponent(learner, opponent, n_games, base_seed, critic=None,
                     seat=seat, x_act=x_act,
                     mask=mask.astype(np.int8), action=action, logp=logp,
                     value=0.0, god_feat=god, pub_feat=pub,
-                    guess_in=guess.astype(np.float32),
+                    guess_in=prev_in.astype(np.float32),   # the guesser's INPUT (carried prev)
                     cnt_target=opponent_hand_counts(g, seat),
                 ))
             elif kind == "random":
@@ -240,9 +259,12 @@ def collect_vs_opponent(learner, opponent, n_games, base_seed, critic=None,
                 with torch.no_grad():
                     action = int(torch.multinomial(opp_actor.log_probs(ox, om)[0].exp(), 1))
             env.step(action)
-        winner = env.g.result.get("winner")
-        for i in range(start, len(buf)):
-            buf.steps[i].winner = winner
+        # env.winner, NOT g.result: a game ended by the free-attack hard rule (or any
+        # terminal override) records its verdict only on the env — g.result stays
+        # "ongoing" and would mislabel a decided game as winner=None.
+        winner = env.winner
+        _stamp_game(buf, start, winner,
+                    truncated=winner is None and env.g.result.get("status") == "ongoing")
     if critic is not None:
         fill_critic_values(buf, critic)
     return buf
@@ -277,13 +299,15 @@ def collect_games(belief_env, act_fn, n_games, base_seed, critic=None,
                 seat=agent, x_act=x.astype(np.float32),
                 mask=obs["action_mask"].astype(np.int8), action=action, logp=logp,
                 value=0.0, god_feat=god, pub_feat=pub,
-                guess_in=x[OBS_DIM:].astype(np.float32),
+                # the guesser's INPUT at this observe (the seat's carried previous
+                # guess) — its output is x[OBS_DIM:], already inside x_act
+                guess_in=belief_env.last_prev[agent].astype(np.float32),
                 cnt_target=opponent_hand_counts(g, agent),
             ))
             belief_env.step(action)
         winner = belief_env.winner            # scenario terminator result, or engine winner
-        for i in range(start, len(buf)):
-            buf.steps[i].winner = winner
+        _stamp_game(buf, start, winner,
+                    truncated=winner is None and belief_env.g.result.get("status") == "ongoing")
     if critic is not None:
         fill_critic_values(buf, critic)            # batched, off the per-decision path
     return buf

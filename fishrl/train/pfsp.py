@@ -17,9 +17,11 @@ learner stops wasting games on them but never drops them entirely.
 
 The collection of a single pool game lives in the collector
 (``collect_vs_opponent`` / ``collect_heuristic_games``); this module owns only the
-membership, sampling, and win-rate bookkeeping. Everything here is in-memory and
-launch-time -- nothing is serialized into the checkpoint, so resume is unaffected
-(the past-self ring simply refills over the first few reports after a restart).
+membership, sampling, and win-rate bookkeeping. League state (member win-rate EMAs
++ the past-self ring's weights) IS serialized into the checkpoint via
+``state_dict``/``load_state_dict`` -- without it, every service restart reset the
+EMAs to 0.5 and emptied the ring for ~league_size reports, skewing both the
+training distribution and the PFSP telemetry across restart seams.
 """
 from __future__ import annotations
 
@@ -137,6 +139,47 @@ class PFSPLeague:
         """EMA-update a member's learner win-rate from one decided pool game."""
         member.games += 1
         member.wr = (1.0 - self.wr_ema) * member.wr + self.wr_ema * (1.0 if learner_won else 0.0)
+
+    # ── checkpoint (de)serialization ─────────────────────────────────────────
+    def state_dict(self) -> dict:
+        """Everything needed to restore the league across a restart: per-member
+        EMA win-rates/game counts (anchors + scenarios, matched by NAME on load,
+        so membership changes are fine), and the past-self ring's actor+guesser
+        weights. `weight` is NOT saved — it's config, reapplied at construction."""
+        return {
+            "anchors": [{"name": a.name, "wr": a.wr, "games": a.games}
+                        for a in self.anchors],
+            "selves": [{"name": s.name, "wr": s.wr, "games": s.games,
+                        "actor": s.models.actor.state_dict(),
+                        "guesser": s.models.guesser.state_dict()}
+                       for s in self.selves],
+        }
+
+    def load_state_dict(self, state: dict, make_nets=None) -> None:
+        """Restore saved EMAs onto matching anchor names (a member added since the
+        save simply keeps its fresh wr=0.5) and rebuild the past-self ring.
+        `make_nets` is a zero-arg factory returning fresh (actor, guesser) modules
+        shaped like the learner's; when None the ring is left empty (it refills at
+        each report, the pre-persistence behaviour)."""
+        by_name = {a["name"]: a for a in state.get("anchors", [])}
+        for m in self.anchors:
+            saved = by_name.get(m.name)
+            if saved is not None:
+                m.wr = float(saved["wr"])
+                m.games = int(saved["games"])
+        if make_nets is None or self.selves.maxlen == 0:
+            return
+        for s in state.get("selves", []):
+            actor, guesser = make_nets()
+            actor.load_state_dict(s["actor"])
+            guesser.load_state_dict(s["guesser"])
+            for net in (actor, guesser):
+                net.eval()
+                for p in net.parameters():
+                    p.requires_grad_(False)
+            self.selves.append(LeagueMember(
+                name=s["name"], kind="self", models=_FrozenSelf(actor, guesser),
+                wr=float(s["wr"]), games=int(s["games"])))
 
     def summary(self) -> str:
         """Compact 'name=wr(games)' line for the status log (sorted by hardest)."""

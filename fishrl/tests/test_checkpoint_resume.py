@@ -45,6 +45,20 @@ def test_milestone_rotation_keeps_last_n(tmp_path):
     assert steps == ["step_00000003.pt", "step_00000004.pt", "step_00000005.pt"]
 
 
+def test_archives_are_permanent_and_survive_milestone_pruning(tmp_path):
+    # Archives write atomically and load back...
+    apath = ckpt.save_archive(str(tmp_path), 10_000, {"done": 10_000})
+    assert os.path.basename(apath) == "archive_00010000.pt"
+    assert ckpt.load_checkpoint(apath)["done"] == 10_000
+    assert not os.path.exists(apath + ".tmp")
+    # ...and the milestone prune (glob step_*.pt) never touches them, no matter
+    # how many milestones roll past.
+    for done in range(1, 8):
+        ckpt.save_milestone(str(tmp_path), done, {"done": done}, keep_last=2)
+    assert os.path.exists(apath)
+    assert len(glob.glob(str(tmp_path / "step_*.pt"))) == 2
+
+
 @slow
 def test_resume_continues_iteration_and_restores_state(tmp_path):
     latest = ckpt.latest_path(str(tmp_path))

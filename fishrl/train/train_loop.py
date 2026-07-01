@@ -442,6 +442,13 @@ def train(cfg: Config, models: Models | None = None, log=print,
             win_T += len(buf)
             last_batch = batch
             done += 1
+            if checkpoint_path is not None and cfg.archive_every_iters > 0 \
+                    and done % cfg.archive_every_iters == 0:
+                # permanent, never-pruned archive of the run every N iterations
+                # (the rolling step_*.pt milestones keep only the last few)
+                apath = ckpt.save_archive(
+                    os.path.dirname(os.path.abspath(checkpoint_path)), done, _payload())
+                log(f"[archive] saved {apath} at it={done}")
             if checkpoint_path is not None and \
                     time.perf_counter() - last_ckpt >= cfg.checkpoint_every_seconds:
                 _checkpoint()                            # cheap state save, no eval

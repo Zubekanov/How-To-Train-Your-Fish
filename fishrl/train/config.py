@@ -100,6 +100,10 @@ class Config:
     # state is saved often (cheap, no eval) without running the win-rate panel each time.
     checkpoint_every_seconds: float = 900.0
     keep_last_checkpoints: int = 3    # numbered step_*.pt milestones to retain
+    # Permanent archive cadence: every N iterations write archive_{it}.pt, which is
+    # NEVER pruned (unlike the rolling step_*.pt milestones) — the run's long-term
+    # history for later comparison/rollback. <= 0 disables.
+    archive_every_iters: int = 10_000
     # Front-end encoder: "flat" (MLP over the raw observation), "entity" (shared
     # card-embedding encoder, masked mean/max pool; far fewer params), or "attention"
     # (the entity front-end + cross-zone self-attention and a learned per-zone

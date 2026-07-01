@@ -38,7 +38,8 @@ def save_checkpoint(path: str, payload: dict) -> None:
 
 def save_milestone(ckpt_dir: str, done: int, payload: dict, keep_last: int = 3) -> str:
     """Write a numbered milestone `step_{done:08d}.pt` atomically, then prune the oldest
-    milestones beyond `keep_last`. Returns the milestone path."""
+    milestones beyond `keep_last`. Returns the milestone path. The prune glob matches
+    only `step_*.pt`, so permanent `archive_*.pt` checkpoints are never touched."""
     path = os.path.join(ckpt_dir, f"step_{done:08d}.pt")
     save_checkpoint(path, payload)
     if keep_last > 0:
@@ -48,6 +49,15 @@ def save_milestone(ckpt_dir: str, done: int, payload: dict, keep_last: int = 3) 
                 os.remove(old)
             except OSError:
                 pass
+    return path
+
+
+def save_archive(ckpt_dir: str, done: int, payload: dict) -> str:
+    """Write a PERMANENT `archive_{done:08d}.pt` atomically. Archives are the run's
+    long-term history (every cfg.archive_every_iters iterations) and are never
+    pruned — unlike the rolling step_*.pt milestones. Returns the archive path."""
+    path = os.path.join(ckpt_dir, f"archive_{done:08d}.pt")
+    save_checkpoint(path, payload)
     return path
 
 

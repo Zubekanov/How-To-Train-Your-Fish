@@ -63,6 +63,9 @@ def main():
     ap.add_argument("--report-winrate-games", type=int, default=30,
                     help="games per opponent in each status-line win-rate panel")
     ap.add_argument("--checkpoint-every-seconds", type=float, default=900.0)
+    ap.add_argument("--archive-every-iters", type=int, default=Config.archive_every_iters,
+                    help="write a permanent archive_{it}.pt every N iterations "
+                         "(never pruned, unlike step_*.pt milestones); <=0 disables")
     ap.add_argument("--max-hours", type=float, default=None,
                     help="optional wall-clock cap (across restarts); omit for indefinite")
     args = ap.parse_args()
@@ -82,7 +85,8 @@ def main():
                   enforce_free_attack=args.enforce_free_attack,
                   ckpt_dir=args.ckpt_dir, report_every_seconds=args.report_every_seconds,
                   report_winrate_games=args.report_winrate_games,
-                  checkpoint_every_seconds=args.checkpoint_every_seconds)
+                  checkpoint_every_seconds=args.checkpoint_every_seconds,
+                  archive_every_iters=args.archive_every_iters)
     if resume:
         # architecture + seed MUST match the saved weights -> take them from the checkpoint
         # (the --encoder* flags are ignored on resume).

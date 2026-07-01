@@ -1,8 +1,10 @@
-# Runtime dependencies for fishrl (kept in sync with pyproject.toml).
+# Deploy lock for fishrl: what the production service actually runs against.
+# pyproject.toml keeps the loose library floors; this file pins the risky one
+# (torch) to the deployed minor version. Bump the pin deliberately, with the box.
 numpy>=1.24
 pettingzoo>=1.24
 gymnasium>=0.29
-torch>=2.2
+torch>=2.12,<2.13    # deployed: 2.12.1+cpu
 
 # Dev / tests (optional): uncomment or `pip install pytest`
 # pytest>=7

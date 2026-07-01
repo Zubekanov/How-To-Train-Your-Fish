@@ -1,0 +1,28 @@
+[Unit]
+Description=fishrl self-play training (auto-resume)
+After=network-online.target
+
+[Service]
+Type=simple
+User=zubekanov
+Group=zubekanov
+WorkingDirectory=/home/zubekanov/Repositories/How-To-Train-Your-Fish
+Environment=PYTHONUNBUFFERED=1
+# Co-tenant on a shared 8-core board, but the trainer is torch-bound (it pegs its
+# thread cap), so give it 6 of 8 cores -- leaving ~2 for postgres/websites/metrics.
+# Nice=10 still makes it yield under contention.
+Environment=OMP_NUM_THREADS=6
+Environment=MKL_NUM_THREADS=6
+Environment=OPENBLAS_NUM_THREADS=6
+Environment=NUMEXPR_NUM_THREADS=6
+ExecStart=/home/zubekanov/bin/fishrl-selfplay.sh
+Restart=always
+RestartSec=15
+# Allow time for an in-flight win-rate eval to finish + the graceful checkpoint write
+# before SIGKILL, so a stop/restart never loses the latest iteration.
+TimeoutStopSec=150
+KillSignal=SIGTERM
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

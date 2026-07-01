@@ -226,3 +226,10 @@ __marimo__/
 
 # training artifacts
 checkpoints/
+
+# eval scratch (fishrl.eval.actor_headtohead defaults)
+h2h/
+h2h_results.json
+# guard against stray checkpoints dropped at the repo root
+# (the training checkpoints/ dir itself is ignored above)
+/*.pt

@@ -42,12 +42,9 @@ import time
 import numpy as np
 import torch
 
-from fishrl.data.features import GOD_DIM
 from fishrl.models.estimators import PrivilegedCritic
 from fishrl.models.guesser import HandGuesser
-from fishrl.models.policy import ACTOR_IN, MaskedActor
-from fishrl.obs import vocab as V
-from fishrl.obs.encoder import OBS_DIM
+from fishrl.models.policy import MaskedActor
 from fishrl.spaces import action_space as A
 from fishrl.train.belief_env import BeliefAugmentedEnv
 from fishrl.train.collector import actor_act_fn, collect_games, random_act_fn

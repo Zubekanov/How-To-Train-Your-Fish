@@ -1,0 +1,20 @@
+[Unit]
+Description=fishrl out-of-band parallel win-rate panel (100 games/anchor)
+After=fishrl-selfplay.service
+
+[Service]
+Type=oneshot
+User=zubekanov
+Group=zubekanov
+WorkingDirectory=/home/zubekanov/Repositories/How-To-Train-Your-Fish
+Environment=PYTHONUNBUFFERED=1
+# Parallelism is across worker PROCESSES; pin each worker's BLAS/torch to one thread so the
+# pool fills cores without oversubscribing them.
+Environment=OMP_NUM_THREADS=1
+Environment=MKL_NUM_THREADS=1
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=NUMEXPR_NUM_THREADS=1
+ExecStart=/home/zubekanov/bin/fishrl-eval.sh
+# Slightly ahead of the trainer (Nice=10) so the short eval burst wins cores, finishes
+# fast, and hands them back -- rather than dragging out under the trainer's load.
+Nice=5

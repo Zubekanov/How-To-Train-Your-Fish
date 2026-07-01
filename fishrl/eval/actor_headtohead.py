@@ -15,6 +15,12 @@ Decided on win-rate two independent ways:
 
     python -m fishrl.eval.actor_headtohead --gpu --minutes 60 --seeds 2
     python -m fishrl.eval.actor_headtohead --gpu --minutes 1 --seeds 1   # smoke
+
+Artifacts (arm checkpoints + results JSON) go to the h2h/ scratch dir by default —
+NOT checkpoints/, which belongs to the live trainer. Note on the box: this TRAINS
+three arms per seed, so run it with the fishrl-selfplay service STOPPED for a clean
+read — a concurrent torch-bound trainer oversubscribes the box and skews the
+fixed-wall-clock budgets (and thus the comparison).
 """
 from __future__ import annotations
 
@@ -119,8 +125,9 @@ def main():
     ap.add_argument("--match-games", type=int, default=100, help="per arm-pair, seat-balanced")
     ap.add_argument("--anchor-minutes", type=float, default=20.0,
                     help="budget to train the frozen-self anchor (a flat agent), 0 to skip")
-    ap.add_argument("--ckpt-dir", default="checkpoints")
-    ap.add_argument("--out", default="h2h_results.json")
+    # h2h/ scratch dir, NOT checkpoints/ -- that's the live trainer's directory.
+    ap.add_argument("--ckpt-dir", default="h2h")
+    ap.add_argument("--out", default="h2h/h2h_results.json")
     args = ap.parse_args()
     device = resolve_device(args.gpu)
 
@@ -213,6 +220,7 @@ def main():
            "anchor_minutes": args.anchor_minutes,
            "vs_attacker": vs_attk, "vs_frozen": vs_froz, "vs_heuristic": vs_heur,
            "vs_random": vs_rand, "head2head": h2h, "head2head_raw": h2h_raw}
+    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out, "w") as f:
         json.dump(out, f, indent=2)
     _log(f"\nsaved -> {args.out}")

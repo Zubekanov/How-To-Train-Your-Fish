@@ -10,8 +10,11 @@ space and a fixed-size tensor observation.
 ## Install
 
 ```bash
-pip install -e .            # numpy, pettingzoo, gymnasium  (+ .[dev] for pytest)
+pip install -e .            # numpy, pettingzoo, gymnasium, torch  (+ .[dev] for pytest)
 ```
+
+`requirements.txt` is the deploy lock (torch pinned to the running minor version);
+`pyproject.toml` keeps loose floors for library use.
 
 ## Quickstart — random self-play
 
@@ -76,6 +79,40 @@ python -m fishrl.eval.smoke --gpu                            # short demo + metr
 python -m fishrl.eval.ab_encoder --gpu                       # flat-vs-entity A/B
 ```
 
+### Opponent pool / PFSP league
+
+By default a fraction of each iteration's games is played against a **league**
+opponent instead of mirror self-play: the scripted anchors (random / attacker /
+heuristic) plus a ring of frozen past-self snapshots (one appended per status
+report). Only the learner seat's transitions are trained. Opponents are sampled
+by prioritized fictitious self-play over the learner's per-opponent win-rate.
+
+- `--pool-frac` (default 0.25) — fraction of games vs a league opponent; 0 = pure self-play
+- `--pfsp-mode` (`hard` default | `var`) — `hard` favours opponents you lose to; `var` favours even matchups
+- `--league-size` (default 8) — length of the frozen past-self ring; 0 = anchors only
+
+### Scenario curriculum (`--scenario-frac`)
+
+`--scenario-frac` (default 0.0 = off; the service runs 0.3) seeds that fraction of
+each iteration's games from a short, targeted scenario start-state instead of a
+full game. Scenarios shape only the initial state + termination; reward stays
+terminal ±1. Six are registered (`fishrl/train/scenarios/`):
+
+- `known_threat` — a card-advantage spell sits on top of the shared library; deny it (counter it or manipulate a dud on top) before the empty-handed bot draws it. Curated counter+manipulation grip.
+- `known_threat_random` — same denial test with a random 7-card grip: answer the threat (or recognise you can't) with whatever you hold.
+- `board_presence` — both seats at 4 life, one creature each, all other creatures stripped: a tight stack fight over the pivotal creature.
+- `deckout` — creatures exiled, 40-card shared library: a pure card-advantage / deckout race.
+- `survive_lethal` — agent at 4 life facing untapped Dandâns with a random grip; survive the swing back.
+- `survive_lethal_vision` — same, but a Vision Charm is guaranteed in grip (its land mode turns off the Islands the Dandâns need) — measures whether the agent finds and casts the clean answer.
+
+Scenario win-rates are logged per scenario but are a **curriculum signal only** —
+judge progress on the full-game vs-heuristic eval.
+
+`--enforce-free-attack` (default on; `--no-enforce-free-attack` to disable) wires a
+degenerate-correct hard rule into ALL training games: declaring fewer than all
+eligible attackers into an empty opposing board is an instant loss (attacking an
+empty board is 100% correct in this format).
+
 ### Long offline runs: checkpointing, resume, and the systemd service
 
 `python -m fishrl.train` checkpoints to `<ckpt-dir>/latest.pt` (atomically) every
@@ -95,7 +132,9 @@ existing checkpoint requires `--fresh`). On resume the architecture/seed are tak
 checkpoint (the `--encoder*` flags are ignored, and a mismatch is rejected).
 
 A `Restart=always` systemd **system** service (`/etc/systemd/system/fishrl-selfplay.service`,
-running as the user via `User=`) drives this offline and auto-resumes on crash/reboot:
+running as the user via `User=`) drives this offline and auto-resumes on crash/reboot.
+The unit files and launcher scripts are committed under [`deploy/`](deploy/) (see its
+README for install paths and the stale `--user` unit to ignore):
 
 ```bash
 sudo systemctl daemon-reload
@@ -126,6 +165,13 @@ It is saved from the in-memory payload that was just evaluated, so it always mat
 rate even though the trainer overwrites `latest.pt` mid-eval. Pass `--no-best` to skip it. (n=100
 has ±5% binomial noise, so treat `best.pt` as the best *measured* checkpoint, not a certainty.)
 
+**Machine-readable history: `stats.json`.** Both processes also append to
+`<ckpt-dir>/stats.json` (flock + atomic write, see `fishrl/train/stats.py`): the trainer
+adds a `"reports"` record at each status report, the eval service an `"evals"` record at
+each panel — the plottable companion to the journald lines. History from before
+`stats.json` existed can be recovered from journald with
+`python -m fishrl.eval.backfill_stats --ckpt-dir checkpoints` (idempotent; live rows win).
+
 Key design points: one shared policy plays both seats; each env step (including
 compound-decision sub-steps) is one PPO transition; per-seat GAE uses a single
 zero-sum sign convention (`V_p1 = -V_p2`, guarded by `tests/test_perspective.py`);
@@ -144,29 +190,44 @@ agents, including which basic type a permanent currently is.
 
 ### Front-end encoder (`Config.encoder`)
 
-`"flat"` (default) is an MLP over the raw observation. `"entity"` reshapes the same
+`"flat"` is an MLP over the raw observation. `"entity"` reshapes the same
 flat vector into per-card rows and applies a **shared card encoder** (name embedding
 + feature MLP, learned once and reused across every zone/slot), with zone and
 positional embeddings and masked mean+max pooling per zone — far fewer params
-(actor 1.48M→0.43M) and built to compose relational structure. Both nets share the
-trunk; the critic gets more capacity (`Config.critic_hidden`) since it is off the
-inference path. Compare them with `python -m fishrl.eval.ab_encoder`. NOTE: on the
-current privileged-critic A/B, flat still wins (held-out Brier 0.23 vs 0.35), so the
-default stays `"flat"` — the entity encoder likely needs attention (not just
-pooling) to beat it; that's the noted follow-up before flipping the default.
+(actor 1.48M→0.43M) and built to compose relational structure. `"attention"` adds
+cross-zone self-attention and a learned per-zone attention pool on top of the entity
+front-end. The critic gets more capacity (`Config.critic_hidden`) since it is off the
+inference path.
+
+The encoder is resolved **per net** (`--encoder` is the base; `--actor-encoder`,
+`--critic-encoder`, `--guesser-encoder`, `--public-encoder` override it). Current
+defaults (`fishrl/train/config.py`): base `encoder="flat"`, and
+**`critic_encoder="entity"`** — on the on-policy privileged-critic A/B, entity is the
+calibration winner (Brier 0.261 vs flat 0.342), it is off the deployment path, and
+it is ~free now that the value pass is batched post-collection. The actor/guesser/
+public stay `"flat"` until a win-rate head-to-head backs flipping them
+(`fishrl.eval.actor_headtohead` is that experiment). Compare critics with
+`python -m fishrl.eval.ab_encoder`.
 
 ## Layout
 
 ```
 fishrl/
   forgetful_fish/   vendored rules engine (state, engine, cards, ai) — do not edit
-  data/             fish_cards.json (the 80-card decklist)
+  data/             fish_cards.json (the 80-card decklist), buffer.py (rollout
+                    buffer), features.py (god-state features for the critic)
   env/              aec_env.py (FishAEC), driver.py, apply.py
   spaces/           action_space.py, masking.py, compound.py
   obs/              encoder.py, vocab.py
+  models/           policy.py, estimators.py, guesser.py, mlp.py, entity_encoder.py
   opponents/        random_masked.py, heuristic.py (sandbox eval vs ai.py)
   selfplay/         pettingzoo_api.py (env / raw_env factory)
+  train/            config.py, train_loop.py, ppo.py, collector.py, pfsp.py,
+                    scenarios/, checkpoint.py, stats.py, ...
+  eval/             metrics.py, parallel_panel.py, smoke.py, ab_encoder.py,
+                    actor_headtohead.py, backfill_stats.py, profilers
   tests/            pytest suite
+deploy/             systemd units + launchers for the offline service (see deploy/README.md)
 ```
 
 ## Design notes
@@ -187,6 +248,8 @@ fishrl/
   every step.
 
 ## Test
+
+pytest is the only dev dependency (`pip install -e .[dev]`):
 
 ```bash
 python -m pytest -q

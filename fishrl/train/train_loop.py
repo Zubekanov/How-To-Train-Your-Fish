@@ -36,7 +36,7 @@ from fishrl.train.collector import (
     fill_critic_values,
 )
 from fishrl.train.config import Config
-from fishrl.train.pfsp import PFSPLeague
+from fishrl.train.pfsp import LeagueMember, PFSPLeague
 from fishrl.train.ppo import aux_update, ppo_update
 
 
@@ -155,10 +155,20 @@ def train(cfg: Config, models: Models | None = None, log=print,
     # at each report. In-memory only (never serialized), so resume refills it over the
     # first few reports. Unused when cfg.pool_frac <= 0.
     league = PFSPLeague.from_config(cfg)
-    # Scenario PFSP: one league member per registered scenario, sampled within the
-    # scenario-game budget by the learner's per-scenario difficulty (not a fixed share).
+    # Scenario curriculum, one of two modes:
+    #  * scenarios_in_pool — scenarios are MEMBERS of the main league, competing with
+    #    the anchors/past-selves for the pool_frac budget by PFSP difficulty; their
+    #    combined share floats instead of being pinned to scenario_frac.
+    #  * scenario_frac carve-out (legacy) — a fixed slice of each iteration sampled
+    #    from a dedicated scenario league.
     scen_league = None
-    if cfg.scenario_frac > 0:
+    if cfg.scenarios_in_pool:
+        from fishrl.train.scenarios import scenario_names
+        for sname in scenario_names():
+            w = float(cfg.scenario_weights.get(sname, 1.0))
+            if w > 0:
+                league.anchors.append(LeagueMember(name=sname, kind="scenario", weight=w))
+    elif cfg.scenario_frac > 0:
         from fishrl.train.scenarios import scenario_names
         scen_league = PFSPLeague.scenario_league(cfg, scenario_names())
     run_start = last_report = last_ckpt = time.perf_counter()
@@ -309,23 +319,30 @@ def train(cfg: Config, models: Models | None = None, log=print,
         if cfg.pool_frac > 0 and league.members():        # PFSP composition + win-rate table
             # The paren-count format is parsed by the website collector and by
             # backfill_stats with a STRICT 5-token sequence, so `heuristic=` prints the
-            # MERGED v1.0+v1.1 count to keep the format stable; the per-version split
+            # MERGED v1.0+v1.1 count to keep the format stable. The per-version split
+            # rides AFTER the closing paren as `h11=<v1.1 count>` (strict parsers stop
+            # at the paren and ignore it; split-aware ones subtract it out), and also
             # lives in stats.json (opp_heuristic vs opp_heuristic11) and the wr table
-            # after the bar names heuristic_1_1 separately.
+            # after the bar, which names heuristic_1_1 separately.
             log(f"[league it={done}] games={mix_total} trained={trained_frac:.2f} "
                 f"(self={opp_mix['self']} past={opp_mix['pastself']} "
                 f"heuristic={opp_mix['heuristic'] + opp_mix['heuristic_1_1']} "
                 f"attacker={opp_mix['attacker']} "
-                f"random={opp_mix['random']}) | {league.summary()}")
-        if cfg.scenario_frac > 0 and scen_league is not None and scen_league.members():
-            # Per-scenario games this window + the PFSP win-rate driving selection.
-            # Every registered scenario is listed (0 games shown too); win-rates are a
-            # CURRICULUM signal (what to practise), not a success metric — judge real
-            # progress on the vs-heuristic eval.
-            counts = " ".join(f"{m.name}={scen_mix.get(m.name, 0)}"
-                              for m in scen_league.members())
-            wrs = " ".join(f"{m.name}={m.wr:.2f}({m.games})"
-                           for m in sorted(scen_league.members(), key=lambda m: m.wr))
+                f"random={opp_mix['random']}) "
+                f"h11={opp_mix['heuristic_1_1']} | {league.summary(exclude_kinds=('scenario',))}")
+        # Per-scenario games this window + the PFSP win-rate driving selection — from
+        # the dedicated scenario league (carve-out mode) or the main league's scenario
+        # members (pool mode); the emitted line format is identical either way.
+        # Every registered scenario is listed (0 games shown too); win-rates are a
+        # CURRICULUM signal (what to practise), not a success metric — judge real
+        # progress on the vs-heuristic eval.
+        scen_members = (scen_league.members() if scen_league is not None
+                        else [mm for mm in league.anchors if mm.kind == "scenario"])
+        if scen_members and (cfg.scenario_frac > 0 or cfg.scenarios_in_pool):
+            counts = " ".join(f"{mm.name}={scen_mix.get(mm.name, 0)}"
+                              for mm in scen_members)
+            wrs = " ".join(f"{mm.name}={mm.wr:.2f}({mm.games})"
+                           for mm in sorted(scen_members, key=lambda mm: mm.wr))
             log(f"[scenario it={done}] games={scen_total} ({counts}) | wr {wrs}")
         for k in KEYS:
             acc[k] = 0.0
@@ -387,6 +404,11 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 league.load_state_dict(payload["league"], make_nets=_opponent_nets)
             if scen_league is not None and payload.get("scen_league"):
                 scen_league.load_state_dict(payload["scen_league"])
+            elif cfg.scenarios_in_pool and payload.get("scen_league"):
+                # A checkpoint from the carve-out era: its per-scenario EMAs seed the
+                # matching scenario members of the MAIN league (matched by name), so
+                # switching modes doesn't reset curriculum difficulty.
+                league.load_state_dict(payload["scen_league"])
             n_selves = len(league.selves)
             log(f"[resume] from {resume_path} at it={done} (elapsed {elapsed_offset / 3600.0:.2f}h, "
                 f"league selves={n_selves})")
@@ -414,6 +436,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
             # exactly as before. scenario_frac <= 0 -> n_scen 0 -> unchanged behaviour.
             n_scen = int(round(cfg.games_per_iter * cfg.scenario_frac)) if cfg.scenario_frac > 0 else 0
             n_scen = max(0, min(n_scen, cfg.games_per_iter))
+            if cfg.scenarios_in_pool:
+                n_scen = 0                              # scenarios come out of the pool budget
             rest = cfg.games_per_iter - n_scen
             n_pool = int(round(rest * cfg.pool_frac))
             n_pool = max(0, min(n_pool, rest))
@@ -437,6 +461,25 @@ def train(cfg: Config, models: Models | None = None, log=print,
                                          critic=None, max_decisions=cfg.max_decisions)
                     gwin["mirror_dec"] += sum(1 for w in gbuf.games if w in ("p1", "p2"))
                     gwin["mirror_p1"] += sum(1 for w in gbuf.games if w == "p1")
+                    buf.merge(gbuf)
+                    continue
+                if member.kind == "scenario":               # pool-mode curriculum game:
+                    from fishrl.train.scenarios import ScenarioEnv, get_scenario
+                    lseat = "p1"                            # learner is p1, p2 the engine bot
+                    senv = BeliefAugmentedEnv(
+                        m.guesser, belief=cfg.use_belief,
+                        env=ScenarioEnv(get_scenario(member.name),
+                                        max_decisions=cfg.max_decisions,
+                                        enforce_free_attack=cfg.enforce_free_attack))
+                    gbuf = collect_games(senv, actor_act_fn(m.actor), 1, oseed,
+                                         critic=None, max_decisions=cfg.max_decisions)
+                    # scenario accounting, NOT opp_mix: the [league] paren counts and
+                    # mix_total stay scenario-free (same telemetry as carve-out mode)
+                    scen_mix[member.name] = scen_mix.get(member.name, 0) + 1
+                    gwin["scen_games"] += 1
+                    gwin["scen_T"] += len(gbuf.steps)
+                    if gbuf.games and gbuf.games[-1] in ("p1", "p2"):
+                        league.update(member, gbuf.games[-1] == "p1")
                     buf.merge(gbuf)
                     continue
                 opp_mix["pastself" if member.kind == "self" else member.kind] += 1

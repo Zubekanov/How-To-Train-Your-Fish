@@ -46,11 +46,29 @@ def test_parse_league_shares_sum_to_one():
     assert abs(s["opp_self"] - 912 / 1216) < 1e-9
     assert abs(s["opp_past"] - 205 / 1216) < 1e-9
     assert abs(s["opp_heuristic"] - 89 / 1216) < 1e-9
+    assert s["opp_heuristic11"] is None              # pre-split line: v1.1 didn't exist
     assert abs(s["opp_attacker"] - 5 / 1216) < 1e-9
     assert abs(s["opp_random"] - 5 / 1216) < 1e-9
     assert s["opp_scenario"] is None                 # no scenario line -> unknown, not 0
     assert abs(sum(v for v in s.values() if v is not None) - 1.0 - s["opp_trained"]) < 1e-9
     assert abs(s["opp_trained"] - (912 + 205) / 1216) < 1e-9
+
+
+# July 2026: the h11 token after the paren block splits the merged heuristic
+# count into v1.0 (paren count minus h11) and v1.1 (h11).
+_LEAGUE_H11 = (
+    "2026-07-02T21:00:00+10:00 [league it=60900] games=1200 trained=0.87 "
+    "(self=820 past=245 heuristic=110 attacker=15 random=10) h11=30 | "
+    "heuristic_1_1=0.09(180) heuristic=0.14(2300)")
+
+
+def test_parse_league_splits_heuristic_versions():
+    s = parse_league([_LEAGUE_H11])[60900]
+    assert abs(s["opp_heuristic"] - 80 / 1200) < 1e-9     # merged 110 minus v1.1's 30
+    assert abs(s["opp_heuristic11"] - 30 / 1200) < 1e-9
+    shares = ("opp_self", "opp_past", "opp_heuristic", "opp_heuristic11",
+              "opp_attacker", "opp_random")
+    assert abs(sum(s[k] for k in shares) - 1.0) < 1e-9
 
 
 def test_parse_scenarios_both_formats():

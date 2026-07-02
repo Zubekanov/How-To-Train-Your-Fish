@@ -183,7 +183,10 @@ class PFSPLeague:
                 name=s["name"], kind="self", models=_FrozenSelf(actor, guesser),
                 wr=float(s["wr"]), games=int(s["games"])))
 
-    def summary(self) -> str:
-        """Compact 'name=wr(games)' line for the status log (sorted by hardest)."""
-        ms = sorted(self.members(), key=lambda m: m.wr)
+    def summary(self, exclude_kinds: tuple = ()) -> str:
+        """Compact 'name=wr(games)' line for the status log (sorted by hardest).
+        `exclude_kinds` drops member kinds reported elsewhere (scenario members
+        have their own [scenario] line)."""
+        ms = sorted((m for m in self.members() if m.kind not in exclude_kinds),
+                    key=lambda m: m.wr)
         return " ".join(f"{m.name}={m.wr:.2f}({m.games})" for m in ms)

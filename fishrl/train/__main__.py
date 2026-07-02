@@ -35,6 +35,10 @@ def main():
                          "'var' favours even matchups")
     ap.add_argument("--league-size", type=int, default=Config.league_size,
                     help="ring length of frozen past-self league members (0 = anchors only)")
+    ap.add_argument("--scenario-pool", action="store_true", default=Config.scenarios_in_pool,
+                    help="fold the scenarios into the main PFSP league (their play rate "
+                         "floats with difficulty within --pool-frac) instead of the fixed "
+                         "--scenario-frac carve-out; overrides --scenario-frac")
     ap.add_argument("--scenario-frac", type=float, default=Config.scenario_frac,
                     help="fraction of each iteration's games seeded from a curriculum "
                          "scenario start-state (0 = off). Mixed INTO self-play; reward stays "
@@ -82,6 +86,7 @@ def main():
                   games_per_iter=args.games_per_iter, warmup_games=args.warmup_games,
                   pool_frac=args.pool_frac, pfsp_mode=args.pfsp_mode,
                   league_size=args.league_size, scenario_frac=args.scenario_frac,
+                  scenarios_in_pool=args.scenario_pool,
                   enforce_free_attack=args.enforce_free_attack,
                   ckpt_dir=args.ckpt_dir, report_every_seconds=args.report_every_seconds,
                   report_winrate_games=args.report_winrate_games,

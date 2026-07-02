@@ -18,7 +18,8 @@ exec python -m fishrl.train \
   --iters 0 \
   --encoder flat --critic-encoder entity \
   --ckpt-dir "${REPO_DIR}/checkpoints" \
-  --scenario-frac 0.3 \
+  --scenario-pool \
+  --pool-frac 0.5 \
   --warmup-games 16 \
   --report-every-seconds 3600 \
   --report-winrate-games 0 \

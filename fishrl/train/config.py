@@ -55,6 +55,15 @@ class Config:
     # split into self-play / PFSP pool exactly as before. Judge progress on the full-game
     # vs-heuristic eval ONLY — scenario win-rates are debug, never a success metric.
     scenario_frac: float = 0.0
+    # Fold the scenarios INTO the main PFSP opponent league instead of the fixed
+    # scenario_frac carve-out: each registered scenario (positive weight) becomes a
+    # league member competing with the anchors/past-selves for the pool_frac budget,
+    # so its play rate floats with the learner's difficulty on it rather than being
+    # pinned to a fixed combined share. Takes precedence over scenario_frac (which
+    # is forced to 0 when this is set). Telemetry is unchanged: scenario games are
+    # still reported on the [scenario] line / opp_scenario, never in the league's
+    # paren counts.
+    scenarios_in_pool: bool = False
     # relative sampling weights over registered scenarios (see fishrl.train.scenarios)
     scenario_weights: dict = field(
         default_factory=lambda: {"known_threat": 1.0, "known_threat_random": 1.0,

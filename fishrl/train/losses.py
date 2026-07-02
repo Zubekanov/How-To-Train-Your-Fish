@@ -8,7 +8,9 @@ from fishrl.models.policy import MaskedActor
 
 
 def ppo_actor_loss(logp_all, action, old_logp, adv, clip):
-    """Masked PPO clip objective + mean entropy (over legal actions)."""
+    """Masked PPO clip objective + mean entropy (over legal actions) + the clip
+    fraction (share of ratios outside 1±clip — the standard "how hard is the
+    trust region working" health signal)."""
     logp = logp_all.gather(-1, action.unsqueeze(-1)).squeeze(-1)
     ratio = torch.exp(logp - old_logp)
     unclipped = ratio * adv
@@ -16,7 +18,8 @@ def ppo_actor_loss(logp_all, action, old_logp, adv, clip):
     policy_loss = -torch.min(unclipped, clipped).mean()
     entropy = MaskedActor.entropy(logp_all).mean()
     approx_kl = (old_logp - logp).mean().detach()
-    return policy_loss, entropy, approx_kl
+    clip_frac = ((ratio - 1.0).abs() > clip).float().mean().detach()
+    return policy_loss, entropy, approx_kl, clip_frac
 
 
 def outcome_bce(logit, y_p1, valid):

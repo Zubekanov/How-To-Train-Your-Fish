@@ -19,13 +19,14 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0) -> d
     M = batch["x_act"].shape[0]
     idx = np.arange(M)
     rng = np.random.default_rng(rng_seed)
-    stats = {"policy_loss": 0.0, "critic_loss": 0.0, "entropy": 0.0, "approx_kl": 0.0, "n": 0}
+    stats = {"policy_loss": 0.0, "critic_loss": 0.0, "entropy": 0.0, "approx_kl": 0.0,
+             "clip_frac": 0.0, "n": 0}
     for _ in range(cfg.ppo_epochs):
         rng.shuffle(idx)
         for s in range(0, M, cfg.minibatch):
             mb = idx[s:s + cfg.minibatch]
             logp_all = actor.log_probs(batch["x_act"][mb].to(dev), batch["mask"][mb].to(dev))
-            ploss, ent, kl = ppo_actor_loss(
+            ploss, ent, kl, cf = ppo_actor_loss(
                 logp_all, batch["action"][mb].to(dev),
                 batch["old_logp"][mb].to(dev), batch["adv"][mb].to(dev), cfg.clip)
             critic_logit = critic(batch["god"][mb].to(dev))
@@ -40,8 +41,9 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0) -> d
             stats["critic_loss"] += closs.detach().item()
             stats["entropy"] += ent.detach().item()
             stats["approx_kl"] += float(kl)
+            stats["clip_frac"] += float(cf)
             stats["n"] += 1
-    for k in ("policy_loss", "critic_loss", "entropy", "approx_kl"):
+    for k in ("policy_loss", "critic_loss", "entropy", "approx_kl", "clip_frac"):
         stats[k] /= max(stats["n"], 1)
     return stats
 

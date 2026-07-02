@@ -32,6 +32,13 @@ _INF = (
 _EVAL_INF = (
     "2026-06-23T10:00:00+10:00 [eval it=12900 @70.0h n=100 w=6 took=87.8s] "
     "WR frozen@12755=inf random=0.940 attacker=0.750 heuristic=0.070")
+# The newest status format: clip fraction + brier gap + the window game telemetry.
+_STATUS_V3 = (
+    "2026-07-02T10:00:00+10:00 [status 312.0h it=58500 (+180, 180.0/h) T=470000] "
+    "pi=-0.020 V=0.583 H=0.488 kl=0.0215 clip=0.08 guess=0.311 pub=0.630 | "
+    "calib priv(acc=0.78,brier=0.15) pub(acc=0.63,brier=0.22) gap=0.07 gmae=0.18 | "
+    "opp trained=0.92 | games=128 len=38.2 slen=14.1 trunc=0.05 draw=0.01 "
+    "fatk_p1=1 fatk_p2=0 seat_p1=0.52 fdec=0.24 | wall collect=0.91 | WR via eval timer")
 
 
 def test_parse_league_shares_sum_to_one():
@@ -64,6 +71,23 @@ def test_parse_league_renormalizes_by_grand_total_with_scenarios():
         assert abs(s["opp_scenario"] - 304 / grand) < 1e-9
         assert abs(s["opp_trained"] - (912 + 205) / grand) < 1e-9
         assert abs(sum(v for v in s.values() if v is not None) - 1.0 - s["opp_trained"]) < 1e-9
+
+
+def test_parse_status_v3_game_telemetry_and_old_lines_still_parse():
+    # New tokens (clip=, gap=, the games segment) parse into the report row...
+    r = parse_status([_STATUS_V3])[0][0]
+    assert r["it"] == 58500
+    assert r["clip_frac"] == 0.08 and r["brier_gap"] == 0.07
+    assert r["games"] == 128 and r["dec_per_game"] == 38.2 and r["scen_dec_per_game"] == 14.1
+    assert r["trunc_rate"] == 0.05 and r["draw_rate"] == 0.01
+    assert r["freeatk_p1"] == 1 and r["freeatk_p2"] == 0
+    assert r["mirror_p1_wr"] == 0.52 and r["forced_dec_frac"] == 0.24
+    assert r["collect_frac"] == 0.91
+    # ...and both older formats still parse, with the new fields absent/None.
+    for old_line in (_STATUS, _OLD):
+        r = parse_status([old_line])[0][0]
+        assert r["clip_frac"] is None and r["brier_gap"] is None
+        assert "games" not in r
 
 
 def test_parse_status_merges_league_mix():

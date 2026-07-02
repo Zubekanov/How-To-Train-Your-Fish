@@ -53,6 +53,11 @@ class BeliefAugmentedEnv:
         return self.env.winner
 
     @property
+    def forced_result(self):
+        # Winning seat when a hard rule (free attack) force-ended the game, else None.
+        return getattr(self.env, "_forced_result", None)
+
+    @property
     def terminations(self):
         return self.env.terminations
 

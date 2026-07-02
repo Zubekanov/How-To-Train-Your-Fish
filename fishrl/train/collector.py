@@ -47,7 +47,8 @@ def actor_act_fn(actor):
     return act
 
 
-def _stamp_game(buf: RolloutBuffer, start: int, winner, truncated: bool = False) -> None:
+def _stamp_game(buf: RolloutBuffer, start: int, winner, truncated: bool = False,
+                forced=None) -> None:
     """Back-fill one finished game's outcome onto its steps and register the game.
 
     Every step gets the winner label plus a buffer-local game_id so GAE segments
@@ -56,13 +57,16 @@ def _stamp_game(buf: RolloutBuffer, start: int, winner, truncated: bool = False)
     bootstraps from the critic instead of scoring the cut as a draw. The winner is
     ALSO recorded in `buf.games` even when the game produced zero learner steps —
     league win-rate updates must count games the learner lost before its first
-    decision."""
+    decision. `forced` is the winning seat when the free-attack hard rule (or any
+    forced result) ended the game, else None — kept in `buf.meta` for the window
+    telemetry."""
     gid = len(buf.games)
     for i in range(start, len(buf.steps)):
         buf.steps[i].winner = winner
         buf.steps[i].game_id = gid
         buf.steps[i].truncated = truncated
     buf.games.append(winner)
+    buf.meta.append({"truncated": truncated, "forced": forced})
 
 
 def fill_critic_values(buf: RolloutBuffer, critic, batch: int = 8192) -> None:
@@ -264,7 +268,8 @@ def collect_vs_opponent(learner, opponent, n_games, base_seed, critic=None,
         # "ongoing" and would mislabel a decided game as winner=None.
         winner = env.winner
         _stamp_game(buf, start, winner,
-                    truncated=winner is None and env.g.result.get("status") == "ongoing")
+                    truncated=winner is None and env.g.result.get("status") == "ongoing",
+                    forced=env._forced_result)
     if critic is not None:
         fill_critic_values(buf, critic)
     return buf
@@ -307,7 +312,8 @@ def collect_games(belief_env, act_fn, n_games, base_seed, critic=None,
             belief_env.step(action)
         winner = belief_env.winner            # scenario terminator result, or engine winner
         _stamp_game(buf, start, winner,
-                    truncated=winner is None and belief_env.g.result.get("status") == "ongoing")
+                    truncated=winner is None and belief_env.g.result.get("status") == "ongoing",
+                    forced=belief_env.forced_result)
     if critic is not None:
         fill_critic_values(buf, critic)            # batched, off the per-decision path
     return buf

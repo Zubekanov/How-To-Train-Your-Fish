@@ -34,6 +34,7 @@ class Step:
 class RolloutBuffer:
     steps: list = field(default_factory=list)
     games: list = field(default_factory=list)   # per-game winner, indexed by game_id
+    meta: list = field(default_factory=list)    # per-game {"truncated", "forced"} — how it ended
 
     def add(self, step: Step):
         self.steps.append(step)
@@ -50,6 +51,7 @@ class RolloutBuffer:
             s.game_id += base
         self.steps.extend(other.steps)
         self.games.extend(other.games)
+        self.meta.extend(other.meta)
 
     def compute(self, gamma: float, lam: float) -> dict:
         """Assign per-(game, seat) GAE advantages and return stacked torch tensors."""

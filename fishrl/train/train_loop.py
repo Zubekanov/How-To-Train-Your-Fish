@@ -131,9 +131,18 @@ def train(cfg: Config, models: Models | None = None, log=print,
     frozen_it = 0
     elapsed_offset = 0.0           # cumulative training seconds carried across restarts
     frozen: Models | None = None
-    KEYS = ("policy_loss", "critic_loss", "entropy", "approx_kl", "guesser_loss", "public_loss")
+    KEYS = ("policy_loss", "critic_loss", "entropy", "approx_kl", "clip_frac",
+            "guesser_loss", "public_loss")
     acc = {k: 0.0 for k in KEYS}
     win_iters = win_T = 0
+    # Per-window game/health telemetry (reset each report alongside the loss means):
+    # game endings (truncation/draw/free-attack), mirror seat balance, scenario vs
+    # full-game episode lengths, forced-decision dilution, and the collect/update
+    # wall-clock split.
+    GW_KEYS = ("games", "trunc", "draw", "freeatk_p1", "freeatk_p2",
+               "mirror_dec", "mirror_p1", "scen_games", "scen_T",
+               "forced_steps", "collect_s", "update_s")
+    gwin = {k: 0.0 for k in GW_KEYS}
     # Per-report opponent composition: games played vs each opponent category, so the
     # status line can report the proportion of TRAINED (neural) opponents -- mirror
     # self-play + frozen past-selves -- vs the scripted/engine bots (random/attacker/
@@ -215,14 +224,37 @@ def train(cfg: Config, models: Models | None = None, log=print,
         grand_total = mix_total + scen_total             # all games this window, incl. scenarios
         trained_frac = (opp_mix["self"] + opp_mix["pastself"]) / mix_total
         opp_str = f" | opp trained={trained_frac:.2f}"
+        # Window game telemetry (see GW_KEYS): episode lengths split full-game vs
+        # scenario, ending mix, mirror seat balance, forced-decision dilution, and
+        # the collect share of wall-clock.
+        games = int(gwin["games"])
+        scen_games = int(gwin["scen_games"])
+        full_games = games - scen_games
+        full_T = win_T - int(gwin["scen_T"])
+        len_full = (full_T / full_games) if full_games else nan
+        len_scen = (gwin["scen_T"] / scen_games) if scen_games else nan
+        trunc_rate = (gwin["trunc"] / games) if games else nan
+        draw_rate = (gwin["draw"] / games) if games else nan
+        seat_p1 = (gwin["mirror_p1"] / gwin["mirror_dec"]) if gwin["mirror_dec"] else nan
+        fdec = (gwin["forced_steps"] / win_T) if win_T else nan
+        wall = gwin["collect_s"] + gwin["update_s"]
+        collect_frac = (gwin["collect_s"] / wall) if wall > 0 else nan
+        brier_gap = (est["pub_brier"] - est["priv_brier"]) if "priv_brier" in est else nan
+        game_str = (
+            f" | games={games} len={len_full:.1f} slen={len_scen:.1f} "
+            f"trunc={trunc_rate:.2f} draw={draw_rate:.2f} "
+            f"fatk_p1={int(gwin['freeatk_p1'])} fatk_p2={int(gwin['freeatk_p2'])} "
+            f"seat_p1={seat_p1:.2f} fdec={fdec:.2f} | wall collect={collect_frac:.2f}"
+        )
         log(
             f"[status {tag} it={done} (+{win_iters}, {win_iters / dt_h:.1f}/h) T={win_T}] "
             f"pi={mean['policy_loss']:.3f} V={mean['critic_loss']:.3f} "
             f"H={mean['entropy']:.3f} kl={mean['approx_kl']:.4f} "
+            f"clip={mean['clip_frac']:.2f} "
             f"guess={mean['guesser_loss']:.3f} pub={mean['public_loss']:.3f} | "
             f"calib priv(acc={est.get('priv_acc', nan):.2f},brier={est.get('priv_brier', nan):.2f}) "
             f"pub(acc={est.get('pub_acc', nan):.2f},brier={est.get('pub_brier', nan):.2f}) "
-            f"gmae={gmae:.2f}" + opp_str + wr_str
+            f"gap={brier_gap:.2f} gmae={gmae:.2f}" + opp_str + game_str + wr_str
         )
         if checkpoint_path is not None:                  # dump this datapoint to stats.json
             ckpt_dir = os.path.dirname(os.path.abspath(checkpoint_path))
@@ -237,7 +269,15 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 "guesser_loss": mean["guesser_loss"], "public_loss": mean["public_loss"],
                 "priv_acc": est.get("priv_acc"), "pub_acc": est.get("pub_acc"),
                 "priv_brier": est.get("priv_brier"), "pub_brier": est.get("pub_brier"),
-                "gmae": gmae,
+                "brier_gap": brier_gap, "gmae": gmae,
+                "clip_frac": mean["clip_frac"],
+                # window game telemetry (NaN -> null via the sanitizer below)
+                "games": games, "dec_per_game": len_full, "scen_dec_per_game": len_scen,
+                "trunc_rate": trunc_rate, "draw_rate": draw_rate,
+                "freeatk_p1": int(gwin["freeatk_p1"]), "freeatk_p2": int(gwin["freeatk_p2"]),
+                "mirror_p1_wr": seat_p1, "forced_dec_frac": fdec,
+                "collect_s": gwin["collect_s"], "update_s": gwin["update_s"],
+                "collect_frac": collect_frac,
                 # Window composition as shares of ALL games incl. scenario-seeded ones, so the
                 # league slices + opp_scenario partition the window (~sum to 1) and the website's
                 # stacked mix shows scenarios. opp_self+opp_past==opp_trained. NOTE: these use the
@@ -285,6 +325,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
         win_iters = win_T = 0
         for k in OPP_CATS:
             opp_mix[k] = 0
+        for k in GW_KEYS:
+            gwin[k] = 0.0
         scen_mix.clear()
         frozen = _snapshot(m)            # roll the anchor forward to the current policy
         league.add_snapshot(m, done)     # add this report's policy as a past-self member
@@ -370,9 +412,14 @@ def train(cfg: Config, models: Models | None = None, log=print,
             n_pool = max(0, min(n_pool, rest))
             n_self = rest - n_pool
             seed = cfg.seed + 1000 + done * cfg.games_per_iter
+            t_collect = time.perf_counter()
             buf = collect_games(benv, actor_act_fn(m.actor), n_self, seed,
                                 critic=None, max_decisions=cfg.max_decisions)
             opp_mix["self"] += n_self                       # mirror self-play games this iter
+            # Mirror seat balance: decided mirror games only (buf holds ONLY the
+            # self-play games at this point). Drift from 0.5 = seat exploitation.
+            gwin["mirror_dec"] += sum(1 for w in buf.games if w in ("p1", "p2"))
+            gwin["mirror_p1"] += sum(1 for w in buf.games if w == "p1")
             pool_rng = np.random.default_rng(cfg.seed + 900_000 + done)
             for pidx in range(n_pool):
                 oseed = cfg.seed + 500_000 + done * cfg.games_per_iter + pidx * 17
@@ -381,6 +428,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     opp_mix["self"] += 1
                     gbuf = collect_games(benv, actor_act_fn(m.actor), 1, oseed,
                                          critic=None, max_decisions=cfg.max_decisions)
+                    gwin["mirror_dec"] += sum(1 for w in gbuf.games if w in ("p1", "p2"))
+                    gwin["mirror_p1"] += sum(1 for w in gbuf.games if w == "p1")
                     buf.merge(gbuf)
                     continue
                 opp_mix["pastself" if member.kind == "self" else member.kind] += 1
@@ -419,6 +468,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     sseed = cfg.seed + 300_000 + done * cfg.games_per_iter + sidx * 31
                     sbuf = collect_games(senv, actor_act_fn(m.actor), 1, sseed,
                                          critic=None, max_decisions=cfg.max_decisions)
+                    gwin["scen_games"] += 1
+                    gwin["scen_T"] += len(sbuf.steps)       # scenario episode lengths
                     buf.merge(sbuf)
                     scen_mix[sname] = scen_mix.get(sname, 0) + 1
                     # the learner is p1 (p2 is the engine bot); count the game even if
@@ -426,15 +477,29 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     if sbuf.games and sbuf.games[-1] in ("p1", "p2"):
                         scen_league.update(member, sbuf.games[-1] == "p1")
             fill_critic_values(buf, m.critic)
+            # Window game telemetry from the merged buffer: how games ended (buf.meta),
+            # forced-decision dilution (1-legal-action steps), collect wall-clock.
+            gwin["games"] += len(buf.games)
+            for w, gm in zip(buf.games, buf.meta):
+                if gm["truncated"]:
+                    gwin["trunc"] += 1
+                elif w is None:
+                    gwin["draw"] += 1
+                if gm["forced"] in ("p1", "p2"):
+                    gwin[f"freeatk_{gm['forced']}"] += 1
+            gwin["forced_steps"] += sum(1 for s in buf.steps if int(s.mask.sum()) == 1)
+            gwin["collect_s"] += time.perf_counter() - t_collect
             batch = buf.compute(cfg.gamma, cfg.lam)
             if max_seconds is not None:                  # anneal entropy over the budget
                 frac = min(total_elapsed() / max_seconds, 1.0)
                 ent = cfg.ent_start + frac * (cfg.ent_end - cfg.ent_start)
             else:
                 ent = cfg.ent_coef(done)
+            t_update = time.perf_counter()
             ppo_stats = ppo_update(batch, m.actor, m.critic, opt_ppo, cfg, ent, rng_seed=done)
             aux_stats = aux_update(batch, m.guesser, m.public, opt_g, opt_p, cfg.aux_steps)
-            for k in ("policy_loss", "critic_loss", "entropy", "approx_kl"):
+            gwin["update_s"] += time.perf_counter() - t_update
+            for k in ("policy_loss", "critic_loss", "entropy", "approx_kl", "clip_frac"):
                 acc[k] += ppo_stats[k]
             acc["guesser_loss"] += aux_stats["guesser_loss"]
             acc["public_loss"] += aux_stats["public_loss"]

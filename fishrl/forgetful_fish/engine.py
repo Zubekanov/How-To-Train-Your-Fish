@@ -26,18 +26,31 @@ _OTHER = {"p1": "p2", "p2": "p1"}
 _OPENING_HAND = 7
 
 
-def _ai_mod():
-    """The heuristic AI module, imported lazily: ai.py imports this engine at
-    module top, so the engine side of the cycle must resolve at call time."""
+# Heuristic AI versions, keyed by ai_profile. "heuristic" is v1.0 (the RL run's
+# long-standing opponent/eval anchor); "heuristic_1_1" is the stronger testbench
+# line, exposed as a SEPARATE profile so it can join the PFSP pool without moving
+# the training baseline.
+_HEURISTIC_PROFILES = ("heuristic", "heuristic_1_1")
+
+
+def _ai_mod(g: "GameState" = None, pid: str = None):
+    """The heuristic AI module for `pid`'s profile, imported lazily: the ai modules
+    import this engine at module top, so the engine side of the cycle must resolve
+    at call time. Without arguments (or for the default profile) this is v1.0."""
+    if g is not None and pid is not None:
+        p = g.players.get(pid)
+        if p is not None and getattr(p, "ai_profile", "heuristic") == "heuristic_1_1":
+            from fishrl.forgetful_fish import ai_v1_1
+            return ai_v1_1
     from fishrl.forgetful_fish import ai
     return ai
 
 
 def _heuristic(g: "GameState", pid: str) -> bool:
-    """Whether `pid` is an AI playing the heuristic profile (vs the passive
-    auto-passing opponent)."""
+    """Whether `pid` is an AI playing a heuristic profile (any version, vs the
+    passive auto-passing opponent)."""
     p = g.players.get(pid)
-    return bool(p and p.is_ai and getattr(p, "ai_profile", "heuristic") == "heuristic")
+    return bool(p and p.is_ai and getattr(p, "ai_profile", "heuristic") in _HEURISTIC_PROFILES)
 
 # Turn structure (CR 500–514): the ordered steps of a turn. Untap and cleanup
 # normally grant no priority; the main steps are where lands/sorceries are legal.
@@ -57,7 +70,8 @@ def new_sandbox_game(decklist, *, seed=None, game_id=None, p1_name="You",
     (the original auto-passing opponent)."""
     g = new_game(decklist, p1_name=p1_name, p2_name="Sandbox AI", seed=seed, game_id=game_id)
     g.players["p2"].is_ai = True
-    g.players["p2"].ai_profile = ai_profile if ai_profile in ("heuristic", "passive") else "heuristic"
+    g.players["p2"].ai_profile = (ai_profile if ai_profile in _HEURISTIC_PROFILES + ("passive",)
+                                  else "heuristic")
     g.current_step = ""        # pregame: no phase yet
     g.active_player = ""       # undecided until the roll is resolved
     _roll_to_start(g)
@@ -100,7 +114,7 @@ def _resolve_ai_pending(g: GameState) -> None:
     if not player or not player.is_ai:
         return
     if _heuristic(g, pending.player):                    # real choices live in ai.py
-        _ai_mod().resolve_pending(g)
+        _ai_mod(g, pending.player).resolve_pending(g)
         return
     if pending.type == "choose_play_order":
         choose_play_order(g, pending.player, "first")   # the AI always plays first
@@ -240,7 +254,7 @@ def _resolve_ai_mulligan(g: GameState) -> None:
     p = g.pending
     if p and p.type == "mulligan" and g.players.get(p.player) and g.players[p.player].is_ai:
         if _heuristic(g, p.player):               # may mulligan, then bottom cards
-            _ai_mod().resolve_pending(g)
+            _ai_mod(g, p.player).resolve_pending(g)
             return
         mulligan_decision(g, p.player, "keep")    # the passive AI always keeps
 
@@ -366,7 +380,7 @@ def _declare_attackers_step(g: GameState) -> None:
         _give_priority(g, active)
         return
     if g.players[active].is_ai:                       # heuristic: profitable attacks only;
-        chosen = (_ai_mod().choose_attackers(g, active, eligible)
+        chosen = (_ai_mod(g, active).choose_attackers(g, active, eligible)
                   if _heuristic(g, active) else eligible)   # passive: everything it can
         _set_attackers(g, active, chosen)
         _give_priority(g, active)
@@ -397,7 +411,7 @@ def _declare_blockers_step(g: GameState) -> None:
     eligible = _eligible_blockers(g, defender)
     yielded = g.players[defender].yield_mode == "unconditional" or bool(g.players[defender].yield_here)
     if eligible and _heuristic(g, defender):           # the heuristic AI blocks when profitable
-        _apply_blocks(g, defender, eligible, _ai_mod().choose_blocks(g, defender, eligible))
+        _apply_blocks(g, defender, eligible, _ai_mod(g, defender).choose_blocks(g, defender, eligible))
         return
     if not eligible or g.players[defender].is_ai or yielded:
         _give_priority(g, g.active_player)            # nothing to block / passive AI / yielded past it
@@ -522,7 +536,7 @@ def _give_priority(g: GameState, player: str) -> None:
     g.pending = PendingDecision(type="priority", player=player)
     if g.players[player].is_ai:
         if _heuristic(g, player):                     # the heuristic AI may act here
-            _ai_mod().take_priority(g, player)
+            _ai_mod(g, player).take_priority(g, player)
         else:                                         # the passive AI always passes
             pass_priority(g, player)
         return
@@ -672,7 +686,7 @@ def _auto_place_trigger(g: GameState, t: StackObject) -> None:
     if tspec:
         legal = _trigger_legal_targets(g, tspec)
         if legal:
-            chosen = (_ai_mod().choose_trigger_target(g, t, legal)
+            chosen = (_ai_mod(g, t.controller).choose_trigger_target(g, t, legal)
                       if _heuristic(g, t.controller) else legal[0])
             if chosen is not None:
                 t.targets = [{"type": "object", "id": chosen}]
@@ -2113,7 +2127,7 @@ def _cleanup(g: GameState) -> None:
     if excess > 0:
         if p.is_ai:
             if _heuristic(g, g.active_player):        # heuristic: discard the worst cards
-                ids = _ai_mod().choose_discards(g, g.active_player, excess)
+                ids = _ai_mod(g, g.active_player).choose_discards(g, g.active_player, excess)
             else:                                     # passive: from the end of the hand
                 ids = list(p.hand[-excess:])
             for iid in ids:

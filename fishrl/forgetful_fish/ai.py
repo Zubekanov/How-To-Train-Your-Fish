@@ -5,6 +5,12 @@ handful of hooks (take_priority, resolve_pending, choose_attackers,
 choose_blocks, choose_trigger_target, choose_discards) whenever the pending
 action belongs to an AI with ai_profile == "heuristic".
 
+This is heuristic v1.0 — the line the RL run has been training against: the
+default "heuristic" profile, the vs-heuristic eval anchor, and the scenario
+bot. The stronger testbench heuristic (v1.1, fishrl/forgetful_fish/ai_v1_1.py)
+lives behind the separate "heuristic_1_1" profile as an additional PFSP pool
+opponent only, so the training baseline stays comparable.
+
 Fairness: the AI reads only public information, its own hand, and library
 slots whose LibrarySlot.known_by marks them as seen by it — never the human's
 hand or unknown library cards.
@@ -84,58 +90,47 @@ def _creatures(g: GameState, player: str) -> list:
             if E._is_creature(g.objects[iid])]
 
 
-# Card-value weights (hand / top-of-library desirability), centralised so they
-# can be swept/tuned in one place; card_value reads only from here. Entries
-# suffixed `_threat` apply when the card answers an opposing fish; the `land_*`
-# tiers key off lands in play; the `AK_*` triple is Accumulated Knowledge's
-# base + per-copy growth, capped. All values were hand-set, then arena-tuned.
-_VALUE = {
-    "land_lt4": 8.0, "land_lt6": 5.0, "land_ge6": 1.0, "land_utility_late": 0.5,
-    "Dandân": 11.0,
-    "Memory Lapse": 10.0,
-    "Mind Bend": 9.0, "Mind Bend_threat": 11.0,
-    "Fact or Fiction": 9.0,
-    "Crystal Spray": 8.0, "Crystal Spray_threat": 10.0,
-    "AK_base": 6.0, "AK_per": 4.0, "AK_cap": 11.0,
-    "Predict": 6.0, "Predict_known": 10.0,
-    "Metamorphose": 6.0,
-    "Mystical Tutor": 8.0,
-    "Brainstorm": 8.0,
-    "Ponder": 7.0,
-    "Vision Charm": 7.0,
-    "Day's Undoing": 5.0,
-    "default": 6.0,
-}
-
-
 def card_value(g: GameState, player: str, iid: str) -> float:
-    """How much the AI wants this card in hand / on top of the library. Weights
-    live in `_VALUE`; only the state-dependent branches (threat, land tiers, AK
-    curve, deck-out) are decided here."""
+    """How much the AI wants this card in hand / on top of the library."""
     o = g.objects.get(iid)
     if not o:
         return 0.0
     name = o.name
-    V = _VALUE
     if _is_land(o.type_line):
         lands = _lands_in_play(g, player)
-        base = V["land_lt4"] if lands < 4 else (V["land_lt6"] if lands < 6 else V["land_ge6"])
+        base = 6.0 if lands < 4 else (3.0 if lands < 6 else 1.0)
         if name != "Island" and lands >= 4:
-            base += V["land_utility_late"]                # utility lands edge out Islands late
+            base += 0.5                                   # utility lands edge out Islands late
         return base
     opp = E._OTHER[player]
+    if name == "Dandân":
+        return 9.0
+    if name == "Memory Lapse":
+        return 8.0
     if name == "Mind Bend":
-        return V["Mind Bend_threat"] if _sac_creatures(g, opp) else V["Mind Bend"]
+        return 9.0 if _sac_creatures(g, opp) else 7.0
+    if name == "Fact or Fiction":
+        return 7.0
     if name == "Crystal Spray":
-        return V["Crystal Spray_threat"] if _sac_creatures(g, opp) else V["Crystal Spray"]
+        return 8.0 if _sac_creatures(g, opp) else 6.0
     if name == "Accumulated Knowledge":
         aks = sum(1 for cid in g.graveyard if g.objects[cid].name == "Accumulated Knowledge")
-        return min(V["AK_base"] + V["AK_per"] * aks, V["AK_cap"])
+        return min(4.0 + 2.0 * aks, 9.0)
     if name == "Predict":
-        return V["Predict_known"] if _known_top(g, player) else V["Predict"]
+        return 8.0 if _known_top(g, player) else 4.0
+    if name == "Metamorphose":
+        return 5.0
+    if name == "Mystical Tutor":
+        return 5.0
+    if name == "Brainstorm":
+        return 5.0
+    if name == "Ponder":
+        return 4.0
+    if name == "Vision Charm":
+        return 4.0
     if name == "Day's Undoing":
-        return 0.0 if _in_deckout_mode(g, player) else V["Day's Undoing"]  # a reset undoes the deck-out
-    return V.get(name, V["default"])
+        return 0.0 if _in_deckout_mode(g, player) else 2.0  # a reset would undo the deck-out
+    return 3.0
 
 
 # ── The priority driver ─────────────────────────────────────────────────────
@@ -164,11 +159,6 @@ def _execute(g: GameState, player: str, action: tuple) -> None:
             return
     elif kind == "cycle":
         if E.cycle(g, player, action[1]):
-            _finish_payment(g, player)
-            return
-    elif kind == "activate":
-        _, iid, index = action
-        if E.activate_ability(g, player, iid, index):
             _finish_payment(g, player)
             return
     elif kind == "cast":
@@ -256,112 +246,6 @@ def _hand_by_name(g: GameState, player: str) -> dict:
     return by
 
 
-# ── Toggleable strategic-dig logics (A/B sweep) ──────────────────────────────
-# Each flag enables a stance-driven dig behaviour. ALL OFF (the default) is the
-# committed baseline — no behaviour change. A tournament sets these per player.
-_DIG_FLAGS = ("defend", "sweeper", "beatdown", "grind")
-# Live-play defaults. A 320k-game A/B sweep found a small but consistent ~+0.4%
-# edge for `sweeper` (dig for the Vision Charm board-wipe when being run over with
-# no answer); `defend`/`beatdown`/`grind` stayed at noise, so they're off.
-_DEFAULT_FLAGS = {"sweeper": True}
-# Per-player overrides for A/B sweeps/tests; an explicit dict (even empty) for a
-# player wins over _DEFAULT_FLAGS, so a sweep can isolate any toggle either way.
-_PLAYER_FLAGS: dict = {}
-
-
-def _flag(player: str, name: str) -> bool:
-    flags = _PLAYER_FLAGS.get(player)
-    if flags is None:
-        flags = _DEFAULT_FLAGS                            # live play uses the defaults
-    return bool(flags.get(name))
-
-
-def _stance(g: GameState, player: str) -> str:
-    """One label for the board state, driving what we dig/tutor/keep for. Only
-    meaningful outside deck-out mode (which owns its own plan). Precedence:
-    desperate > beatdown > defend > grind > develop."""
-    if _in_deckout_mode(g, player):
-        return "deckout"
-    opp = E._OTHER[player]
-    mine = len(_sac_creatures(g, player))
-    theirs = len(_sac_creatures(g, opp))
-    gap = theirs - mine                                   # +ve: behind on fish
-    hand = _hand_by_name(g, player)
-    have_answer = bool(hand.get("Crystal Spray") or hand.get("Mind Bend")
-                       or hand.get("Vision Charm"))
-    threatening = any(not E._attack_restricted(g, opp, a) for a in _sac_creatures(g, opp))
-    if gap >= 2 and not have_answer:
-        return "desperate"                                # being run over, no answer in hand
-    if mine > theirs and _can_attack_opponent(g, player):
-        return "beatdown"                                 # ahead on fish and able to close
-    if 0 <= gap <= 1 or threatening:
-        return "defend"                                   # even, or a fish is pointed at us
-    if gap == 0 and g.players[player].hand and g.players[opp].hand:
-        return "grind"                                    # stalled, both still loaded
-    return "develop"
-
-
-def _dig_bonus(g: GameState, player: str, iid: str) -> float:
-    """Stance-driven bias added to card_value when CHOOSING what to keep/fetch
-    (it never changes the in-hand value used elsewhere). Zero unless the matching
-    flag is on, so all-off == baseline."""
-    o = g.objects.get(iid)
-    if not o:
-        return 0.0
-    name = o.name
-    st = _stance(g, player)
-    if st == "desperate" and _flag(player, "sweeper"):
-        if name == "Vision Charm":
-            return 10.0                                   # the sweeper we must find
-        if name in ("Crystal Spray", "Mind Bend"):
-            return 3.0                                    # single-target stopgap
-        if name in ("Accumulated Knowledge", "Brainstorm", "Ponder",
-                    "Predict", "Fact or Fiction"):
-            return 1.0                                    # keep digging toward it
-    elif st == "beatdown" and _flag(player, "beatdown"):
-        if name == "Memory Lapse":
-            return 3.0                                    # protect the clock
-        if name == "Dandân":
-            return 2.0
-    elif st == "defend" and _flag(player, "defend"):
-        if name in ("Crystal Spray", "Mind Bend"):
-            return 4.0
-        if name == "Vision Charm":
-            return 2.0
-        if name == "Metamorphose":
-            return 1.0
-    elif st == "grind" and _flag(player, "grind"):
-        if name == "Memory Lapse":
-            return 2.0
-    return 0.0
-
-
-def _stance_fetch(g: GameState, player: str, eligible: list):
-    """Mystical Tutor target dictated by an active dig flag — the highest dig
-    value among the eligible instants/sorceries — or None to fall back to the
-    wishlist."""
-    if not any(_flag(player, f) for f in _DIG_FLAGS):
-        return None
-    best = max(eligible, key=lambda iid: _dig_bonus(g, player, iid), default=None)
-    if best is not None and _dig_bonus(g, player, best) > 0:
-        return best
-    return None
-
-
-def _recover_top_action(g: GameState, player: str):
-    """Grind: on our own turn a known valuable top (e.g. our Dandân just Memory-
-    Lapsed there) goes to the OPPONENT's draw step next, so draw it back with an
-    instant-speed draw instead of gifting it."""
-    if not _flag(player, "grind") or g.active_player != player:
-        return None
-    if _stance(g, player) != "grind":
-        return None
-    top = _known_top(g, player)
-    if top is None or _is_land(top.type_line) or card_value(g, player, top.instance_id) < 6.0:
-        return None
-    return _instant_top_draw(g, player)
-
-
 def _main_phase_action(g: GameState, player: str) -> tuple:
     """Own main phase, empty stack: land drop, removal, threats, card advantage."""
     hand = _hand_by_name(g, player)
@@ -375,10 +259,6 @@ def _main_phase_action(g: GameState, player: str) -> tuple:
     if removal is not None:
         return removal
 
-    recover = _recover_top_action(g, player)              # grind: take our countered threat back
-    if recover is not None:
-        return recover
-
     # Threat: cast Dandân whenever affordable (it can't attack this turn anyway,
     # so either main phase is fine).
     for iid in hand.get("Dandân", []):
@@ -390,29 +270,13 @@ def _main_phase_action(g: GameState, player: str) -> tuple:
         return draw
 
     # Day's Undoing: refill an empty hand when the opponent is far ahead on
-    # cards (main2, so the whole turn was used first). Don't fire when we know
-    # the top card — that means we've set the library up (scry/Brainstorm/etc.)
-    # and the reshuffle would throw that away. (A swing-based gate,
-    # min(7, theirs) - ours >= 3, measured exactly 50.0% — same trigger set in
-    # practice, so the simpler hand-size gate stays.)
+    # cards (main2, so the whole turn was used first).
     if g.current_step == "main2" and hand.get("Day's Undoing"):
         iid = hand["Day's Undoing"][0]
         if (_affordable(g, player, g.objects[iid].mana_cost)
                 and len(g.players[player].hand) <= 2
-                and len(g.players[opp].hand) >= 4
-                and _known_top(g, player) is None):
+                and len(g.players[opp].hand) >= 4):
             return ("cast", iid, None, None)
-
-    # Flood valve: sac The Surgical Bay to draw a card once we're flooded, as
-    # long as the draw is safe (a non-empty library) and two OTHER untapped lands
-    # can pay {1}{U} (it taps itself as part of the cost).
-    if _lands_in_play(g, player) >= 6 and len(g.library) >= 1:
-        bays = [iid for iid in g.players[player].battlefield
-                if g.objects[iid].name == "The Surgical Bay" and not g.objects[iid].tapped]
-        others = [iid for iid in _untapped_lands(g, player)
-                  if g.objects[iid].name != "The Surgical Bay"]
-        if bays and len(others) >= 2:
-            return ("activate", bays[0], 1)               # {1}{U}, T, Sacrifice: Draw a card
 
     # Flood valve: cycle Lonely Sandbar once the board has plenty of lands.
     if _lands_in_play(g, player) >= 5:
@@ -451,18 +315,15 @@ def _choose_land_drop(g: GameState, player: str, hand: dict) -> str | None:
 
 
 def _removal_action(g: GameState, player: str, hand: dict) -> tuple | None:
-    """Kill the opponent's Dandân: Crystal Spray (until end of turn + a card) >
-    Mind Bend (permanent) > Vision Charm's land mode (kills ALL Dandâns — only
-    when the trade is clearly profitable). Crystal Spray goes first: the fish dies
-    to the sacrifice either way, so the until-end-of-turn change loses nothing,
-    and its cantrip makes the kill card-neutral — Mind Bend's permanence is wasted
-    on a creature that's leaving anyway."""
+    """Kill the opponent's Dandân: Mind Bend (permanent) > Crystal Spray (until
+    end of turn + a card) > Vision Charm's land mode (kills ALL Dandâns — only
+    when the trade is clearly profitable)."""
     opp = E._OTHER[player]
     targets = _sac_creatures(g, opp)
     mine = _sac_creatures(g, player)
     if targets:
         tgt = targets[0]
-        for name in ("Crystal Spray", "Mind Bend"):
+        for name in ("Mind Bend", "Crystal Spray"):
             for iid in hand.get(name, []):
                 if _affordable(g, player, g.objects[iid].mana_cost):
                     return ("cast", iid, None, tgt)
@@ -477,18 +338,8 @@ def _removal_action(g: GameState, player: str, hand: dict) -> tuple | None:
 
 
 def _card_advantage_action(g: GameState, player: str, hand: dict) -> tuple | None:
-    """Own-main draw spells — only the ones that genuinely must be cast on our
-    own turn. Everything castable at instant speed (Fact or Fiction, Accumulated
-    Knowledge, Brainstorm, blind Predict) is deferred to the OPPONENT's end step
-    (_end_step_draw_action): there our draw step is next, so Brainstorm put-backs
-    come back to US instead of feeding their draw, a Memory Lapse on our spell
-    only delays it into our own draw step, and after their end step nothing of
-    theirs resolves before we untap. Casting the same spells on our own main does
-    the opposite on every count. Two exceptions stay here:
-      * Predict with a KNOWN top — on our own turn the opponent draws next, so
-        the knowledge expires at their draw step; convert it now.
-      * Ponder — a sorcery, it's now or never (the seat-aware reorder already
-        steers its slots)."""
+    """The best affordable draw spell — kept on a leash when Memory Lapse mana
+    should stay open."""
     reserve = 0
     if hand.get("Memory Lapse") and g.turn_number >= 3:
         reserve = 2                                       # keep {1}{U} for the counter
@@ -501,58 +352,28 @@ def _card_advantage_action(g: GameState, player: str, hand: dict) -> tuple | Non
         avail = sum(_mana_view(g, player).values())
         return avail - (sum(colored.values()) + generic) >= reserve
 
-    options = []                                          # (priority, iid)
-    if _known_top(g, player):                             # guaranteed Predict hit
-        for iid in hand.get("Predict", []):
-            options.append((0, iid))
-    # Ponder stays ungated: in principle a Memory Lapse on our turn steals it
-    # (the shared top + their draw next), but no sane opponent Lapses a 1-mana
-    # cantrip (_counter_worthy never does), and gating it on their open mana
-    # measured 47.9% — the lost early velocity outweighs the phantom threat.
-    for iid in hand.get("Ponder", []):
-        options.append((1, iid))
-    # NB: Mystical Tutor is likewise NOT cast here — it puts the found card on
-    # top of the SHARED library and the opponent draws next on our own turn;
-    # _response_action casts it on their end step so our draw step takes it.
-    for _, iid in sorted(options, key=lambda t: t[0]):
-        if castable(iid) and _safe_to_cast(g, player, g.objects[iid].name):
-            return ("cast", iid, None, None)
-    return None
-
-
-def _end_step_draw_action(g: GameState, player: str) -> tuple | None:
-    """Draw-go: the best instant-speed draw spell at the OPPONENT's end step
-    (the caller checks the timing). No mana reserve here — after their end step
-    nothing of theirs resolves before we untap, so holding mana back buys
-    nothing. No "strong position" gate on the big engines either: at THIS
-    window a Memory Lapse on our spell is self-punishing (the spell returns to
-    the shared top and our draw step reclaims it, while their premium counter
-    hits the graveyard), so there is no position weak enough to justify
-    holding a resolvable Fact or Fiction — a counter-backup gate measured
-    41.5%. AK sequencing is a last-mover war over the shared graveyard: each
-    AK we cast upgrades THEIR next one, so never seed an empty graveyard
-    unless we hold the majority of the remaining chain (2+ copies) and are
-    therefore the likely last mover."""
-    hand = _hand_by_name(g, player)
-    aks_gy = sum(1 for cid in g.graveyard
-                 if g.objects[cid].name == "Accumulated Knowledge")
-    options = []                                          # (priority, iid)
-    for iid in hand.get("Fact or Fiction", []):           # the true 3-for-1: EOTFOF
+    aks = sum(1 for cid in g.graveyard if g.objects[cid].name == "Accumulated Knowledge")
+    options = []                                          # (priority, iid, target)
+    for iid in hand.get("Fact or Fiction", []):
         options.append((0, iid))
-    if aks_gy >= 1 or len(hand.get("Accumulated Knowledge", [])) >= 2:
+    if aks >= 1:
         for iid in hand.get("Accumulated Knowledge", []):
             options.append((1, iid))
-    # (Holding these cheap instants back as reactive "ammo" — dumping only
-    # under discard pressure — measured 48.2%: their reactive uses are too
-    # rare to pay for the per-turn value forgone.)
-    for iid in hand.get("Brainstorm", []):                # put-backs return to us here
-        options.append((2, iid))
-    for iid in hand.get("Predict", []):                   # blind: card-neutral + a denial mill
+    if _known_top(g, player):                             # guaranteed Predict hit
+        for iid in hand.get("Predict", []):
+            options.append((2, iid))
+    for iid in hand.get("Accumulated Knowledge", []):
         options.append((3, iid))
+    for iid in hand.get("Brainstorm", []):
+        options.append((4, iid))
+    for iid in hand.get("Ponder", []):
+        options.append((5, iid))
+    for iid in hand.get("Predict", []):
+        options.append((6, iid))
+    for iid in hand.get("Mystical Tutor", []):
+        options.append((7, iid))
     for _, iid in sorted(options, key=lambda t: t[0]):
-        name = g.objects[iid].name
-        if (_affordable(g, player, g.objects[iid].mana_cost)
-                and _safe_to_cast(g, player, name)):
+        if castable(iid):
             return ("cast", iid, None, None)
     return None
 
@@ -560,9 +381,8 @@ def _end_step_draw_action(g: GameState, player: str) -> tuple | None:
 # ── Deck-out mode (winning by emptying the shared library) ──────────────────
 #
 # library / graveyard / exile are ONE shared, ordered pool, and a player loses
-# the moment they must draw from an empty library — at their OWN draw step OR
-# from a spell/ability (so the AI must never over-draw itself: see
-# _safe_to_cast). During the AI's
+# only when they must draw at their OWN draw step with an empty library
+# (spell-induced draws from an empty library merely whiff). During the AI's
 # main phase the opponent draws next, so the opponent's draw steps see library
 # sizes L, L-2, L-4 ... and the AI's see L-1, L-3 ... — the opponent decks out
 # iff len(library) is EVEN when the AI ends its turn. So when combat can't close
@@ -619,24 +439,6 @@ def _library_drain(g: GameState, player: str, name: str) -> int | None:
     return None
 
 
-def _safe_to_cast(g: GameState, player: str, name: str) -> bool:
-    """Drawing from an empty library now LOSES the game (for spell draws too, not
-    just the draw step), so whether casting `name` is safe for US — it won't make
-    us draw past the last card. Milling/revealing doesn't draw, so only the draw
-    portion can deck us; conserve the spell when the shared deck is too thin."""
-    L = len(g.library)
-    if name == "Brainstorm":
-        return L >= 3                                     # draws three (before putting two back)
-    if name == "Accumulated Knowledge":
-        aks = sum(1 for cid in g.graveyard if g.objects[cid].name == "Accumulated Knowledge")
-        return L >= 1 + aks
-    if name == "Predict":                                 # mills one, then draws up to two
-        return L >= 3
-    if name in ("Ponder", "Lonely Sandbar"):              # draws one
-        return L >= 1
-    return True                                           # Fact or Fiction / Vision Charm: no draw
-
-
 def _deckout_library_action(g: GameState, player: str, hand: dict) -> tuple | None:
     """The deck-manipulation play that best advances the deck-out: leave the
     shared library at an EVEN size (the opponent draws the last card) and as
@@ -663,8 +465,6 @@ def _deckout_library_action(g: GameState, player: str, hand: dict) -> tuple | No
     for name, iids in hand.items():
         drain = _library_drain(g, player, name)
         if drain is None or drain <= 0:                   # unpredictable or no shrink
-            continue
-        if not _safe_to_cast(g, player, name):            # never deck OURSELVES out
             continue
         new_L = L - drain
         if new_L % 2 != 0:                                # would hand the deck-out to us
@@ -704,83 +504,9 @@ def _deckout_main_action(g: GameState, player: str) -> tuple:
     return ("pass",)
 
 
-_TOP_RACE_MIN_VALUE = 7.0   # only race for a real prize, not a mediocre top
-_KEEP_MIN = 3.0             # scry/reorder bar: a card worth drawing (vs a dud)
-
-
-def _instant_top_draw(g, player):
-    """The cheapest affordable INSTANT-speed draw that pulls the current top card
-    into our hand — expendable tools first (cycle a Lonely Sandbar, sac The
-    Surgical Bay) before spending a card-draw spell. Returns an action tuple, or
-    None if we can't draw at instant speed right now."""
-    hand = _hand_by_name(g, player)
-    for iid in hand.get("Lonely Sandbar", []):            # cycling {U}: discard, draw one
-        if _affordable(g, player, "{U}"):
-            return ("cycle", iid)
-    if g.library:                                         # sac The Surgical Bay: draw one
-        bays = [iid for iid in g.players[player].battlefield
-                if g.objects[iid].name == "The Surgical Bay" and not g.objects[iid].tapped]
-        others = [iid for iid in _untapped_lands(g, player)
-                  if g.objects[iid].name != "The Surgical Bay"]
-        if bays and len(others) >= 2:
-            return ("activate", bays[0], 1)
-    for name in ("Accumulated Knowledge", "Brainstorm"):  # instants that draw off the top
-        for iid in hand.get(name, []):
-            if _affordable(g, player, g.objects[iid].mana_cost) and _safe_to_cast(g, player, name):
-                return ("cast", iid, None, None)
-    return None
-
-
-def _opp_drawing_off_top(g, player):
-    """The opponent has an instant-speed draw on the stack right now — a draw
-    spell, OR a cycling / Surgical Bay draw ability (both resolve as a 'draw_1'
-    activated ability). It will pull the top card when it resolves, so we can
-    respond and take the top first (our response resolves first — LIFO)."""
-    opp = E._OTHER[player]
-    for so in g.stack:
-        if so.controller != opp:
-            continue
-        if so.kind == "spell":
-            o = g.objects.get(so.source_instance_id)
-            if o and o.name in ("Brainstorm", "Accumulated Knowledge", "Crystal Spray"):
-                return True
-        elif so.kind == "activated" and (so.chosen or {}).get("effect") == "draw_1":
-            return True                                   # opponent's cycling / Surgical Bay draw
-    return False
-
-
-def _race_top_action(g, player):
-    """A KNOWN, valuable card on top of the SHARED library is a contested
-    resource. If the opponent would draw it before we naturally would — their
-    draw step is imminent (their upkeep) or they're drawing right now (a draw
-    spell on the stack) — snatch it first with an instant-speed draw/cycle. The
-    top is known to both players after a tutor / Mystic Sanctuary / Memory Lapse,
-    so this is a real race we can win by responding."""
-    if _in_deckout_mode(g, player):
-        return None                                       # racing burns the parity we're steering
-    top = _known_top(g, player)
-    if (top is None or _is_land(top.type_line)            # not worth an instant draw for a land
-            or card_value(g, player, top.instance_id) < _TOP_RACE_MIN_VALUE):
-        return None
-    opp = E._OTHER[player]
-    # The top is only "ours to lose" while our own draw step is still ahead
-    # this turn. On our OWN turn after the draw step (main1 onward) the next
-    # natural draw is the OPPONENT's — a known good top there (a spell we just
-    # Memory Lapsed, their end-step tutor target) is theirs unless we take it
-    # at instant speed now.
-    imminent = ((g.active_player == opp
-                 and (g.current_step == "upkeep" or _opp_drawing_off_top(g, player)))
-                or (g.active_player == player
-                    and g.current_step not in ("untap", "upkeep", "draw")))
-    if not imminent:
-        return None                                       # our own draw step still gets it
-    return _instant_top_draw(g, player)
-
-
 def _response_action(g: GameState, player: str) -> tuple:
     """Anything outside my own quiet main phase: counter the opponent's spell
-    with Memory Lapse when it threatens us, race a known card off the top, else
-    pass."""
+    with Memory Lapse when it threatens us, otherwise pass."""
     opp = E._OTHER[player]
     top = g.stack[-1] if g.stack else None
     if (top is not None and top.kind == "spell" and top.controller == opp
@@ -788,31 +514,6 @@ def _response_action(g: GameState, player: str) -> tuple:
         lapses = _hand_by_name(g, player).get("Memory Lapse", [])
         if lapses and _affordable(g, player, g.objects[lapses[0]].mana_cost):
             return ("cast", lapses[0], None, top.source_instance_id)
-    # Race the opponent for a known, valuable top card (their upkeep, or in
-    # response to their draw spell) before they draw it.
-    race = _race_top_action(g, player)
-    if race is not None:
-        return race
-    # The OPPONENT's end step with an empty stack: the draw-go window. Fire the
-    # instant-speed draw engines deferred from our own main phase (see
-    # _card_advantage_action), then Mystical Tutor — it puts the found card on
-    # top of the SHARED library and our draw step is next, so WE draw it (not
-    # the opponent, as we would casting it on our own turn). Deck-out mode
-    # hoards instead: spending draw spells for value burns the parity tools.
-    if g.active_player == opp and g.current_step == "end" and not g.stack:
-        if not _in_deckout_mode(g, player):
-            draw = _end_step_draw_action(g, player)
-            if draw is not None:
-                return draw
-        tutors = _hand_by_name(g, player).get("Mystical Tutor", [])
-        if tutors and _affordable(g, player, g.objects[tutors[0]].mana_cost):
-            return ("cast", tutors[0], None, None)
-    # NB: our OWN upkeep is deliberately NOT a draw window. Floyd's "cast in
-    # your upkeep" rule protects a specific must-resolve spell from Memory
-    # Lapse, but as a general window it taps the most expensive mana of the
-    # game — everything spent at upkeep crowds out our own main phase, unlike
-    # the opponent's end step where we untap immediately after. Measured:
-    # 45.4% vs not doing it.
     return ("pass",)
 
 
@@ -830,37 +531,13 @@ def _counter_worthy(g: GameState, player: str, so) -> bool:
         # itself grow the library by putting the countered spell back on top.
         return name == "Day's Undoing"
     if name == "Dandân":
-        # Memory Lapse only DELAYS a fish — it goes back on top of the shared
-        # library to be redrawn — so it's a poor use of a premium counter unless
-        # the fish actually matters. Don't spend it when we hold a permanent
-        # answer (Crystal Spray / Mind Bend), or when we're comfortable: healthy
-        # life, no attacking board, and our own creatures to block or race with.
-        # Otherwise it's our only answer — counter it.
-        hand = _hand_by_name(g, player)
-        if hand.get("Crystal Spray") or hand.get("Mind Bend"):
-            return False                                  # remove it permanently instead
-        opp = E._OTHER[player]
-        attackers = [a for a in g.players[opp].battlefield
-                     if E._is_creature(g.objects[a]) and not E._attack_restricted(g, opp, a)]
-        return (g.players[player].life <= 12 or bool(attackers)
-                or not _sac_creatures(g, player))
+        return True
     # Anything aimed at our stuff (Mind Bend / Crystal Spray / Metamorphose on
-    # our permanents, or a counter on our own spell). No grab-plan gate here:
-    # even a redrawn removal spell bought the permanent a turn.
+    # our permanents, or a counter on our own spell).
     own = set(g.players[player].battlefield)
     own.update(s.source_instance_id for s in g.stack if s.controller == player)
     if any(t.get("id") in own for t in (so.targets or [])):
         return True
-    # Value spells: a Lapse puts the spell on top of the SHARED library, so on
-    # OUR turn the opponent's draw step simply reclaims it — countering without
-    # a plan to draw it ourselves at instant speed (cycle / Bay / Brainstorm /
-    # AK, after paying the Lapse) only converts their spell into a one-turn
-    # delay at the price of our premium counter. On THEIR turn the counter is
-    # a steal (our draw is next) and needs no plan.
-    if (g.active_player == player
-            and name in ("Fact or Fiction", "Day's Undoing", "Accumulated Knowledge")
-            and not _can_grab_after_lapse(g, player)):
-        return False
     if name in ("Fact or Fiction", "Day's Undoing"):
         return True
     if name == "Accumulated Knowledge":
@@ -871,48 +548,39 @@ def _counter_worthy(g: GameState, player: str, so) -> bool:
     return False
 
 
-def _can_grab_after_lapse(g: GameState, player: str) -> bool:
-    """After paying Memory Lapse ({1}{U}), can we still take the returned top
-    card at instant speed before the opponent's draw step? Mirrors the tools in
-    _instant_top_draw with a two-mana margin for the Lapse itself."""
-    avail = sum(_mana_view(g, player).values())
-    hand = _hand_by_name(g, player)
-    if avail >= 3 and (hand.get("Lonely Sandbar")
-                       or (hand.get("Brainstorm") and _safe_to_cast(g, player, "Brainstorm"))):
-        return True
-    if avail >= 4:
-        if (hand.get("Accumulated Knowledge")
-                and _safe_to_cast(g, player, "Accumulated Knowledge")):
-            return True
-        bays = [iid for iid in g.players[player].battlefield
-                if g.objects[iid].name == "The Surgical Bay" and not g.objects[iid].tapped]
-        others = [iid for iid in _untapped_lands(g, player)
-                  if g.objects[iid].name != "The Surgical Bay"]
-        if bays and len(others) >= 4:                     # 2 for the Lapse + 2 for the Bay
-            return True
-    return False
-
-
 # ── Combat ──────────────────────────────────────────────────────────────────
 
 def choose_attackers(g: GameState, player: str, eligible: list) -> list:
-    """Attack with everything, always. With symmetric 4/1 fish every block is a
-    1-for-1 board trade that costs neither side a hand card, so attacking only
-    ever presents the defender a losing choice: trade (fine for us) or take 4
-    (life pressure that devalues their hand in the attrition war). Measured by
-    ablation from the old conservative rules (hold back unless outnumbering or
-    lethal): every widening of the attack condition won more — the full
-    gradient runs 50.0% -> 52.2% from always-hold-heuristics to always-attack."""
-    return eligible
+    """Attack with everything when it's profitable: free damage, outnumbering
+    the blockers, or a lethal race — otherwise hold back."""
+    opp = E._OTHER[player]
+    blockers = E._eligible_blockers(g, opp)
+    a, b = len(eligible), len(blockers)
+    if b == 0:
+        return eligible
+    power = sum(g.objects[iid].power for iid in eligible)
+    excess = power - 4 * b                                # damage that gets through blocks
+    if excess >= g.players[opp].life:
+        return eligible                                   # lethal even through blocks
+    if g.players[player].life <= 8 and b >= a:
+        return []                                         # too far behind to trade into blocks
+    if a > b:
+        return eligible                                   # outnumber their blockers
+    return []
 
 
 def choose_blocks(g: GameState, player: str, eligible: list) -> dict:
     """Every block here is a one-for-one trade (4/1 vs 4/1). Block everything
-    when possible: like attacking, a block is a 1-for-1 board trade that costs
-    no hand cards, and declining it just donates 4 damage. Measured: gating
-    blocks on life/board conditions only ever lost winrate."""
+    when unblocked damage would be lethal; trade when level or behind on life."""
     attackers = list(g.combat.attackers.keys())
     if not attackers:
+        return {}
+    incoming = sum(g.objects[a].power for a in attackers if a in g.objects)
+    life = g.players[player].life
+    opp = E._OTHER[player]
+    must_block = incoming >= life
+    want_trades = life <= 12 or len(_creatures(g, player)) >= len(_creatures(g, opp))
+    if not (must_block or want_trades):
         return {}
     blocks = {}
     pool = list(eligible)
@@ -950,49 +618,20 @@ def _decide_play_order(g, player, ctx):
     E.choose_play_order(g, player, "first")
 
 
-_CANTRIPS = ("Brainstorm", "Ponder")   # the 1-mana diggers that find land #2 off one land
-
-
-def _keepable(lands: int, cantrips: int, kept: int) -> bool:
-    """Whether to keep a fresh seven that will be bottomed to `kept` cards.
-    Low curve, so 2-4 lands is ideal; 1 land needs cantrips to find #2 (fewer are
-    demanded as we mull lower); 5+ lands is a flood; never dig below five."""
-    if kept <= 4:                                         # mull floor: a shaky 4 beats a 3
-        return lands >= 1
-    if lands == 0 or lands >= 5:                          # no mana / flooded
-        return False
-    if lands >= 2:                                        # 2..4 lands
-        return True
-    return cantrips >= (2 if kept >= 6 else 1)            # 1 land: lean on the diggers
-
-
 def _decide_mulligan(g, player, ctx):
-    cards = _hand_cards(g, player)
-    lands = sum(1 for o in cards if _is_land(o.type_line))
-    cantrips = sum(1 for o in cards if o.name in _CANTRIPS)
-    kept = E._OPENING_HAND - g.players[player].mulligans
-    keep = _keepable(lands, cantrips, kept)
+    lands = sum(1 for o in _hand_cards(g, player) if _is_land(o.type_line))
+    keep = 2 <= lands <= 5 or g.players[player].mulligans >= 2
     E.mulligan_decision(g, player, "keep" if keep else "mulligan")
 
 
 def _decide_bottom(g, player, ctx):
-    """Bottom to ~3 lands, and when land-light protect the diggers (a 1-land keep
-    that ships its Brainstorm/Ponder has thrown away its escape hatch)."""
     n = ctx.get("count", 0)
     hand = list(g.players[player].hand)
     lands = [iid for iid in hand if _is_land(g.objects[iid].type_line)]
-    nonlands = [iid for iid in hand if iid not in lands]
-    excess_lands = lands[3:]                              # keep up to three lands
-    land_light = (len(lands) - len(excess_lands)) <= 1    # keeping a single land
-
-    def ship_rank(iid):                                   # lower = bottomed sooner
-        v = card_value(g, player, iid)
-        if g.objects[iid].name in _CANTRIPS and land_light:
-            v += 6.0                                      # the digger is the escape hatch — keep it
-        return v
-
-    bottomable = excess_lands + sorted(nonlands, key=ship_rank)
-    E.bottom_cards(g, player, bottomable[:n])
+    extra_lands = lands[3:]                               # keep three lands
+    rest = sorted((iid for iid in hand if iid not in extra_lands),
+                  key=lambda iid: card_value(g, player, iid))
+    E.bottom_cards(g, player, (extra_lands + rest)[:n])
 
 
 def _draw_desirability(g, player, iid) -> float:
@@ -1007,141 +646,39 @@ def _draw_desirability(g, player, iid) -> float:
 
 
 def _decide_scry(g, player, ctx):
-    """Scry on the SHARED library. Keep the cards we want where WE draw them and
-    bottom the rest — but the next draw is usually the opponent's, so for a slot
-    they draw we instead keep a dud on top (waste their draw) and bottom anything
-    that would help them (deny it; we weren't getting it anyway). If we hold a
-    castable Predict and would keep nothing of our own, leave one card we draw on
-    top: a known top is a guaranteed Predict hit (name it, mill it, draw two)."""
-    cards = [c["instance_id"] for c in ctx.get("cards", [])]
-    if not cards:
-        E.complete_scry(g, player, [], [])
-        return
-    opp = E._OTHER[player]
-    seats = _draw_assignment(g, player, len(cards), 0)
-    order = _fill_slots(g, player, cards, seats)
     tops, bottoms = [], []
-    for iid, seat in zip(order, seats):
-        if seat == player:
-            keep = _draw_desirability(g, player, iid) >= _KEEP_MIN   # a card we want to draw
+    for c in ctx.get("cards", []):
+        iid = c["instance_id"]
+        if _draw_desirability(g, player, iid) >= 3.0:
+            tops.append(iid)
         else:
-            keep = _draw_desirability(g, opp, iid) < _KEEP_MIN       # a dud we're glad to feed them
-        (tops if keep else bottoms).append(iid)
-    if not tops and bottoms and seats[0] == player:
-        hand = _hand_by_name(g, player)
-        if any(_affordable(g, player, g.objects[i].mana_cost) and _safe_to_cast(g, player, "Predict")
-               for i in hand.get("Predict", [])):
-            tops.append(bottoms.pop(0))                   # set a known top for Predict
+            bottoms.append(iid)
     E.complete_scry(g, player, tops, bottoms)
 
 
 def _decide_reorder(g, player, ctx):
-    """Ponder / Halimar Depths. Reorder the looked-at cards across the slots their
-    future drawers will take (Ponder draws the first one itself; the rest, like
-    Halimar's three, usually go to the opponent first off the shared library) so
-    our best cards land where WE draw them and the duds where THEY do. Still
-    shuffle to dig when nothing here is worth keeping for us."""
     ids = [c["instance_id"] for c in ctx.get("cards", [])]
-    seats = _draw_assignment(g, player, len(ids), ctx.get("draw_after", 0))
-    order = _fill_slots(g, player, ids, seats)
+    order = sorted(ids, key=lambda iid: -_draw_desirability(g, player, iid))
     if ctx.get("allow_shuffle") and all(
-            _draw_desirability(g, player, iid) < _KEEP_MIN for iid in ids):
+            _draw_desirability(g, player, iid) < 3.0 for iid in ids):
         E.complete_reorder(g, player, order, shuffle=True)
     else:
         E.complete_reorder(g, player, order)
 
 
 def _decide_putback(g, player, ctx):
-    """Brainstorm: keep our best in hand and put the least-wanted cards back on
-    top. On our own turn the opponent draws first off the shared library, so steer
-    the worst of those toward their draw and keep the better ones for our own
-    slots (we re-draw them — Predict fuel); cast at the opponent's end step the
-    next draw is ours, so we keep both."""
+    """Brainstorm: put back the two least wanted cards, the better one on top
+    (drawn again first). They become known top slots — Predict fuel."""
     n = ctx.get("slots", 0)
     hand = list(g.players[player].hand)
-
-    def keep_value(iid):
-        return card_value(g, player, iid) + _dig_bonus(g, player, iid)
-
-    chosen = sorted(hand, key=keep_value)[:n]             # ship the least wanted (dig-aware)
-    seats = _draw_assignment(g, player, len(chosen), 0)   # putback has no immediate draw
-    order = _fill_slots(g, player, chosen, seats)
-    E.complete_putback(g, player, order)
-
-
-def _next_drawer(g, player):
-    """Who draws the next card off the SHARED library. On our own turn the
-    opponent's draw step precedes our next one, so they draw next — unless we
-    still hold a castable draw spell that takes the top card ourselves first
-    (Brainstorm/Ponder/Accumulated Knowledge all draw off the top). On the
-    opponent's turn (e.g. an instant-speed tutor at their end step) our draw
-    step is next, so we draw next."""
-    opp = E._OTHER[player]
-    if g.active_player != player:
-        return player
-    hand = _hand_by_name(g, player)
-    for name in ("Brainstorm", "Ponder", "Accumulated Knowledge"):
-        for iid in hand.get(name, []):
-            if _affordable(g, player, g.objects[iid].mana_cost) and _safe_to_cast(g, player, name):
-                return player
-    return opp
-
-
-def _draw_assignment(g, player, n, draw_after=0):
-    """Which seat draws each of the top n library slots, in order. The first
-    `draw_after` slots are the resolving effect's own immediate draws (always the
-    controller — e.g. Ponder's draw-one); the rest fall to future draw steps off
-    the SHARED library, alternating from whoever draws next (_next_drawer). On our
-    own turn that next draw is usually the opponent's, so leaving a card on top
-    most often hands it to them."""
-    opp = E._OTHER[player]
-    seats = [player] * min(draw_after, n)
-    nxt = _next_drawer(g, player)
-    while len(seats) < n:
-        seats.append(nxt)
-        nxt = opp if nxt == player else player
-    return seats
-
-
-def _fill_slots(g, player, ids, seats):
-    """Order `ids` into the slots described by `seats` (one seat per slot, same
-    length). Because the library is shared, a card in an opponent-drawn slot is a
-    gift: keep the cards worth most to US in our own slots, and steer the cards
-    least useful to the OPPONENT into theirs. Keep-priority is value-to-us plus
-    value-to-them (mine+theirs): high means 'we want it and don't want them to
-    have it' -> keep; low means a dead card -> safe to hand over. Within our slots
-    our best is drawn soonest; within theirs their worst is drawn soonest."""
-    opp = E._OTHER[player]
-    mine = {i: _draw_desirability(g, player, i) for i in ids}
-    theirs = {i: _draw_desirability(g, opp, i) for i in ids}
-    n_me = sum(1 for s in seats if s == player)
-    ranked = sorted(ids, key=lambda i: mine[i] + theirs[i], reverse=True)
-    my_cards = ranked[:n_me]
-    opp_cards = ranked[n_me:]
-    my_cards.sort(key=lambda i: mine[i], reverse=True)    # our best, drawn soonest
-    opp_cards.sort(key=lambda i: theirs[i])               # their worst, drawn soonest
-    order, mi, oi = [], 0, 0
-    for s in seats:
-        if s == player:
-            order.append(my_cards[mi]); mi += 1
-        else:
-            order.append(opp_cards[oi]); oi += 1
-    return order
+    chosen = sorted(hand, key=lambda iid: card_value(g, player, iid))[:n]
+    chosen.sort(key=lambda iid: -card_value(g, player, iid))
+    E.complete_putback(g, player, chosen)
 
 
 def _decide_search(g, player, ctx):
-    """Mystical Tutor puts the found card on TOP of the SHARED library, so the
-    NEXT draw gets it — and on our own turn that draw is usually the OPPONENT's.
-    Only commit to a card when we draw next; otherwise fail to find (just
-    shuffle) rather than hand the opponent a free instant/sorcery."""
+    """Mystical Tutor: removal if it has a job, else the counter, else draw."""
     eligible = ctx.get("eligible", [])
-    if not eligible or _next_drawer(g, player) != player:
-        E.complete_library_search(g, player, None)        # shuffle, find nothing
-        return
-    pick = _stance_fetch(g, player, eligible)             # dig flags override the wishlist
-    if pick is not None:
-        E.complete_library_search(g, player, pick)
-        return
     by_name = {}
     for iid in eligible:
         by_name.setdefault(g.objects[iid].name, []).append(iid)
@@ -1162,29 +699,15 @@ def _decide_search(g, player, ctx):
 
 
 def _decide_fof_split(g, player, ctx):
-    """Splitting the opponent's Fact or Fiction. The caster keeps ONE pile and
-    bins the other, so we make the two piles as close in value as we can — then
-    whichever they keep, they gain the least. Value is judged from the CASTER's
-    seat (they do the choosing). Naive value-balanced partition: deal each card,
-    richest first, onto the lighter pile — a stopgap until the ML splitter lands.
-    (Replaces the old isolate-the-bomb 1/4 split, which usually just handed them
-    the fat pile.)"""
+    """Splitting the opponent's Fact or Fiction: isolate the best card so they
+    must choose between it and everything else."""
     revealed = list(ctx.get("revealed", []))
     if not revealed:
         E.complete_fof_split(g, player, [], [])
         return
-    caster = ctx.get("caster", E._OTHER[player])
-    pile1, pile2 = [], []
-    v1 = v2 = 0.0
-    for iid in sorted(revealed, key=lambda i: card_value(g, caster, i), reverse=True):
-        val = card_value(g, caster, iid)
-        if v1 <= v2:
-            pile1.append(iid)
-            v1 += val
-        else:
-            pile2.append(iid)
-            v2 += val
-    E.complete_fof_split(g, player, pile1, pile2)
+    best = max(revealed, key=lambda iid: card_value(g, player, iid))
+    rest = [iid for iid in revealed if iid != best]
+    E.complete_fof_split(g, player, [best], rest)
 
 
 def _decide_fof_choose(g, player, ctx):
@@ -1240,18 +763,10 @@ def _decide_discard(g, player, ctx):
 
 
 def _decide_graveyard(g, player, ctx):
-    """Resolution "may" for a targeted recursion (Mystic Sanctuary): it puts the
-    chosen card on top of the SHARED library, so on our own turn the OPPONENT
-    draws it next. Take the best card back only when WE draw next; otherwise
-    decline the "may" rather than gift the opponent a free instant/sorcery (the
-    same shared-deck logic as Mystical Tutor — see _decide_search)."""
+    """Resolution "may" for a targeted recursion (Mystic Sanctuary): the AI chose
+    the target when the ability went on the stack, so put the best eligible card
+    on top of the library."""
     eligible = ctx.get("eligible", [])
-    if not eligible:
-        E.complete_graveyard_choice(g, player, None)
-        return
-    if _next_drawer(g, player) != player and ctx.get("may", True):
-        E.complete_graveyard_choice(g, player, None)      # decline rather than feed the opponent
-        return
     pick = max(eligible, key=lambda iid: card_value(g, player, iid), default=None)
     E.complete_graveyard_choice(g, player, pick)
 

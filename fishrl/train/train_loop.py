@@ -147,7 +147,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
     # status line can report the proportion of TRAINED (neural) opponents -- mirror
     # self-play + frozen past-selves -- vs the scripted/engine bots (random/attacker/
     # heuristic). Reset each report alongside win_iters.
-    OPP_CATS = ("self", "pastself", "heuristic", "attacker", "random")
+    OPP_CATS = ("self", "pastself", "heuristic", "heuristic_1_1", "attacker", "random")
     opp_mix = {k: 0 for k in OPP_CATS}
     scen_mix: dict = {}            # scenario games played this window (DEBUG logging only)
     last_batch = None
@@ -287,7 +287,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 "opp_trained": (opp_mix["self"] + opp_mix["pastself"]) / grand_total,
                 "opp_self": opp_mix["self"] / grand_total,
                 "opp_past": opp_mix["pastself"] / grand_total,
-                "opp_heuristic": opp_mix["heuristic"] / grand_total,
+                "opp_heuristic": opp_mix["heuristic"] / grand_total,        # v1.0 only
+                "opp_heuristic11": opp_mix["heuristic_1_1"] / grand_total,  # testbench v1.1
                 "opp_attacker": opp_mix["attacker"] / grand_total,
                 "opp_random": opp_mix["random"] / grand_total,
                 "opp_scenario": scen_total / grand_total,
@@ -306,10 +307,16 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     "new_best": False, "source": "inline",
                 })
         if cfg.pool_frac > 0 and league.members():        # PFSP composition + win-rate table
-            log(f"[league it={done}] games={mix_total} trained={trained_frac:.2f} "  # own line:
-                f"(self={opp_mix['self']} past={opp_mix['pastself']} "                # not parsed
-                f"heuristic={opp_mix['heuristic']} attacker={opp_mix['attacker']} "   # by the
-                f"random={opp_mix['random']}) | {league.summary()}")                  # collector
+            # The paren-count format is parsed by the website collector and by
+            # backfill_stats with a STRICT 5-token sequence, so `heuristic=` prints the
+            # MERGED v1.0+v1.1 count to keep the format stable; the per-version split
+            # lives in stats.json (opp_heuristic vs opp_heuristic11) and the wr table
+            # after the bar names heuristic_1_1 separately.
+            log(f"[league it={done}] games={mix_total} trained={trained_frac:.2f} "
+                f"(self={opp_mix['self']} past={opp_mix['pastself']} "
+                f"heuristic={opp_mix['heuristic'] + opp_mix['heuristic_1_1']} "
+                f"attacker={opp_mix['attacker']} "
+                f"random={opp_mix['random']}) | {league.summary()}")
         if cfg.scenario_frac > 0 and scen_league is not None and scen_league.members():
             # Per-scenario games this window + the PFSP win-rate driving selection.
             # Every registered scenario is listed (0 games shown too); win-rates are a
@@ -433,11 +440,12 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     buf.merge(gbuf)
                     continue
                 opp_mix["pastself" if member.kind == "self" else member.kind] += 1
-                if member.kind == "heuristic":              # engine-driven -> learner is p1
-                    lseat = "p1"
+                if member.kind.startswith("heuristic"):     # engine-driven -> learner is p1
+                    lseat = "p1"                            # (kind doubles as the ai_profile)
                     gbuf = collect_heuristic_games(m.guesser, m.actor, 1, oseed,
                                                    critic=None, use_belief=cfg.use_belief,
-                                                   max_decisions=cfg.max_decisions)
+                                                   max_decisions=cfg.max_decisions,
+                                                   profile=member.kind)
                 else:                                       # scripted / past-self, seat-balanced
                     lseat = "p1" if pidx % 2 == 0 else "p2"
                     gbuf = collect_vs_opponent(m, member, 1, oseed, critic=None,

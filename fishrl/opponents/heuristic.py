@@ -24,16 +24,22 @@ SEAT = "p1"
 
 
 class HeuristicMatch:
-    """A single-seat (p1) driver versus the engine heuristic AI (p2)."""
+    """A single-seat (p1) driver versus the engine heuristic AI (p2).
 
-    def __init__(self, stops_mode: str = "default", max_decisions: int = 4000):
+    `profile` selects the AI version: "heuristic" (v1.0 — the run's long-standing
+    opponent and eval anchor) or "heuristic_1_1" (the stronger testbench line,
+    used as a separate PFSP pool opponent)."""
+
+    def __init__(self, stops_mode: str = "default", max_decisions: int = 4000,
+                 profile: str = "heuristic"):
         self.stops_mode = stops_mode
         self.max_decisions = max_decisions
+        self.profile = profile
 
     def reset(self, seed=None) -> dict:
         self.g = E.new_sandbox_game(load_decklist(), seed=seed, p1_name="p1",
-                                    ai_profile="heuristic")
-        self.g.players["p2"].name = "Heuristic AI"
+                                    ai_profile=self.profile)
+        self.g.players["p2"].name = f"Heuristic AI ({self.profile})"
         E.set_player_stops(self.g, SEAT, STOPS_MODES[self.stops_mode])
         self._builder = None
         self._decisions = 0

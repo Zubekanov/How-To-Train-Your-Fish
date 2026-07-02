@@ -95,7 +95,7 @@ def fill_critic_values(buf: RolloutBuffer, critic, batch: int = 8192) -> None:
 
 def collect_heuristic_games(guesser, actor, n_games, base_seed, critic=None,
                             use_belief=True, max_decisions=2000,
-                            stops_mode="default") -> RolloutBuffer:
+                            stops_mode="default", profile="heuristic") -> RolloutBuffer:
     """Collect rollouts where the LEARNING policy (p1) plays the engine's heuristic
     AI (p2) — the curriculum/pool opponent, in contrast to `collect_games`'
     shared-policy self-play.
@@ -116,7 +116,8 @@ def collect_heuristic_games(guesser, actor, n_games, base_seed, critic=None,
     zeros = np.zeros(V.N_NAMES, dtype=np.float32)
     buf = RolloutBuffer()
     for gi in range(n_games):
-        match = HeuristicMatch(stops_mode=stops_mode, max_decisions=max_decisions)
+        match = HeuristicMatch(stops_mode=stops_mode, max_decisions=max_decisions,
+                               profile=profile)
         obs = match.reset(seed=base_seed + gi)
         prev_guess = zeros.copy()
         start = len(buf)
@@ -190,8 +191,9 @@ def collect_vs_opponent(learner, opponent, n_games, base_seed, critic=None,
     from fishrl.env.aec_env import FishAEC
 
     kind = opponent.kind
-    if kind == "heuristic":
-        raise ValueError("heuristic is collected via collect_heuristic_games, not collect_vs_opponent")
+    if kind.startswith("heuristic"):
+        raise ValueError("heuristic opponents (any version) are collected via "
+                         "collect_heuristic_games, not collect_vs_opponent")
     learn_act = actor_act_fn(learner.actor)
     ldev = device_of(learner.guesser)
     zeros = np.zeros(V.N_NAMES, dtype=np.float32)

@@ -83,9 +83,14 @@ python -m fishrl.eval.ab_encoder --gpu                       # flat-vs-entity A/
 
 By default a fraction of each iteration's games is played against a **league**
 opponent instead of mirror self-play: the scripted anchors (random / attacker /
-heuristic) plus a ring of frozen past-self snapshots (one appended per status
-report). Only the learner seat's transitions are trained. Opponents are sampled
-by prioritized fictitious self-play over the learner's per-opponent win-rate.
+heuristic / heuristic_1_1) plus a ring of frozen past-self snapshots (one appended
+per status report). Only the learner seat's transitions are trained. Opponents are
+sampled by prioritized fictitious self-play over the learner's per-opponent
+win-rate. Two heuristic versions exist: `heuristic` is **v1.0**
+(`forgetful_fish/ai.py`) — the long-standing training opponent, the vs-heuristic
+eval anchor, and the scenario bot; `heuristic_1_1` is **v1.1**
+(`forgetful_fish/ai_v1_1.py`, the stronger testbench line, ~65% vs v1.0) and is a
+POOL opponent only, so the eval baseline stays comparable across the run.
 
 - `--pool-frac` (default 0.25) — fraction of games vs a league opponent; 0 = pure self-play
 - `--pfsp-mode` (`hard` default | `var`) — `hard` favours opponents you lose to; `var` favours even matchups

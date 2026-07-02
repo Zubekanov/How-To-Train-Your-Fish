@@ -32,6 +32,11 @@ _INF = (
 _EVAL_INF = (
     "2026-06-23T10:00:00+10:00 [eval it=12900 @70.0h n=100 w=6 took=87.8s] "
     "WR frozen@12755=inf random=0.940 attacker=0.750 heuristic=0.070")
+# The newest panel format: heuristic v1.1 measured alongside (never the best.pt anchor).
+_EVAL_H11 = (
+    "2026-07-03T10:00:00+10:00 [eval it=61500 @330.0h n=100 w=6 took=95.0s] "
+    "WR frozen@61200=0.510 random=0.960 attacker=0.900 heuristic=0.310 "
+    "heuristic11=0.120  *** NEW BEST (heuristic) -> best.pt ***")
 # The newest status format: clip fraction + brier gap + the window game telemetry.
 _STATUS_V3 = (
     "2026-07-02T10:00:00+10:00 [status 312.0h it=58500 (+180, 180.0/h) T=470000] "
@@ -159,3 +164,12 @@ def test_eval_with_inf_still_parses():
     assert len(recs) == 1
     assert recs[0]["frozen"] is None
     assert recs[0]["random"] == 0.94
+
+
+def test_parse_eval_with_heuristic11_and_old_lines_still_parse():
+    r = parse_evals([_EVAL_H11])[0]
+    assert r["it"] == 61500
+    assert r["heuristic"] == 0.31 and r["heuristic11"] == 0.12
+    assert r["new_best"] is True
+    old = parse_evals([_EVAL_INF])[0]                # pre-v1.1 panel line
+    assert old["heuristic"] == 0.07 and old["heuristic11"] is None

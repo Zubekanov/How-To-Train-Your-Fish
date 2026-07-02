@@ -57,6 +57,7 @@ _GAME_TELEM = re.compile(
 _STATUS_WR = re.compile(
     r"WR\s+frozen@(?P<fat>\d+)=(?P<frozen>[-\d.naif]+)\s+random=(?P<rand>[-\d.naif]+)\s+"
     r"attacker=(?P<att>[-\d.naif]+)\s+heuristic=(?P<heu>[-\d.naif]+)\s+"
+    r"(?:heuristic11=(?P<heu11>[-\d.naif]+)\s+)?"      # newer inline panels only
     r"\(n=(?P<n>\d+),\s+eval\s+(?P<es>[\d.]+)s\)")
 
 # Opponent-mix tail of a `[status ...]` line: `... gmae=0.18 | opp trained=0.92 | ...`. Newer
@@ -88,7 +89,8 @@ _SCENARIO = re.compile(r"\[scenario(?:\s+debug)?\s+it=(?P<it>\d+)\]\s+games=(?P<
 _EVAL = re.compile(
     r"\[eval\s+it=(?P<it>\d+)\s+@(?P<eh>[\d.]+)h\s+n=(?P<n>\d+)\s+w=(?P<w>\d+)\s+"
     r"took=(?P<took>[\d.]+)s\]\s+WR\s+frozen@(?P<fat>\d+)=(?P<frozen>[-\d.naif]+)\s+"
-    r"random=(?P<rand>[-\d.naif]+)\s+attacker=(?P<att>[-\d.naif]+)\s+heuristic=(?P<heu>[-\d.naif]+)")
+    r"random=(?P<rand>[-\d.naif]+)\s+attacker=(?P<att>[-\d.naif]+)\s+heuristic=(?P<heu>[-\d.naif]+)"
+    r"(?:\s+heuristic11=(?P<heu11>[-\d.naif]+))?")     # newer panels only
 
 
 def _f(s):
@@ -215,7 +217,8 @@ def parse_status(lines, league=None) -> tuple:
                 "wall_time": ts, "n": int(w.group("n")), "workers": 1,
                 "took_s": _f(w.group("es")), "frozen": _f(w.group("frozen")),
                 "random": _f(w.group("rand")), "attacker": _f(w.group("att")),
-                "heuristic": _f(w.group("heu")), "new_best": False,
+                "heuristic": _f(w.group("heu")), "heuristic11": _f(w.group("heu11")),
+                "new_best": False,
                 "source": "journald-inline",
             })
     return reports, inline_evals
@@ -233,6 +236,7 @@ def parse_evals(lines) -> list:
             "n": int(m.group("n")), "workers": int(m.group("w")), "took_s": _f(m.group("took")),
             "frozen": _f(m.group("frozen")), "random": _f(m.group("rand")),
             "attacker": _f(m.group("att")), "heuristic": _f(m.group("heu")),
+            "heuristic11": _f(m.group("heu11")),
             "new_best": "NEW BEST" in line, "source": "journald",
         })
     return recs

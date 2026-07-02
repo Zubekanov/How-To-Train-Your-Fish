@@ -210,6 +210,11 @@ def panel_winrates(models, frozen=None, n_games=30, max_decisions=2000,
                                         max_decisions=max_decisions, use_belief=use_belief),
         "heuristic": winrate_vs_heuristic(models, n_games=n_games, seed=900_000,
                                           max_decisions=max_decisions, use_belief=use_belief),
+        # v1.1 measured on its own fixed seed band; it is NOT the best.pt/gate
+        # anchor (that stays v1.0) — a second, harder yardstick on the same panel
+        "heuristic11": winrate_vs_heuristic(models, n_games=n_games, seed=950_000,
+                                            max_decisions=max_decisions, use_belief=use_belief,
+                                            profile="heuristic_1_1"),
     }
     if frozen is not None:
         out["frozen"] = winrate_vs_frozen(models, frozen, n_games=n_games, seed=500_000,
@@ -219,15 +224,16 @@ def panel_winrates(models, frozen=None, n_games=30, max_decisions=2000,
 
 
 def winrate_vs_heuristic(models, n_games=20, seed=0, max_decisions=2000,
-                         use_belief=True) -> float:
+                         use_belief=True, profile="heuristic") -> float:
     """The trained actor (p1, belief-augmented) vs the engine heuristic AI (p2).
     With use_belief=False the belief channel is fed zeros (no guesser), matching a
-    belief-off-trained actor."""
+    belief-off-trained actor. `profile` picks the AI version: "heuristic" (v1.0,
+    the standard anchor) or "heuristic_1_1" (the stronger testbench line)."""
     from fishrl.opponents.heuristic import HeuristicMatch
     z = np.zeros(V.N_NAMES, dtype=np.float32)
     wins = 0
     for i in range(n_games):
-        m = HeuristicMatch(max_decisions=max_decisions)
+        m = HeuristicMatch(max_decisions=max_decisions, profile=profile)
         obs = m.reset(seed=seed + i)
         prev = z.copy()
         done, r, guard = False, 0.0, 0

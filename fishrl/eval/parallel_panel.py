@@ -78,11 +78,11 @@ def _task_attacker(start: int, count: int, seed: int) -> int:
     return round(v * count)
 
 
-def _task_heuristic(start: int, count: int, seed: int) -> int:
+def _task_heuristic(start: int, count: int, seed: int, profile: str = "heuristic") -> int:
     from fishrl.eval.metrics import winrate_vs_heuristic
     _seed_torch(seed + start)
     v = winrate_vs_heuristic(_G["m"], n_games=count, seed=seed + start,
-                             max_decisions=_G["md"], use_belief=_G["ub"])
+                             max_decisions=_G["md"], use_belief=_G["ub"], profile=profile)
     return round(v * count)
 
 
@@ -133,6 +133,7 @@ def _chunks(n: int, k: int) -> list:
 
 # Per-anchor eval seeds -- identical to panel_winrates() so reports are comparable.
 SEED_RANDOM, SEED_ATTACKER, SEED_HEURISTIC = 800_000, 700_000, 900_000
+SEED_HEURISTIC11 = 950_000
 SEED_FROZEN_A, SEED_FROZEN_B = 500_000, 510_000
 
 
@@ -194,10 +195,13 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
             "random":   [ex.submit(_task_random, s, c, SEED_RANDOM) for s, c in rch],
             "attacker": [ex.submit(_task_attacker, s, c, SEED_ATTACKER) for s, c in rch],
             "heuristic": [ex.submit(_task_heuristic, s, c, SEED_HEURISTIC) for s, c in rch],
+            "heuristic11": [ex.submit(_task_heuristic, s, c, SEED_HEURISTIC11, "heuristic_1_1")
+                            for s, c in rch],
             "frozen_a": [ex.submit(_task_match, True, c, SEED_FROZEN_A + s) for s, c in fch],
             "frozen_b": [ex.submit(_task_match, False, c, SEED_FROZEN_B + s) for s, c in fch],
         }
-        wins = {k: sum(f.result() for f in futs[k]) for k in ("random", "attacker", "heuristic")}
+        wins = {k: sum(f.result() for f in futs[k])
+                for k in ("random", "attacker", "heuristic", "heuristic11")}
         fa = [f.result() for f in futs["frozen_a"]]
         fb = [f.result() for f in futs["frozen_b"]]
     finally:
@@ -209,6 +213,7 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
         "random": wins["random"] / n_games,
         "attacker": wins["attacker"] / n_games,
         "heuristic": wins["heuristic"] / n_games,
+        "heuristic11": wins["heuristic11"] / n_games,   # v1.1 yardstick; best.pt stays keyed on v1.0
         "frozen": (mw / dec) if dec else 0.5,
         "n": n_games, "workers": workers,
         "it": int(pl.get("done", 0)), "frozen_it": int(pl.get("frozen_it", 0)),
@@ -243,13 +248,15 @@ def main() -> None:
         "it": r["it"], "frozen_at": r["frozen_it"], "elapsed_h": r["elapsed_h"],
         "wall_time": time.time(), "n": r["n"], "workers": r["workers"], "took_s": r["took_s"],
         "frozen": r["frozen"], "random": r["random"], "attacker": r["attacker"],
-        "heuristic": r["heuristic"], "new_best": bool(r.get("new_best")), "source": "eval",
+        "heuristic": r["heuristic"], "heuristic11": r["heuristic11"],
+        "new_best": bool(r.get("new_best")), "source": "eval",
     })
     best = "  *** NEW BEST (heuristic) -> best.pt ***" if r.get("new_best") else ""
     print(
         f"[eval it={r['it']} @{r['elapsed_h']:.2f}h n={r['n']} w={r['workers']} "
         f"took={r['took_s']:.1f}s] WR frozen@{r['frozen_it']}={r['frozen']:.3f} "
-        f"random={r['random']:.3f} attacker={r['attacker']:.3f} heuristic={r['heuristic']:.3f}"
+        f"random={r['random']:.3f} attacker={r['attacker']:.3f} heuristic={r['heuristic']:.3f} "
+        f"heuristic11={r['heuristic11']:.3f}"
         f"{best}",
         flush=True,
     )

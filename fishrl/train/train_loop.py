@@ -224,7 +224,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
         wr_str = (
             f" | WR frozen@{frozen_it}={wr.get('frozen', nan):.2f} "
             f"random={wr['random']:.2f} attacker={wr['attacker']:.2f} "
-            f"heuristic={wr['heuristic']:.2f} (n={cfg.report_winrate_games}, eval {eval_s:.1f}s)"
+            f"heuristic={wr['heuristic']:.2f} heuristic11={wr.get('heuristic11', float('nan')):.2f} "
+            f"(n={cfg.report_winrate_games}, eval {eval_s:.1f}s)"
             if wr is not None else " | WR via eval timer"
         )
         # Proportion of this window's games played vs a TRAINED (neural) opponent --
@@ -314,6 +315,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     "wall_time": time.time(), "n": cfg.report_winrate_games, "workers": 1,
                     "took_s": eval_s, "frozen": wr.get("frozen"), "random": wr["random"],
                     "attacker": wr["attacker"], "heuristic": wr["heuristic"],
+                    "heuristic11": wr.get("heuristic11"),
                     "new_best": False, "source": "inline",
                 })
         if cfg.pool_frac > 0 and league.members():        # PFSP composition + win-rate table

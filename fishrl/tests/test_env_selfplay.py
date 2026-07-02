@@ -95,25 +95,24 @@ def test_empty_library_compound_auto_resolves():
         assert g.pending is None or g.pending.type not in ("reorder", "scry")
 
 
-def test_spell_draw_from_empty_library_decks_via_sba():
-    """A spell/ability draw (NOT just the turn-based draw step) into an empty library
-    must lose the game at the next state-based-action check (CR 704.5c). Regression for
-    the bug where only the draw step enforced decking, so spell/ability draws into an
-    empty library silently drew nothing."""
+def test_spell_draw_from_empty_library_loses_immediately():
+    """ANY draw from an empty library loses the game ON THE SPOT (upstream rule,
+    CR 104.3c/120.3): _draw_or_lose returns True so the effect stops processing.
+    (Previously a flag deferred the loss to the next state-based check, letting
+    the rest of the effect resolve first.) The state-level draw_card itself stays
+    rule-free — it just returns None; the loss lives in the engine."""
     from fishrl.forgetful_fish import engine as E
-    from fishrl.forgetful_fish.state import draw_card, draw_cards
-    for drawer in (lambda g: draw_card(g, "p1"), lambda g: draw_cards(g, "p1", 3)):
-        e = raw_env()
-        e.reset(seed=1)
-        g = e.g
-        g.library = []                              # deck-out
-        assert drawer(g) in (None, [])              # the draw returns nothing...
-        assert g.players["p1"].drew_from_empty      # ...but flags the player
-        assert not g.players["p1"].has_lost         # not lost until the next SBA
-        E._check_sba(g)
-        assert g.players["p1"].has_lost
-        assert g.result["winner"] == "p2"
-        assert "empty library" in g.result["reason"]
+    from fishrl.forgetful_fish.state import draw_card
+    e = raw_env()
+    e.reset(seed=1)
+    g = e.g
+    g.library = []                                  # deck-out
+    assert draw_card(g, "p1") is None               # state layer: no loss, just None
+    assert not g.players["p1"].has_lost
+    assert E._draw_or_lose(g, "p1", 1) is True      # engine rule: immediate loss
+    assert g.players["p1"].has_lost
+    assert g.result["winner"] == "p2"
+    assert "empty library" in g.result["reason"]
 
 
 def test_draw_step_from_empty_library_still_decks():

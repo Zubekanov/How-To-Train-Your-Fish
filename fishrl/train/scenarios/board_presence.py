@@ -39,6 +39,7 @@ class BoardPresenceScenario(Scenario):
         g = env.g
         p = g.pending
         return (p is not None and p.player == "p1" and p.type == "priority"
+                and g.active_player == "p1"  # held_step: p1 priority no longer implies p1's turn
                 and g.current_step in ("main1", "main2")
                 and not g.stack and 2 <= g.turn_number <= 12)
 

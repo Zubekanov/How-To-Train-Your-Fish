@@ -52,6 +52,20 @@ def _heuristic(g: "GameState", pid: str) -> bool:
     p = g.players.get(pid)
     return bool(p and p.is_ai and getattr(p, "ai_profile", "heuristic") in _HEURISTIC_PROFILES)
 
+
+def _draw_or_lose(g: GameState, player: str, n: int = 1) -> bool:
+    """Draw `n` cards as a game action. Attempting to draw from an empty library
+    loses the game (CR 104.3c / 120.3) — for ANY draw, the natural draw step AND
+    spell/ability draws (Brainstorm, Ponder, Accumulated Knowledge, Predict, …),
+    not just the once-per-turn draw. Returns True if the player lost, so the
+    caller can stop processing the rest of the effect."""
+    drawn = draw_cards(g, player, n)
+    if len(drawn) < n:
+        _lose(g, player, "drawing from an empty library")
+        return True
+    return False
+
+
 # Turn structure (CR 500–514): the ordered steps of a turn. Untap and cleanup
 # normally grant no priority; the main steps are where lands/sorceries are legal.
 _STEPS = (
@@ -303,9 +317,8 @@ def _enter_step(g: GameState, step: str) -> None:
 
     if step == "draw":                               # CR 504
         first_turn = g.turn_number == 1 and g.active_player == g.first_player
-        if not first_turn:
-            draw_card(g, g.active_player)             # empty-library loss handled as an SBA below
-            #                                           (CR 704.5c), via _give_priority -> _check_sba
+        if not first_turn and _draw_or_lose(g, g.active_player):
+            return
 
     if step == "begin_combat":                       # CR 507 — fresh combat each turn
         g.combat = Combat()
@@ -522,6 +535,12 @@ def _human_should_stop(g: GameState, player: str) -> bool:
         return False
     if g.turns_since_stop >= _MAX_AUTO_TURNS:        # runaway safety net
         return True
+    # Once interactively held in this step (e.g. pulled in to respond to an
+    # opponent's spell in a phase with no stop), the step behaves as if it had a
+    # stop: the player passes out of it manually instead of being auto-passed
+    # the moment the stack clears. Explicit yields above still skip through.
+    if g.players[player].held_step == [g.turn_number, g.current_step]:
+        return True
     return _opponent_object_on_stack(g, player) or _has_stop(g, player)
 
 
@@ -542,6 +561,9 @@ def _give_priority(g: GameState, player: str) -> None:
         return
     if _human_should_stop(g, player):
         g.turns_since_stop = 0
+        # Mark the step as interactively held so every later priority grant in
+        # it also stops (see _human_should_stop) — self-expires on step change.
+        g.players[player].held_step = [g.turn_number, g.current_step]
         return
     pass_priority(g, player)                           # auto-pass
 
@@ -799,7 +821,7 @@ _ACTIVATED_EFFECTS = {}   # effect key -> fn(g, controller, source_iid) -> pause
 
 
 def _act_draw_1(g: GameState, controller: str, source: str) -> bool:
-    draw_card(g, controller)                              # draw_card already logs the draw
+    _draw_or_lose(g, controller)                          # empty library -> the activator loses
     return False
 
 
@@ -1043,7 +1065,8 @@ def complete_reorder(g: GameState, player: str, order: list, *, shuffle: bool = 
         forget_rearranged(g, g.library[:len(order)], player)   # private order
         g.log.append(f"{name} puts the cards back on top.")
     g.pending = None
-    draw_cards(g, player, ctx.get("draw_after", 0))
+    if _draw_or_lose(g, player, ctx.get("draw_after", 0)):
+        return True                                        # drew from an empty library -> lost
     _finish_resolution(g, ctx)
     return True
 
@@ -1522,7 +1545,8 @@ def _after_crystal_spray(g: GameState, player: str, frm: str, to: str, ctx: dict
         o = g.objects.get(tgt)
         if o:
             add_text_change(o, frm, to, eot=True, turn=g.turn_number)
-    draw_card(g, player)                                  # draw_card already logs the draw
+    if _draw_or_lose(g, player):                          # empty library -> the caster loses
+        return
     _finish_resolution(g, ctx)
 
 
@@ -1593,7 +1617,8 @@ def _forget_hand(g: GameState, owner: str) -> None:
 
 @register_effect("Brainstorm")
 def _effect_brainstorm(g: GameState, controller: str, iid: str, obj=None) -> bool:
-    draw_cards(g, controller, 3)
+    if _draw_or_lose(g, controller, 3):                # fewer than three left -> lost
+        return True
     _forget_hand(g, controller)                        # the new hand is hidden again
     return start_putback(g, controller, iid, 2)
 
@@ -1605,7 +1630,8 @@ def _effect_brainstorm(g: GameState, controller: str, iid: str, obj=None) -> boo
 @register_effect("Accumulated Knowledge")
 def _effect_accumulated_knowledge(g: GameState, controller: str, iid: str, obj=None) -> bool:
     extra = sum(1 for cid in g.graveyard if g.objects[cid].name == "Accumulated Knowledge")
-    draw_cards(g, controller, 1 + extra)
+    if _draw_or_lose(g, controller, 1 + extra):        # not enough left to draw -> lost
+        return True
     return False
 
 
@@ -1625,7 +1651,8 @@ def _effect_predict(g: GameState, controller: str, iid: str, obj=None) -> bool:
 def _after_predict(g: GameState, player: str, name: str, ctx: dict) -> None:
     milled = _mill(g, player)
     hit = milled is not None and g.objects[milled].name == name
-    draw_cards(g, player, 2 if hit else 1)                 # hit -> draw two, otherwise draw a card
+    if _draw_or_lose(g, player, 2 if hit else 1):          # hit -> draw two, otherwise one
+        return                                             # drew from an empty library -> lost
     _finish_resolution(g, ctx)
 
 
@@ -2223,8 +2250,6 @@ def _check_sba(g: GameState) -> None:
             continue
         if p.life <= 0:
             _lose(g, pid, f"life total {p.life}")
-        elif p.drew_from_empty:                       # CR 704.5c — any source, not just the draw step
-            _lose(g, pid, "drawing from an empty library")
 
 
 def _state_trigger_pending(g: GameState, iid: str) -> bool:

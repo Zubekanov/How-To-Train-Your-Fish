@@ -51,6 +51,7 @@ class SurviveLethalScenario(Scenario):
         g = env.g
         p = g.pending
         if not (p is not None and p.player == "p1" and p.type == "priority"
+                and g.active_player == "p1"  # held_step: p1 priority no longer implies p1's turn
                 and g.current_step in ("main1", "main2") and not g.stack):
             return False
         has_dandan = has_island = False

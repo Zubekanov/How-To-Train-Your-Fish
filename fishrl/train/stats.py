@@ -18,13 +18,44 @@ contention is effectively nil; this is correctness insurance, not a hot path.
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import json
 import os
+import time
 
 SCHEMA = 1
 STATS = "stats.json"
 _LOCK = "stats.json.lock"
+
+# Cross-process exclusive lock, portable. POSIX (the ODROID service) keeps
+# flock exactly as before; Windows has no fcntl, so it byte-range-locks the
+# first byte via msvcrt instead. Semantics match: blocking-exclusive, one
+# writer at a time, released before close.
+try:
+    import fcntl
+
+    def _lock(f):
+        fcntl.flock(f, fcntl.LOCK_EX)
+
+    def _unlock(f):
+        fcntl.flock(f, fcntl.LOCK_UN)
+except ImportError:                                    # Windows
+    import msvcrt
+
+    def _lock(f):
+        # LK_LOCK only retries ~10x over 10s then raises, unlike flock's
+        # indefinite block -- loop to restore true blocking. Cadence here is
+        # hourly, so the loop is insurance, not a hot path.
+        f.seek(0)
+        while True:
+            try:
+                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+                return
+            except OSError:
+                time.sleep(0.05)
+
+    def _unlock(f):
+        f.seek(0)                                      # range must match the lock
+        msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def stats_path(ckpt_dir: str) -> str:
@@ -34,12 +65,18 @@ def stats_path(ckpt_dir: str) -> str:
 @contextlib.contextmanager
 def _locked(ckpt_dir: str):
     os.makedirs(ckpt_dir, exist_ok=True)
-    lf = open(os.path.join(ckpt_dir, _LOCK), "w")
+    # "a+" (not "w"): no truncation race, and msvcrt locks a byte RANGE, so
+    # the file must be non-empty -- seed one byte on first use. (Two writers
+    # racing the seed append at most one byte each; harmless.)
+    lf = open(os.path.join(ckpt_dir, _LOCK), "a+")
     try:
-        fcntl.flock(lf, fcntl.LOCK_EX)
+        if lf.seek(0, 2) == 0:
+            lf.write("\0")
+            lf.flush()
+        _lock(lf)
         yield
     finally:
-        fcntl.flock(lf, fcntl.LOCK_UN)
+        _unlock(lf)                                    # Windows: unlock BEFORE close
         lf.close()
 
 
@@ -64,7 +101,16 @@ def _atomic_write(ckpt_dir: str, d: dict) -> None:
         json.dump(d, f, indent=2)
         f.flush()
         os.fsync(f.fileno())
-    os.replace(tmp, path)
+    # Windows: a reader (monitor GUI) holding the file open makes os.replace
+    # raise PermissionError -- brief retry. POSIX takes the first attempt.
+    for i in range(10):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if os.name != "nt" or i == 9:
+                raise
+            time.sleep(0.2)
 
 
 def _append(ckpt_dir: str, key: str, record: dict) -> None:

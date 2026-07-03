@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import glob
 import os
+import time
 
 import torch
 
@@ -25,6 +26,21 @@ def latest_path(ckpt_dir: str) -> str:
     return os.path.join(ckpt_dir, LATEST)
 
 
+def replace_with_retry(tmp: str, dst: str, attempts: int = 10, delay: float = 0.2) -> None:
+    """`os.replace`, but tolerant of Windows readers. On POSIX a rename over an
+    open file is fine; on Windows it raises PermissionError while a reader (the
+    monitor GUI, the export tool) briefly holds `dst` open -- retry a few times
+    before giving up. First attempt always taken, so POSIX is a passthrough."""
+    for i in range(attempts):
+        try:
+            os.replace(tmp, dst)
+            return
+        except PermissionError:
+            if os.name != "nt" or i == attempts - 1:
+                raise
+            time.sleep(delay)
+
+
 def save_checkpoint(path: str, payload: dict) -> None:
     """Atomically write `payload` to `path` (tmp + fsync + os.replace)."""
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
@@ -33,7 +49,7 @@ def save_checkpoint(path: str, payload: dict) -> None:
         torch.save(payload, f)
         f.flush()
         os.fsync(f.fileno())
-    os.replace(tmp, path)
+    replace_with_retry(tmp, path)
 
 
 def save_milestone(ckpt_dir: str, done: int, payload: dict, keep_last: int = 3) -> str:

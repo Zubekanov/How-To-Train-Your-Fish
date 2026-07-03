@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]
+gui = ["matplotlib>=3.8"]   # fishrl.monitor only; trainer never imports it
 
 [tool.setuptools.packages.find]
 include = ["fishrl*"]

@@ -163,12 +163,14 @@ def _maybe_save_best(ckpt_dir: str, payload: dict, r: dict) -> bool:
     tmp = meta_path + ".tmp"
     with open(tmp, "w") as f:
         json.dump(r, f, indent=2)
-    os.replace(tmp, meta_path)
+    from fishrl.train.checkpoint import replace_with_retry
+    replace_with_retry(tmp, meta_path)                # Windows: tolerate a monitor read
     return True
 
 
 def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None = None,
-                   max_decisions: int = 2000, save_best: bool = False) -> dict:
+                   max_decisions: int = 2000, save_best: bool = False,
+                   reserve_cores: int = 0) -> dict:
     """Compute win-rates vs random / attacker / heuristic / frozen-self from a checkpoint,
     fanning the games across a process pool. Returns the rates plus eval metadata.
 
@@ -180,7 +182,10 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
 
     pl = load_checkpoint(ckpt_path, map_location="cpu")
     cfg_dict = pl["config"]
-    workers = max_workers or min(6, max(1, (os.cpu_count() or 2)))
+    # reserve_cores keeps CPUs free for the rest of the machine; default 0 so
+    # the ODROID timer invocation (and its seed-affecting worker count) is
+    # unchanged. Workers already run with set_num_threads(1).
+    workers = max_workers or max(1, min(6, (os.cpu_count() or 2) - reserve_cores))
 
     # Even chunks for the seat-alternating anchors; plain chunks for the frozen halves.
     rch = _even_chunks(n_games, workers)
@@ -231,6 +236,8 @@ def main() -> None:
     ap.add_argument("--n-games", type=int, default=100, help="games per anchor (even)")
     ap.add_argument("--max-workers", type=int, default=None)
     ap.add_argument("--max-decisions", type=int, default=2000)
+    ap.add_argument("--reserve-cores", type=int, default=0,
+                    help="keep this many CPUs free of eval workers (0 = historic behaviour)")
     ap.add_argument("--no-best", action="store_true",
                     help="skip rolling best.pt (highest heuristic win-rate) for this run")
     args = ap.parse_args()
@@ -242,7 +249,8 @@ def main() -> None:
         print(f"[eval] no checkpoint at {latest}; nothing to evaluate", flush=True)
         return
     r = parallel_panel(latest, n_games=args.n_games, max_workers=args.max_workers,
-                       max_decisions=args.max_decisions, save_best=not args.no_best)
+                       max_decisions=args.max_decisions, save_best=not args.no_best,
+                       reserve_cores=args.reserve_cores)
     from fishrl.train import stats as stats_io
     stats_io.append_eval(args.ckpt_dir, {                # dump this panel to stats.json["evals"]
         "it": r["it"], "frozen_at": r["frozen_it"], "elapsed_h": r["elapsed_h"],

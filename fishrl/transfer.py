@@ -3,6 +3,13 @@
     python -m fishrl.transfer export --ckpt-dir checkpoints
     python -m fishrl.transfer export --ckpt-dir checkpoints --out run.zip --with-archives
     python -m fishrl.transfer import --zip run.zip --ckpt-dir checkpoints [--force] [--merge-stats]
+    python -m fishrl.transfer claim --ckpt-dir checkpoints
+
+Export/import double as the RELAY handoff (see fishrl.train.ownership): export
+refuses under a live trainer and releases local ownership once the zip is cut;
+import refuses a stale-generation zip and claims ownership for this host;
+``claim`` is the explicit human recovery when a handoff was interrupted between
+the two (source released, destination never imported -- nobody owns the turn).
 
 The zip carries everything a run needs to continue elsewhere: ``latest.pt``
 (the fully self-contained resume checkpoint: models, frozen anchor, optimizer
@@ -67,14 +74,29 @@ def _members(ckpt_dir: str, with_archives: bool, with_milestones: bool) -> list:
     return names
 
 
-def export(ckpt_dir: str, out: str | None, with_archives: bool, with_milestones: bool) -> int:
+def export(ckpt_dir: str, out: str | None, with_archives: bool, with_milestones: bool,
+           allow_live: bool = False) -> int:
     import torch
+    from fishrl.train import ownership
     from fishrl.train.checkpoint import latest_path, load_checkpoint
+    from fishrl.train.locks import is_locked
 
     latest = latest_path(ckpt_dir)
     if not os.path.exists(latest):
         print(f"[export] no checkpoint at {latest}; nothing to export", flush=True)
         return 1
+    # Relay discipline: a live trainer means latest.pt is a moving target and the
+    # ownership release below would strand a still-running owner. trainer.lock is
+    # held for the trainer's whole lifetime, so a held lock == running trainer.
+    if is_locked(ownership.trainer_lock_path(ckpt_dir)):
+        if not allow_live:
+            print(f"[export] a trainer is LIVE on {ckpt_dir} (trainer.lock held); "
+                  f"stop it first for a clean relay handoff. --allow-live overrides "
+                  f"(snapshot copy only: ownership will NOT be released)", flush=True)
+            return 1
+        print("[export] WARNING: exporting under a live trainer (--allow-live); this "
+              "zip is a snapshot copy, NOT a relay handoff -- ownership stays here and "
+              "importing it elsewhere forks the lineage", flush=True)
     pl = load_checkpoint(latest, map_location="cpu")   # doubles as the sanity check
     done = int(pl.get("done", 0))
 
@@ -82,6 +104,15 @@ def export(ckpt_dir: str, out: str | None, with_archives: bool, with_milestones:
     for n in _CORE:
         if n not in names:
             print(f"[export] note: {n} absent, continuing without it", flush=True)
+
+    # Relay handoff bookkeeping: a normal export RELEASES local ownership (after the
+    # zip is safely cut) and the zip carries the post-release generation, so the
+    # importer's claim lines up. An --allow-live snapshot copy releases nothing and
+    # carries the current generation.
+    handoff = not allow_live
+    prev_stamp = ownership.read(ckpt_dir)
+    cur_gen = int(prev_stamp["generation"]) if prev_stamp else 0
+    zip_gen = cur_gen + 1 if handoff else cur_gen
 
     manifest = {
         "schema": SCHEMA,
@@ -99,6 +130,9 @@ def export(ckpt_dir: str, out: str | None, with_archives: bool, with_milestones:
                       "sha256": _sha256(os.path.join(ckpt_dir, n))} for n in names},
         "with_archives": with_archives,
         "with_milestones": with_milestones,
+        "owner_host": ownership.this_host(),
+        "generation": zip_gen,
+        "handoff": handoff,
     }
 
     if out is None:
@@ -113,11 +147,18 @@ def export(ckpt_dir: str, out: str | None, with_archives: bool, with_milestones:
     os.replace(tmp, out)
     size_mb = os.path.getsize(out) / 1e6
     print(f"[export] it {done} -> {out} ({size_mb:.1f} MB, {len(names)} files)", flush=True)
+    if handoff:
+        ownership.release(ckpt_dir)                    # zip is safe on disk; hand the turn over
+        print(f"[export] ownership released (generation {zip_gen}); this dir will refuse "
+              f"to train until the lineage is imported back or explicitly claimed",
+              flush=True)
     return 0
 
 
-def import_run(zip_path: str, ckpt_dir: str, force: bool, merge_stats: bool) -> int:
+def import_run(zip_path: str, ckpt_dir: str, force: bool, merge_stats: bool,
+               force_stale: bool = False) -> int:
     import torch
+    from fishrl.train import ownership
     from fishrl.train import stats as stats_io
     from fishrl.train.checkpoint import latest_path, load_checkpoint
 
@@ -135,6 +176,24 @@ def import_run(zip_path: str, ckpt_dir: str, force: bool, merge_stats: bool) -> 
             print(f"[import] WARNING: export was saved by torch {manifest['torch']}, "
                   f"local is {torch.__version__} — loading newer-into-older can fail; "
                   f"keep both machines on the requirements.txt pin", flush=True)
+
+        # Stale-zip guard: if this dir's lineage has already handed off PAST the
+        # zip's generation, importing it would silently rewind the relay. The
+        # local stamp only ever exceeds the zip after a newer export happened
+        # here, so equal generations (the normal round-trip) always pass.
+        local_stamp = ownership.read(ckpt_dir)
+        zip_gen = manifest.get("generation")
+        if (local_stamp is not None and zip_gen is not None
+                and int(local_stamp.get("generation", 0)) > int(zip_gen)):
+            if not force_stale:
+                print(f"[import] STALE zip: it carries generation {zip_gen} but "
+                      f"{ckpt_dir} is already at generation "
+                      f"{local_stamp['generation']} -- the lineage moved on past this "
+                      f"export. Pass --force-stale (with --force) only if you really "
+                      f"mean to rewind to it.", flush=True)
+                return 1
+            print("[import] WARNING: importing a stale-generation zip (--force-stale); "
+                  "this rewinds the relay lineage to an older export", flush=True)
 
         latest = latest_path(ckpt_dir)
         if os.path.exists(latest) and not force:
@@ -175,7 +234,11 @@ def import_run(zip_path: str, ckpt_dir: str, force: bool, merge_stats: bool) -> 
     except OSError:
         pass
 
-    print(f"[import] it {int(pl.get('done', 0))} -> {ckpt_dir}", flush=True)
+    # Take the relay turn: this host is now the active owner at the zip's
+    # generation (old zips without one keep whatever generation was local).
+    stamp = ownership.claim(ckpt_dir, generation=zip_gen)
+    print(f"[import] it {int(pl.get('done', 0))} -> {ckpt_dir} "
+          f"(owner: {stamp['host']}, generation {stamp['generation']})", flush=True)
     print(f"[import] resume with: python -m fishrl.train --resume --iters 0 "
           f"--ckpt-dir {ckpt_dir}", flush=True)
     return 0
@@ -192,20 +255,42 @@ def main() -> None:
                     help="include the permanent archive_*.pt history (can be large)")
     ex.add_argument("--with-milestones", action="store_true",
                     help="include the rolling step_*.pt milestones")
+    ex.add_argument("--allow-live", action="store_true",
+                    help="export even while a trainer is running: a snapshot COPY, not "
+                         "a relay handoff (ownership is not released)")
 
     im = sub.add_parser("import", help="unpack a run export into a checkpoint dir")
     im.add_argument("--zip", required=True, dest="zip_path")
     im.add_argument("--ckpt-dir", default="checkpoints")
     im.add_argument("--force", action="store_true",
                     help="overwrite an existing latest.pt in --ckpt-dir")
+    im.add_argument("--force-stale", action="store_true",
+                    help="import a zip whose relay generation is OLDER than this dir's "
+                         "(rewinds the lineage; almost never what you want)")
     im.add_argument("--merge-stats", action="store_true",
                     help="union the zip's stats.json into the existing one "
                          "(existing rows win) instead of replacing/skipping it")
+
+    cl = sub.add_parser("claim", help="take relay ownership of a checkpoint dir "
+                                      "(recovery for an interrupted handoff, or a "
+                                      "deliberate fork)")
+    cl.add_argument("--ckpt-dir", default="checkpoints")
     args = ap.parse_args()
 
     if args.cmd == "export":
-        sys.exit(export(args.ckpt_dir, args.out, args.with_archives, args.with_milestones))
-    sys.exit(import_run(args.zip_path, args.ckpt_dir, args.force, args.merge_stats))
+        sys.exit(export(args.ckpt_dir, args.out, args.with_archives, args.with_milestones,
+                        allow_live=args.allow_live))
+    if args.cmd == "claim":
+        from fishrl.train import ownership
+        prev = ownership.read(args.ckpt_dir)
+        stamp = ownership.claim(args.ckpt_dir)
+        was = (f"was {prev['state']} by '{prev['host']}' at generation "
+               f"{prev['generation']}" if prev else "was unstamped")
+        print(f"[claim] {args.ckpt_dir}: now active for '{stamp['host']}' at "
+              f"generation {stamp['generation']} ({was})", flush=True)
+        sys.exit(0)
+    sys.exit(import_run(args.zip_path, args.ckpt_dir, args.force, args.merge_stats,
+                        force_stale=args.force_stale))
 
 
 if __name__ == "__main__":

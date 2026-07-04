@@ -67,9 +67,41 @@ standalone, including against a checkpoint dir another machine is writing:
 python -m fishrl.monitor --ckpt-dir checkpoints --refresh 5
 ```
 
+## Telemetry: `fishrl.serve` and near-live ticks
+
+The trainer writes a lightweight per-iteration tick row to `<ckpt-dir>/ticks.json`
+(flushed at most every `--tick-every-seconds`, default 60; reports stay the hourly
+durable record). `python -m fishrl.serve` (or `deploy\fishrl-serve.ps1`) is a read-only
+sibling process exposing it all on the LAN:
+
+```powershell
+deploy\fishrl-serve.ps1                  # binds the primary LAN IPv4 on :8765
+```
+
+* `/api/reports|evals|ticks?since_it=N` — idempotent range queries (the website DB
+  pulls these; omit `since_it` to rebuild from scratch),
+* `/api/stream` — server-sent events for the "watch it now" view,
+* `/api/summary`, and `/` for a human status page.
+
+It never binds 0.0.0.0 and never touches the training files (safe to kill/restart
+any time). While actively tweaking on this machine you can also drop
+`--report-every-seconds` (e.g. 600) for denser report rows — the hourly default is an
+ODROID log-volume choice, not a requirement.
+
+## Relay training (this PC ↔ the ODROID)
+
+One lineage, one trainer at a time: `owner.json` (whose turn) + `trainer.lock` (live
+right now) enforce it — see the runbook in `deploy/README.md`. In short: stop the
+ODROID service, `transfer export` there (releases its ownership), copy the zip here,
+`transfer import --force --merge-stats`, train fast (CUDA + `--reserve-cores`), then
+export back the same way. A dir that refuses to train tells you exactly why and how to
+fix it; `python -m fishrl.transfer claim` is the recovery for an interrupted handoff.
+
 ## Moving training between machines
 
-Export on the machine that trained (trainer ideally stopped for a clean cut):
+Export on the machine that trained (the trainer MUST be stopped — export refuses while
+`trainer.lock` is held; `--allow-live` makes a snapshot copy that does NOT hand off
+ownership):
 
 ```powershell
 python -m fishrl.transfer export --ckpt-dir checkpoints          # -> fishrl_run_<it>_<ts>.zip

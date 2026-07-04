@@ -136,6 +136,52 @@ SEED_RANDOM, SEED_ATTACKER, SEED_HEURISTIC = 800_000, 700_000, 900_000
 SEED_HEURISTIC11 = 950_000
 SEED_FROZEN_A, SEED_FROZEN_B = 500_000, 510_000
 
+# Anchors whose outcomes the trainer harvests from its own PFSP pool games (the
+# report rows' "wr_train": anchor -> [wins, games], eval convention). Frozen-self
+# is NOT harvestable: the league's past-selves are assorted ring members, not the
+# last-report snapshot this panel matches against.
+HARVEST_ANCHORS = ("heuristic", "heuristic11", "attacker", "random")
+
+
+def plan_topup(targets: dict, harvest: dict | None) -> dict:
+    """Per-anchor top-up plan: ``{anchor: (deficit, wins_train, n_train)}``.
+
+    `targets` maps each HARVEST_ANCHORS entry to its total game target; `harvest`
+    is a report row's ``wr_train`` (None or a missing anchor -> no harvested games
+    -> the deficit is the full target, i.e. exactly the pre-harvest panel). The
+    attacker deficit is rounded UP to even -- its games alternate seats in pairs
+    -- so it may overshoot the target by one game."""
+    out = {}
+    for k in HARVEST_ANCHORS:
+        w, n = (harvest or {}).get(k) or (0, 0)
+        w, n = int(w), int(n)
+        deficit = max(0, int(targets[k]) - n)
+        if k == "attacker" and deficit % 2:
+            deficit += 1
+        out[k] = (deficit, w, n)
+    return out
+
+
+def find_harvest(stats: dict, max_age_s: float, now: float) -> tuple:
+    """Pick the newest report row carrying usable harvest counts.
+
+    Returns ``(wr_train, report_it)`` or ``(None, None)`` when there is nothing to
+    harvest -- no row with ``wr_train`` (pre-harvest trainer), the newest one is
+    older than `max_age_s` (stalled/stopped trainer: its window no longer reflects
+    the checkpoint being evaluated), or it was already consumed by an earlier eval
+    row (``harvest_from``) -- double-counting the same window would just replay the
+    previous estimate. Every miss degrades to a FULL panel, never a thinner one."""
+    rows = [r for r in stats.get("reports", []) if r.get("wr_train")]
+    if not rows:
+        return None, None
+    row = max(rows, key=lambda r: (r.get("wall_time") or 0.0))
+    if now - (row.get("wall_time") or 0.0) > max_age_s:
+        return None, None
+    consumed = {e.get("harvest_from") for e in stats.get("evals", [])}
+    if row.get("it") in consumed:
+        return None, None
+    return row["wr_train"], row.get("it")
+
 
 def _maybe_save_best(ckpt_dir: str, payload: dict, r: dict) -> bool:
     """If this panel's heuristic win-rate beats the stored best, persist the *evaluated* payload
@@ -170,12 +216,23 @@ def _maybe_save_best(ckpt_dir: str, payload: dict, r: dict) -> bool:
 
 def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None = None,
                    max_decisions: int = 2000, save_best: bool = False,
-                   reserve_cores: int = 0) -> dict:
+                   reserve_cores: int = 0, n_random: int | None = None,
+                   n_attacker: int | None = None, n_frozen: int | None = None,
+                   harvest: dict | None = None, harvest_from: int | None = None) -> dict:
     """Compute win-rates vs random / attacker / heuristic / frozen-self from a checkpoint,
     fanning the games across a process pool. Returns the rates plus eval metadata.
 
-    When `save_best`, also roll best.pt (highest heuristic win-rate seen) next to the checkpoint;
-    the returned dict carries `new_best` (bool)."""
+    `n_games` is the heuristic/heuristic11 target; `n_random`/`n_attacker`/`n_frozen`
+    default to it (tiered targets: random saturates early, frozen is the most
+    expensive anchor). With `harvest` (a report row's ``wr_train``), the panel only
+    plays each anchor's DEFICIT below target and publishes the combined
+    harvested+top-up estimate under the usual keys -- consumers see one number per
+    anchor either way. No harvest -> full-target panel, the historic behaviour.
+
+    When `save_best`, also roll best.pt (highest heuristic win-rate seen) next to the
+    checkpoint; the returned dict carries `new_best` (bool). The gate reads the same
+    combined estimate (harvested forfeit games can only bias it LOW -- see train_loop's
+    wr_train comment -- so it never falsely promotes)."""
     import torch  # noqa: F401  (ensure torch import cost is paid in the parent too)
 
     from fishrl.train.checkpoint import load_checkpoint
@@ -187,9 +244,15 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
     # unchanged. Workers already run with set_num_threads(1).
     workers = max_workers or max(1, min(6, (os.cpu_count() or 2) - reserve_cores))
 
-    # Even chunks for the seat-alternating anchors; plain chunks for the frozen halves.
-    rch = _even_chunks(n_games, workers)
-    half = max(2, n_games // 2)
+    targets = {"heuristic": n_games, "heuristic11": n_games,
+               "attacker": n_attacker if n_attacker is not None else n_games,
+               "random": n_random if n_random is not None else n_games}
+    plan = plan_topup(targets, harvest)
+    nf = n_frozen if n_frozen is not None else n_games
+
+    # Even chunks for the seat-alternating attacker; plain chunks elsewhere (the
+    # heuristic/random anchors are p1-only) and for the frozen halves.
+    half = max(2, nf // 2)
     fch = _chunks(half, workers)
 
     t0 = time.perf_counter()
@@ -197,16 +260,18 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
                              initargs=(cfg_dict, pl["models"], pl["frozen"], max_decisions))
     try:
         futs = {
-            "random":   [ex.submit(_task_random, s, c, SEED_RANDOM) for s, c in rch],
-            "attacker": [ex.submit(_task_attacker, s, c, SEED_ATTACKER) for s, c in rch],
-            "heuristic": [ex.submit(_task_heuristic, s, c, SEED_HEURISTIC) for s, c in rch],
+            "random":   [ex.submit(_task_random, s, c, SEED_RANDOM)
+                         for s, c in _chunks(plan["random"][0], workers)],
+            "attacker": [ex.submit(_task_attacker, s, c, SEED_ATTACKER)
+                         for s, c in _even_chunks(plan["attacker"][0], workers)],
+            "heuristic": [ex.submit(_task_heuristic, s, c, SEED_HEURISTIC)
+                          for s, c in _chunks(plan["heuristic"][0], workers)],
             "heuristic11": [ex.submit(_task_heuristic, s, c, SEED_HEURISTIC11, "heuristic_1_1")
-                            for s, c in rch],
+                            for s, c in _chunks(plan["heuristic11"][0], workers)],
             "frozen_a": [ex.submit(_task_match, True, c, SEED_FROZEN_A + s) for s, c in fch],
             "frozen_b": [ex.submit(_task_match, False, c, SEED_FROZEN_B + s) for s, c in fch],
         }
-        wins = {k: sum(f.result() for f in futs[k])
-                for k in ("random", "attacker", "heuristic", "heuristic11")}
+        topup_wins = {k: sum(f.result() for f in futs[k]) for k in HARVEST_ANCHORS}
         fa = [f.result() for f in futs["frozen_a"]]
         fb = [f.result() for f in futs["frozen_b"]]
     finally:
@@ -214,13 +279,21 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
 
     mw = sum(w for w, _ in fa) + sum(w for w, _ in fb)
     dec = sum(d for _, d in fa) + sum(d for _, d in fb)
+    # Combined estimate per anchor: harvested window games + the deficit just played.
+    combined, anchor_n = {}, {}
+    for k in HARVEST_ANCHORS:
+        deficit, w_train, n_train = plan[k]
+        total = n_train + deficit
+        combined[k] = (w_train + topup_wins[k]) / total if total else 0.0
+        anchor_n[k] = {"train": n_train, "topup": deficit}
     r = {
-        "random": wins["random"] / n_games,
-        "attacker": wins["attacker"] / n_games,
-        "heuristic": wins["heuristic"] / n_games,
-        "heuristic11": wins["heuristic11"] / n_games,   # v1.1 yardstick; best.pt stays keyed on v1.0
+        "random": combined["random"],
+        "attacker": combined["attacker"],
+        "heuristic": combined["heuristic"],
+        "heuristic11": combined["heuristic11"],   # v1.1 yardstick; best.pt stays keyed on v1.0
         "frozen": (mw / dec) if dec else 0.5,
         "n": n_games, "workers": workers,
+        "anchor_n": anchor_n, "harvest_from": harvest_from,
         "it": int(pl.get("done", 0)), "frozen_it": int(pl.get("frozen_it", 0)),
         "elapsed_h": float(pl.get("elapsed", 0.0)) / 3600.0,
         "took_s": time.perf_counter() - t0,
@@ -233,30 +306,54 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
 def main() -> None:
     ap = argparse.ArgumentParser(description="Parallel out-of-band win-rate panel.")
     ap.add_argument("--ckpt-dir", default="checkpoints")
-    ap.add_argument("--n-games", type=int, default=100, help="games per anchor (even)")
+    ap.add_argument("--n-games", type=int, default=100,
+                    help="heuristic/heuristic11 target games (even)")
+    ap.add_argument("--n-random", type=int, default=30,
+                    help="random-anchor target (saturates near 1.0 early; cheap tier)")
+    ap.add_argument("--n-attacker", type=int, default=50, help="attacker-anchor target")
+    ap.add_argument("--n-frozen", type=int, default=50,
+                    help="frozen-self match games (panel-only: not harvestable)")
     ap.add_argument("--max-workers", type=int, default=None)
     ap.add_argument("--max-decisions", type=int, default=2000)
     ap.add_argument("--reserve-cores", type=int, default=0,
                     help="keep this many CPUs free of eval workers (0 = historic behaviour)")
     ap.add_argument("--no-best", action="store_true",
                     help="skip rolling best.pt (highest heuristic win-rate) for this run")
+    ap.add_argument("--no-harvest", action="store_true",
+                    help="ignore the trainer's wr_train counts; play full targets")
+    ap.add_argument("--harvest-max-age-seconds", type=float, default=7200.0,
+                    help="ignore harvest rows older than this (stalled trainer guard)")
     args = ap.parse_args()
 
+    from fishrl.train import stats as stats_io
     from fishrl.train.checkpoint import latest_path
 
     latest = latest_path(args.ckpt_dir)
     if not os.path.exists(latest):
         print(f"[eval] no checkpoint at {latest}; nothing to evaluate", flush=True)
         return
+
+    harvest, harvest_from = None, None
+    if not args.no_harvest:
+        harvest, harvest_from = find_harvest(stats_io.load(args.ckpt_dir),
+                                             args.harvest_max_age_seconds, time.time())
+    if harvest is not None:
+        counts = " ".join(f"{k}={harvest.get(k, [0, 0])[0]}/{harvest.get(k, [0, 0])[1]}"
+                          for k in HARVEST_ANCHORS)
+        print(f"[eval] harvesting report it={harvest_from}: {counts} "
+              f"(top-up only plays each anchor's deficit)", flush=True)
+
     r = parallel_panel(latest, n_games=args.n_games, max_workers=args.max_workers,
                        max_decisions=args.max_decisions, save_best=not args.no_best,
-                       reserve_cores=args.reserve_cores)
-    from fishrl.train import stats as stats_io
+                       reserve_cores=args.reserve_cores, n_random=args.n_random,
+                       n_attacker=args.n_attacker, n_frozen=args.n_frozen,
+                       harvest=harvest, harvest_from=harvest_from)
     stats_io.append_eval(args.ckpt_dir, {                # dump this panel to stats.json["evals"]
         "it": r["it"], "frozen_at": r["frozen_it"], "elapsed_h": r["elapsed_h"],
         "wall_time": time.time(), "n": r["n"], "workers": r["workers"], "took_s": r["took_s"],
         "frozen": r["frozen"], "random": r["random"], "attacker": r["attacker"],
         "heuristic": r["heuristic"], "heuristic11": r["heuristic11"],
+        "anchor_n": r["anchor_n"], "harvest_from": r["harvest_from"],
         "new_best": bool(r.get("new_best")), "source": "eval",
     })
     best = "  *** NEW BEST (heuristic) -> best.pt ***" if r.get("new_best") else ""

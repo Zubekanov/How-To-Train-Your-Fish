@@ -22,40 +22,11 @@ import json
 import os
 import time
 
+from fishrl.train import locks
+
 SCHEMA = 1
 STATS = "stats.json"
 _LOCK = "stats.json.lock"
-
-# Cross-process exclusive lock, portable. POSIX (the ODROID service) keeps
-# flock exactly as before; Windows has no fcntl, so it byte-range-locks the
-# first byte via msvcrt instead. Semantics match: blocking-exclusive, one
-# writer at a time, released before close.
-try:
-    import fcntl
-
-    def _lock(f):
-        fcntl.flock(f, fcntl.LOCK_EX)
-
-    def _unlock(f):
-        fcntl.flock(f, fcntl.LOCK_UN)
-except ImportError:                                    # Windows
-    import msvcrt
-
-    def _lock(f):
-        # LK_LOCK only retries ~10x over 10s then raises, unlike flock's
-        # indefinite block -- loop to restore true blocking. Cadence here is
-        # hourly, so the loop is insurance, not a hot path.
-        f.seek(0)
-        while True:
-            try:
-                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
-                return
-            except OSError:
-                time.sleep(0.05)
-
-    def _unlock(f):
-        f.seek(0)                                      # range must match the lock
-        msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def stats_path(ckpt_dir: str) -> str:
@@ -65,18 +36,12 @@ def stats_path(ckpt_dir: str) -> str:
 @contextlib.contextmanager
 def _locked(ckpt_dir: str):
     os.makedirs(ckpt_dir, exist_ok=True)
-    # "a+" (not "w"): no truncation race, and msvcrt locks a byte RANGE, so
-    # the file must be non-empty -- seed one byte on first use. (Two writers
-    # racing the seed append at most one byte each; harmless.)
-    lf = open(os.path.join(ckpt_dir, _LOCK), "a+")
+    lf = locks.open_lockfile(os.path.join(ckpt_dir, _LOCK))
     try:
-        if lf.seek(0, 2) == 0:
-            lf.write("\0")
-            lf.flush()
-        _lock(lf)
+        locks.lock(lf)
         yield
     finally:
-        _unlock(lf)                                    # Windows: unlock BEFORE close
+        locks.unlock(lf)                               # Windows: unlock BEFORE close
         lf.close()
 
 
@@ -118,6 +83,14 @@ def _append(ckpt_dir: str, key: str, record: dict) -> None:
         d = _read(ckpt_dir)
         d[key].append(record)
         _atomic_write(ckpt_dir, d)
+
+
+def load(ckpt_dir: str) -> dict:
+    """Read the current stats file under the writers' lock (so a caller never
+    races the read-modify-write cycle). Returns the same skeleton shape as
+    `_read` -- always has "schema"/"reports"/"evals" keys."""
+    with _locked(ckpt_dir):
+        return _read(ckpt_dir)
 
 
 def append_report(ckpt_dir: str, record: dict) -> None:

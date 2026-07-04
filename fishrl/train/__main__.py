@@ -73,6 +73,9 @@ def main():
     ap.add_argument("--report-winrate-games", type=int, default=30,
                     help="games per opponent in each status-line win-rate panel")
     ap.add_argument("--checkpoint-every-seconds", type=float, default=900.0)
+    ap.add_argument("--tick-every-seconds", type=float, default=Config.tick_every_seconds,
+                    help="flush per-iteration telemetry ticks to <ckpt-dir>/ticks.json at "
+                         "most this often (fishrl.serve streams them; <=0 disables)")
     ap.add_argument("--archive-every-iters", type=int, default=Config.archive_every_iters,
                     help="write a permanent archive_{it}.pt every N iterations "
                          "(never pruned, unlike step_*.pt milestones); <=0 disables")
@@ -85,11 +88,34 @@ def main():
     ap.add_argument("--gui", action="store_true",
                     help="open the fishrl.monitor window (a read-only subprocess over "
                          "stats.json; closing it never affects training)")
+    ap.add_argument("--claim", action="store_true",
+                    help="take relay ownership of --ckpt-dir even if owner.json says "
+                         "another host owns it or the lineage was exported (see "
+                         "fishrl.train.ownership; normal handoffs never need this)")
     args = ap.parse_args()
 
     if _N_THREADS is not None:
         import torch
         torch.set_num_threads(_N_THREADS)             # env caps BLAS; this caps torch's own pool
+
+    # Relay guards, both before any state is touched:
+    #  * ownership stamp -- is it this host's turn to train this lineage?
+    #  * trainer.lock -- is another trainer process live on this dir right now?
+    # The lock handle is held (not closed) for the rest of the process; the OS
+    # releases it on ANY exit, so `transfer export` can trust a held lock as
+    # "trainer is running" and a free one as "safe to cut the zip".
+    from fishrl.train import ownership
+    from fishrl.train.locks import hold_lockfile
+    if args.claim:
+        ownership.claim(args.ckpt_dir)
+        print(f"[owner] claimed {args.ckpt_dir} for '{ownership.this_host()}'", flush=True)
+    refusal = ownership.check(args.ckpt_dir)
+    if refusal is not None:
+        raise SystemExit(f"[owner] refusing to train: {refusal}")
+    _trainer_lock = hold_lockfile(ownership.trainer_lock_path(args.ckpt_dir))  # noqa: F841
+    if _trainer_lock is None:
+        raise SystemExit(f"[owner] refusing to train: another trainer is live on "
+                         f"{args.ckpt_dir} (trainer.lock is held)")
 
     latest = ckpt.latest_path(args.ckpt_dir)
     have_ckpt = os.path.exists(latest)
@@ -108,6 +134,7 @@ def main():
                   ckpt_dir=args.ckpt_dir, report_every_seconds=args.report_every_seconds,
                   report_winrate_games=args.report_winrate_games,
                   checkpoint_every_seconds=args.checkpoint_every_seconds,
+                  tick_every_seconds=args.tick_every_seconds,
                   archive_every_iters=args.archive_every_iters)
     if resume:
         # architecture + seed MUST match the saved weights -> take them from the checkpoint

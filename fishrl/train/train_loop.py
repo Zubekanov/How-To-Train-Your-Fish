@@ -12,6 +12,7 @@ frozen-self / random / attacker / heuristic anchors.
 from __future__ import annotations
 
 import copy
+import json
 import math
 import os
 import signal
@@ -83,6 +84,16 @@ def _load_model_state(m: Models, state: dict) -> None:
         getattr(m, n).load_state_dict(state[n])
 
 
+def _harvest_count(entry: list, game_winners: list, lseat: str) -> None:
+    """Fold one pool game's outcome(s) into a wr_train [wins, games] entry under
+    the EVAL convention (metrics.py): every game counts in the denominator --
+    draws and decision-cap truncations included (winner None) -- and only a
+    strict decision for the learner's seat counts as a win. This is what lets
+    the eval service pool these with its own top-up games into one estimate."""
+    entry[1] += len(game_winners)
+    entry[0] += sum(1 for w in game_winners if w == lseat)
+
+
 def _rng_state(device: str) -> dict:
     rng = {"torch": torch.get_rng_state(), "numpy": np.random.get_state()}
     if str(device).startswith("cuda") and torch.cuda.is_available():
@@ -149,6 +160,47 @@ def train(cfg: Config, models: Models | None = None, log=print,
     # heuristic). Reset each report alongside win_iters.
     OPP_CATS = ("self", "pastself", "heuristic", "heuristic_1_1", "attacker", "random")
     opp_mix = {k: 0 for k in OPP_CATS}
+    # Harvested anchor win-rates: [wins, games] vs each SCRIPTED anchor this window,
+    # from the pool games training plays anyway. Counted under the EVAL convention
+    # (metrics.py docstring): denominator = ALL games incl. draws/truncations, wins =
+    # strictly decided for the learner -- so the eval service can pool these with its
+    # own top-up games into one estimate. Distinct from league.update (EMA,
+    # decided-only) and from opp_mix (game counts, no outcomes). NOTE these games run
+    # under cfg.enforce_free_attack (eval games don't), so a forfeit counts as a real
+    # loss here -- a deliberate, conservative-only bias (it can under-rate, never
+    # inflate, the combined estimate the best.pt gate sees).
+    AWIN_KINDS = ("heuristic", "heuristic_1_1", "attacker", "random")
+    awin = {k: [0, 0] for k in AWIN_KINDS}
+    # Near-live per-iteration ticks (fishrl.serve's SSE feed; reports stay the hourly
+    # durable record). Buffered in memory, flushed to ticks.json at most every
+    # cfg.tick_every_seconds; the file keeps only the newest TICK_KEEP rows. Single
+    # writer + atomic replace -> readers (serve/monitor) need no lock. Existing rows
+    # are re-read at the first flush so a resume continues the ring, not resets it.
+    TICK_KEEP = 2000
+    ticks: list = []             # the ring, seeded from disk so resume continues it
+    if checkpoint_path is not None and cfg.tick_every_seconds > 0:
+        try:
+            with open(os.path.join(os.path.dirname(os.path.abspath(checkpoint_path)),
+                                   "ticks.json")) as f:
+                ticks = list(json.load(f).get("ticks", []))
+        except (OSError, ValueError):
+            ticks = []
+    tick_pending = False         # rows appended since the last flush?
+    last_tick_flush = time.perf_counter()
+
+    def _flush_ticks() -> None:
+        nonlocal tick_pending, last_tick_flush
+        if checkpoint_path is None or not tick_pending:
+            return
+        ckpt_dir = os.path.dirname(os.path.abspath(checkpoint_path))
+        path = os.path.join(ckpt_dir, "ticks.json")
+        del ticks[:-TICK_KEEP]
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"schema": 1, "ticks": ticks}, f)
+        ckpt.replace_with_retry(tmp, path)
+        tick_pending = False
+        last_tick_flush = time.perf_counter()
     scen_mix: dict = {}            # scenario games played this window (DEBUG logging only)
     last_batch = None
     # PFSP opponent league: scripted anchors + a ring of frozen past selves, appended
@@ -304,6 +356,13 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 "opp_random": opp_mix["random"] / grand_total,
                 "opp_scenario": scen_total / grand_total,
                 "scenario_mix": {k: v / grand_total for k, v in sorted(scen_mix.items())},
+                # Harvested anchor outcomes this window as [wins, games] under the eval
+                # convention -- the eval service tops each anchor up to its target and
+                # publishes the combined estimate. Keyed with the EVAL names.
+                "wr_train": {"heuristic": list(awin["heuristic"]),
+                             "heuristic11": list(awin["heuristic_1_1"]),
+                             "attacker": list(awin["attacker"]),
+                             "random": list(awin["random"])},
                 "source": "live",
             }
             rec = {k: (None if isinstance(v, float) and not math.isfinite(v) else v)
@@ -351,6 +410,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
         win_iters = win_T = 0
         for k in OPP_CATS:
             opp_mix[k] = 0
+        for k in AWIN_KINDS:
+            awin[k] = [0, 0]
         for k in GW_KEYS:
             gwin[k] = 0.0
         scen_mix.clear()
@@ -504,6 +565,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 # biased the EMA upward exactly against fast-killing opponents).
                 if gbuf.games and gbuf.games[-1] in ("p1", "p2"):
                     league.update(member, gbuf.games[-1] == lseat)
+                if member.kind in AWIN_KINDS:            # harvest: all games / strict wins
+                    _harvest_count(awin[member.kind], gbuf.games, lseat)
                 buf.merge(gbuf)
             # Scenario-seeded games: short, targeted start-states (terminal ±1 reward).
             # Reuses the self-play collector via a belief-wrapped ScenarioEnv, so the
@@ -541,7 +604,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 if gm["forced"] in ("p1", "p2"):
                     gwin[f"freeatk_{gm['forced']}"] += 1
             gwin["forced_steps"] += sum(1 for s in buf.steps if int(s.mask.sum()) == 1)
-            gwin["collect_s"] += time.perf_counter() - t_collect
+            iter_collect_s = time.perf_counter() - t_collect
+            gwin["collect_s"] += iter_collect_s
             batch = buf.compute(cfg.gamma, cfg.lam)
             if max_seconds is not None:                  # anneal entropy over the budget
                 frac = min(total_elapsed() / max_seconds, 1.0)
@@ -551,7 +615,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
             t_update = time.perf_counter()
             ppo_stats = ppo_update(batch, m.actor, m.critic, opt_ppo, cfg, ent, rng_seed=done)
             aux_stats = aux_update(batch, m.guesser, m.public, opt_g, opt_p, cfg.aux_steps)
-            gwin["update_s"] += time.perf_counter() - t_update
+            iter_update_s = time.perf_counter() - t_update
+            gwin["update_s"] += iter_update_s
             for k in ("policy_loss", "critic_loss", "entropy", "approx_kl", "clip_frac"):
                 acc[k] += ppo_stats[k]
             acc["guesser_loss"] += aux_stats["guesser_loss"]
@@ -560,6 +625,20 @@ def train(cfg: Config, models: Models | None = None, log=print,
             win_T += len(buf)
             last_batch = batch
             done += 1
+            if checkpoint_path is not None and cfg.tick_every_seconds > 0:
+                ticks.append({
+                    "it": done, "wall_time": time.time(), "T": len(buf),
+                    "games": len(buf.games),
+                    "policy_loss": ppo_stats["policy_loss"],
+                    "critic_loss": ppo_stats["critic_loss"],
+                    "entropy": ppo_stats["entropy"], "approx_kl": ppo_stats["approx_kl"],
+                    "guesser_loss": aux_stats["guesser_loss"],
+                    "public_loss": aux_stats["public_loss"],
+                    "collect_s": round(iter_collect_s, 3), "update_s": round(iter_update_s, 3),
+                })
+                tick_pending = True
+                if time.perf_counter() - last_tick_flush >= cfg.tick_every_seconds:
+                    _flush_ticks()
             if checkpoint_path is not None and cfg.archive_every_iters > 0 \
                     and done % cfg.archive_every_iters == 0:
                 # permanent, never-pruned archive of the run every N iterations
@@ -573,6 +652,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 last_ckpt = time.perf_counter()
             if time.perf_counter() - last_report >= cfg.report_every_seconds:
                 emit()
+        _flush_ticks()                                   # whatever is buffered, out to disk
         if stop["v"]:                                    # signal: cheap save, skip eval
             _checkpoint()
             log(f"[stop] signal received; checkpointed at it={done}")

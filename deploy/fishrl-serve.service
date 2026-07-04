@@ -1,0 +1,19 @@
+[Unit]
+Description=fishrl LAN telemetry server (range API + SSE over stats.json/ticks.json)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=zubekanov
+Group=zubekanov
+WorkingDirectory=/home/zubekanov/Repositories/How-To-Train-Your-Fish
+Environment=PYTHONUNBUFFERED=1
+# Read-only sibling of the trainer: it never locks or writes the checkpoint dir, so
+# it can restart freely and keeps serving across trainer restarts / relay handoffs.
+ExecStart=/home/zubekanov/Repositories/Website_Dev/.venv/bin/python -m fishrl.serve \
+  --ckpt-dir /home/zubekanov/Repositories/How-To-Train-Your-Fish/checkpoints --port 8765
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

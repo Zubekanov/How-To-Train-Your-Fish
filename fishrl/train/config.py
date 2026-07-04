@@ -111,6 +111,11 @@ class Config:
     # crash-recovery checkpoint cadence -- decoupled from the (expensive) report cadence so
     # state is saved often (cheap, no eval) without running the win-rate panel each time.
     checkpoint_every_seconds: float = 900.0
+    # near-live telemetry ticks: one lightweight row per ITERATION (losses, transitions,
+    # collect/update seconds) flushed to <ckpt-dir>/ticks.json at most this often, ring-
+    # capped (fishrl.serve streams them over SSE -- reports stay the hourly durable record).
+    # <= 0 disables. Trainer-only, single writer, atomic replace: readers never lock.
+    tick_every_seconds: float = 60.0
     keep_last_checkpoints: int = 3    # numbered step_*.pt milestones to retain
     # Permanent archive cadence: every N iterations write archive_{it}.pt, which is
     # NEVER pruned (unlike the rolling step_*.pt milestones) — the run's long-term

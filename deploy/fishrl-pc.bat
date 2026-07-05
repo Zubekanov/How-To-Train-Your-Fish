@@ -18,7 +18,7 @@ rem  here -- re-run this script (it skips the pull) or run the handback line
 rem  printed at the end.
 rem ============================================================================
 setlocal
-set "REPO=%~dp0.."
+for %%i in ("%~dp0..") do set "REPO=%%~fi"
 set "PY=%REPO%\.venv\Scripts\python.exe"
 
 start "fishrl dashboard" /min powershell -NoProfile -ExecutionPolicy Bypass -File "%REPO%\deploy\fishrl-serve.ps1"
@@ -33,6 +33,8 @@ start "" "http://%COMPUTERNAME%:8765/"
 
 echo.
 echo Session ended. If the handback failed above, the lineage is still on this
-echo PC -- when the ODROID is reachable again run:
-echo     "%PY%" -m fishrl.relay handback --ckpt-dir "%REPO%\checkpoints"
+echo PC -- when the ODROID is reachable again, re-run this script (it skips the
+echo pull leg) or run the handback alone (note the leading ^& in PowerShell):
+echo   cmd:        "%PY%" -m fishrl.relay handback --ckpt-dir "%REPO%\checkpoints"
+echo   PowerShell: ^& "%PY%" -m fishrl.relay handback --ckpt-dir "%REPO%\checkpoints"
 pause

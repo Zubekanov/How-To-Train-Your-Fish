@@ -217,14 +217,20 @@ def encode_observation_ref(g, viewer: str, builder_progress: float = 0.0) -> np.
 
 
 # A card row's first _STATIC_END floats (name one-hot/unknown, type flags, both
-# basic-type multihots, text-altered bit) plus the trailing known bit depend ONLY
-# on (name, type_line, oracle_text, text_variant) -- and the distinct combinations
-# in a shared-deck format number a few dozen, while `_encode_obj_into` runs ~100x
-# per decision. So the static part is built once per combination and row-copied;
-# only the 7 dynamic floats (stats, tapped/entered/controller) are written per
-# call. text_variant is IN the key (not derived from the strings): a text-change
-# chain can exist on a card whose printed text never contained the changed word,
-# leaving the strings untouched while the variant bit fires.
+# basic-type multihots, text-altered bit) plus the trailing known bit are a PURE
+# FUNCTION of (name, type_line, oracle_text, text_variant) -- that is the cache
+# key, and "template" does NOT mean immutable over the game. This format's
+# text/type-changing effects (Mind Bend / Crystal Spray / Vision Charm) work by
+# REWRITING those very attributes: the next encode reads the changed strings,
+# computes a different key, and takes a different template; an until-end-of-turn
+# change reverting restores the old key. Guarded by the text-change cases in
+# test_encoder_equivalence. Distinct keys number a few dozen, while
+# `_encode_obj_into` runs ~100x per decision, so the identity-derived part is
+# built once per key and row-copied; only the 7 truly per-call floats (stats,
+# tapped/entered/controller) are written each time. text_variant is IN the key
+# (not derived from the strings): a text-change chain can exist on a card whose
+# printed text never contained the changed word, leaving the strings untouched
+# while the variant bit fires.
 _STATIC_END = V.N_NAMES + 1 + 4 + 5 + 5 + 1
 _TEMPLATES: dict = {}
 

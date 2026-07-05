@@ -1,0 +1,5 @@
+# LF always for files consumed line-wise on both OSes: a CRLF working copy
+# would leave a trailing \r on the last train.args flag (cmd's `set /p` keeps
+# it -> argparse chokes on "16\r") and break the .sh under bash.
+deploy/train.args text eol=lf
+*.sh text eol=lf

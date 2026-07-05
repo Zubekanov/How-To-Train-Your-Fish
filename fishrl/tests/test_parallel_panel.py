@@ -120,6 +120,28 @@ def test_harvest_counting_convention():
     assert entry == [2, 4]
 
 
+def test_follow_lock_helpers(tmp_path):
+    # wait_for_lock sees a held lock immediately; sleep_while_locked returns False
+    # (stop following) once the holder lets go, and cuts the sleep short doing so.
+    import time as _time
+
+    from fishrl.eval.parallel_panel import sleep_while_locked, wait_for_lock
+    from fishrl.train.locks import hold_lockfile, unlock
+
+    p = str(tmp_path / "trainer.lock")
+    assert wait_for_lock(p, timeout_s=0.3, poll_s=0.05) is False   # nobody home
+    h = hold_lockfile(p)
+    try:
+        assert wait_for_lock(p, timeout_s=5, poll_s=0.05) is True
+        assert sleep_while_locked(p, interval_s=0.2, poll_s=0.05) is True  # still live
+    finally:
+        unlock(h)
+        h.close()
+    t0 = _time.perf_counter()
+    assert sleep_while_locked(p, interval_s=30, poll_s=0.05) is False      # released
+    assert _time.perf_counter() - t0 < 5                                   # woke early
+
+
 @slow
 def test_parallel_panel_reproducible_and_wellformed(tmp_path):
     cfg = Config(seed=0)

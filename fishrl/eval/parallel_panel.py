@@ -307,40 +307,37 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
     return r
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description="Parallel out-of-band win-rate panel.")
-    ap.add_argument("--ckpt-dir", default="checkpoints")
-    ap.add_argument("--n-games", type=int, default=100,
-                    help="heuristic-version target games (even)")
-    ap.add_argument("--n-random", type=int, default=30,
-                    help="random-anchor target (saturates near 1.0 early; cheap tier)")
-    ap.add_argument("--n-attacker", type=int, default=50, help="attacker-anchor target")
-    ap.add_argument("--n-frozen", type=int, default=50,
-                    help="frozen-self match games (panel-only: not harvestable)")
-    ap.add_argument("--max-workers", type=int, default=None)
-    ap.add_argument("--max-decisions", type=int, default=2000)
-    ap.add_argument("--reserve-cores", type=int, default=0,
-                    help="keep this many CPUs free of eval workers (0 = historic behaviour)")
-    ap.add_argument("--no-best", action="store_true",
-                    help="skip rolling best.pt (highest heuristic win-rate) for this run")
-    ap.add_argument("--no-harvest", action="store_true",
-                    help="ignore the trainer's wr_train counts; play full targets")
-    ap.add_argument("--harvest-max-age-seconds", type=float, default=7200.0,
-                    help="ignore harvest rows older than this (stalled trainer guard)")
-    args = ap.parse_args()
+def wait_for_lock(path: str, timeout_s: float, poll_s: float = 5.0) -> bool:
+    """Block until `path` (trainer.lock) is HELD, or `timeout_s` passes. The
+    --follow grace period: a relay session may spend minutes on the pull leg
+    before its trainer starts."""
+    from fishrl.train.locks import is_locked
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if is_locked(path):
+            return True
+        time.sleep(poll_s)
+    return False
 
+
+def sleep_while_locked(path: str, interval_s: float, poll_s: float = 5.0) -> bool:
+    """Sleep up to `interval_s`, waking early if the trainer releases the lock.
+    Returns True while the trainer is still live (run another panel)."""
+    from fishrl.train.locks import is_locked
+    deadline = time.time() + interval_s
+    while time.time() < deadline:
+        if not is_locked(path):
+            return False
+        time.sleep(min(poll_s, max(0.1, deadline - time.time())))
+    return is_locked(path)
+
+
+def run_once(args, ckpt_path: str, allow_harvest: bool) -> None:
+    """One panel + one eval row, the historic one-shot behaviour."""
     from fishrl.train import stats as stats_io
-    from fishrl.train.checkpoint import latest_path
-    from fishrl.train.keepawake import keep_awake
-
-    keep_awake("eval panel")                          # Windows: don't doze mid-panel
-    latest = latest_path(args.ckpt_dir)
-    if not os.path.exists(latest):
-        print(f"[eval] no checkpoint at {latest}; nothing to evaluate", flush=True)
-        return
 
     harvest, harvest_from = None, None
-    if not args.no_harvest:
+    if allow_harvest and not args.no_harvest:
         harvest, harvest_from = find_harvest(stats_io.load(args.ckpt_dir),
                                              args.harvest_max_age_seconds, time.time())
     if harvest is not None:
@@ -349,7 +346,7 @@ def main() -> None:
         print(f"[eval] harvesting report it={harvest_from}: {counts} "
               f"(top-up only plays each anchor's deficit)", flush=True)
 
-    r = parallel_panel(latest, n_games=args.n_games, max_workers=args.max_workers,
+    r = parallel_panel(ckpt_path, n_games=args.n_games, max_workers=args.max_workers,
                        max_decisions=args.max_decisions, save_best=not args.no_best,
                        reserve_cores=args.reserve_cores, n_random=args.n_random,
                        n_attacker=args.n_attacker, n_frozen=args.n_frozen,
@@ -372,6 +369,78 @@ def main() -> None:
         f"{best}",
         flush=True,
     )
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Parallel out-of-band win-rate panel.")
+    ap.add_argument("--ckpt-dir", default="checkpoints")
+    ap.add_argument("--ckpt", default=None,
+                    help="evaluate this checkpoint file instead of <ckpt-dir>/latest.pt "
+                         "(e.g. an archive_*.pt for backfill; harvest is disabled -- the "
+                         "trainer's window counts describe a different policy)")
+    ap.add_argument("--follow", type=float, default=0.0, metavar="SECONDS",
+                    help="service mode for machines with no systemd timer (the PC): wait "
+                         "for a live trainer (trainer.lock), run a panel every SECONDS "
+                         "while it trains, exit when the session ends")
+    ap.add_argument("--follow-grace", type=float, default=1800.0,
+                    help="--follow: give the trainer this long to appear (a relay pull "
+                         "leg can take minutes) before giving up")
+    ap.add_argument("--n-games", type=int, default=100,
+                    help="heuristic-version target games (even)")
+    ap.add_argument("--n-random", type=int, default=30,
+                    help="random-anchor target (saturates near 1.0 early; cheap tier)")
+    ap.add_argument("--n-attacker", type=int, default=50, help="attacker-anchor target")
+    ap.add_argument("--n-frozen", type=int, default=50,
+                    help="frozen-self match games (panel-only: not harvestable)")
+    ap.add_argument("--max-workers", type=int, default=None)
+    ap.add_argument("--max-decisions", type=int, default=2000)
+    ap.add_argument("--reserve-cores", type=int, default=0,
+                    help="keep this many CPUs free of eval workers (0 = historic behaviour)")
+    ap.add_argument("--no-best", action="store_true",
+                    help="skip rolling best.pt (highest heuristic win-rate) for this run")
+    ap.add_argument("--no-harvest", action="store_true",
+                    help="ignore the trainer's wr_train counts; play full targets")
+    ap.add_argument("--harvest-max-age-seconds", type=float, default=7200.0,
+                    help="ignore harvest rows older than this (stalled trainer guard)")
+    args = ap.parse_args()
+
+    from fishrl.train.checkpoint import latest_path
+    from fishrl.train.keepawake import keep_awake
+    from fishrl.train.ownership import trainer_lock_path
+
+    keep_awake("eval panel")                          # Windows: don't doze mid-panel
+
+    if args.ckpt is not None:                         # arbitrary checkpoint (backfill)
+        if args.follow:
+            ap.error("--ckpt and --follow are mutually exclusive")
+        if not os.path.exists(args.ckpt):
+            print(f"[eval] no checkpoint at {args.ckpt}; nothing to evaluate", flush=True)
+            return
+        run_once(args, args.ckpt, allow_harvest=False)
+        return
+
+    latest = latest_path(args.ckpt_dir)
+    if args.follow <= 0:                              # historic one-shot (the ODROID timer)
+        if not os.path.exists(latest):
+            print(f"[eval] no checkpoint at {latest}; nothing to evaluate", flush=True)
+            return
+        run_once(args, latest, allow_harvest=True)
+        return
+
+    # --follow: the PC's stand-in for the systemd timer. Lifetime = the training
+    # session's, via trainer.lock (held for the trainer's life, OS-released).
+    lock = trainer_lock_path(args.ckpt_dir)
+    print(f"[eval] follow mode: waiting up to {args.follow_grace:.0f}s for a trainer "
+          f"on {args.ckpt_dir}, then a panel every {args.follow:.0f}s", flush=True)
+    if not wait_for_lock(lock, args.follow_grace):
+        print("[eval] no trainer appeared within the grace period; exiting", flush=True)
+        return
+    while True:
+        if os.path.exists(latest):
+            run_once(args, latest, allow_harvest=True)
+        if not sleep_while_locked(lock, args.follow):
+            print("[eval] trainer stopped; follow mode done", flush=True)
+            return
 
 
 if __name__ == "__main__":

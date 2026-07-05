@@ -129,7 +129,7 @@ def test_wait_lan_ip_gives_up_to_loopback():
 def test_actions_registry_per_platform(tmp_path):
     d = str(tmp_path)
     nt = Actions(d, "fishrl-selfplay", "fishrl-eval.service", os_name="nt")
-    assert [a["id"] for a in nt.list()] == ["stop_session"]
+    assert [a["id"] for a in nt.list()] == ["stop_session", "run_eval_local"]
     px = Actions(d, "fishrl-selfplay", "fishrl-eval.service", os_name="posix")
     assert [a["id"] for a in px.list()] == ["stop_trainer", "start_trainer", "run_eval"]
 

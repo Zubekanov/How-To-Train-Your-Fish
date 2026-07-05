@@ -79,6 +79,17 @@ The eval panel takes the same flag (caps its worker processes):
 python -m fishrl.eval.parallel_panel --ckpt-dir checkpoints --n-games 100 --reserve-cores 2
 ```
 
+### Win-rates on the PC: `--follow`
+
+There is no systemd timer here, so the launchers start the panel in **follow
+mode** alongside the trainer: it waits for `trainer.lock`, runs a panel every
+15 min while the session trains (harvest keeps each one cheap), and exits when
+the session ends — eval rows and best.pt now accrue during PC sessions exactly
+like on the ODROID. One-shot runs still work, the dashboard has a *Run eval
+panel now* button, and `--ckpt archive_00080000.pt` evaluates an arbitrary
+checkpoint (backfill; harvest disabled since the trainer's window counts
+describe a different policy).
+
 ## Telemetry: `fishrl.serve` and near-live ticks
 
 The trainer writes a lightweight per-iteration tick row to `<ckpt-dir>/ticks.json`

@@ -5,6 +5,11 @@
 $Repo = Split-Path -Parent $PSScriptRoot
 & "$Repo\.venv\Scripts\Activate.ps1"
 Set-Location $Repo
+# Win-rate panels while the session trains (stand-in for the ODROID's eval
+# timer): waits for the trainer, evals every 15 min, exits with the session.
+Start-Process -WindowStyle Minimized -FilePath "$Repo\.venv\Scripts\python.exe" `
+    -ArgumentList "-m","fishrl.eval.parallel_panel","--ckpt-dir","$Repo\checkpoints", `
+                  "--follow","900","--reserve-cores","12"
 python -m fishrl.train --resume --iters 0 `
     --encoder flat --critic-encoder entity `
     --ckpt-dir "$Repo\checkpoints" --scenario-frac 0.3 --warmup-games 16 `

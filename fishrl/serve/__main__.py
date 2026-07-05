@@ -148,7 +148,9 @@ class Actions:
         if self.os_name == "nt":
             return [{"id": "stop_session", "label": "End session & hand back",
                      "danger": True, "enabled": live,
-                     "reason": None if live else "no trainer is running here"}]
+                     "reason": None if live else "no trainer is running here"},
+                    {"id": "run_eval_local", "label": "Run eval panel now",
+                     "danger": False, "enabled": True, "reason": None}]
         return [
             {"id": "stop_trainer", "label": f"Stop trainer ({self.unit})",
              "danger": True, "enabled": live,
@@ -184,6 +186,13 @@ class Actions:
             return True, ("STOP written -- the trainer will checkpoint and exit at the "
                           "iteration boundary (a relay session then hands back "
                           "automatically)")
+        if action_id == "run_eval_local":
+            import sys
+            subprocess.Popen([sys.executable, "-m", "fishrl.eval.parallel_panel",
+                              "--ckpt-dir", self.dir, "--reserve-cores", "12"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True, ("eval panel started (a one-shot subprocess; its row appears "
+                          "in the win-rate chart when it finishes, ~30s-2min)")
         if action_id == "stop_trainer":
             return self._systemctl("stop", self.unit)
         if action_id == "start_trainer":

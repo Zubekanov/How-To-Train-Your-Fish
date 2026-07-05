@@ -78,13 +78,24 @@ sibling process exposing it all on the LAN:
 deploy\fishrl-serve.ps1                  # binds the primary LAN IPv4 on :8765
 ```
 
+* `/` — the **dashboard**: live SVG charts (win-rates with new-best stars, losses from
+  per-iteration ticks, throughput, opponent mix), owner/turn + trainer + staleness
+  chips, updating over SSE,
 * `/api/reports|evals|ticks?since_it=N` — idempotent range queries (the website DB
   pulls these; omit `since_it` to rebuild from scratch),
 * `/api/stream` — server-sent events for the "watch it now" view,
-* `/api/summary`, and `/` for a human status page.
+* `/api/summary`, `/api/actions`.
 
-It never binds 0.0.0.0 and never touches the training files (safe to kill/restart
-any time). While actively tweaking on this machine you can also drop
+**Actions** (the wrapper passes `--allow-actions`; omit it for strictly read-only):
+on this PC the dashboard gets one button — *End session & hand back* — which drops a
+`STOP` file the trainer consumes at the next iteration boundary (graceful checkpoint);
+if the session was started by `fishrl-relay.ps1`, the relay then exports and restarts
+the ODROID automatically. On the ODROID the buttons are *Stop/Start trainer* and *Run
+eval panel now* (`sudo -n systemctl`; needs the NOPASSWD rule the relay already uses).
+All actions are POST-only and re-validated server-side; nothing destructive is exposed.
+
+It never binds 0.0.0.0 and (without `--allow-actions`) never touches the training
+files. While actively tweaking on this machine you can also drop
 `--report-every-seconds` (e.g. 600) for denser report rows — the hourly default is an
 ODROID log-volume choice, not a requirement.
 

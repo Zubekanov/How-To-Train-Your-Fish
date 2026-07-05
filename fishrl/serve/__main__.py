@@ -33,13 +33,19 @@ import argparse
 import json
 import os
 import socket
+import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from fishrl.serve.page import PAGE
+from fishrl.train.locks import is_locked
+
 STREAM_POLL_S = 1.0
 HEARTBEAT_S = 15.0
+TRAINER_LOCK = "trainer.lock"                          # fishrl.train.ownership's name
+STOP_FILE = "STOP"                                     # train_loop's stop-file protocol
 
 
 def _read_json(path):
@@ -103,6 +109,7 @@ class Store:
             "ckpt_dir": os.path.abspath(self.dir),
             "host": socket.gethostname(),
             "server_time": time.time(),
+            "trainer_live": is_locked(os.path.join(self.dir, TRAINER_LOCK)),
             "last_report": stats["reports"][-1] if stats["reports"] else None,
             "last_eval": stats["evals"][-1] if stats["evals"] else None,
             "last_tick": ticks[-1] if ticks else None,
@@ -115,32 +122,81 @@ class Store:
         }
 
 
-INDEX_HTML = """<!doctype html><html><head><meta charset="utf-8">
-<title>fishrl serve</title>
-<style>body{font-family:Consolas,monospace;background:#101418;color:#d8dee6;
-margin:2em;max-width:60em}a{color:#4fc3f7}code{color:#9ccc65}
-pre{background:#181e24;padding:1em;overflow-x:auto}</style></head><body>
-<h2>fishrl telemetry server</h2>
-<p>Range queries (idempotent, keyed on <code>it</code>; omit <code>since_it</code> for everything):</p>
-<ul>
-<li><a href="/api/summary">/api/summary</a></li>
-<li><a href="/api/reports">/api/reports</a>, <a href="/api/evals">/api/evals</a>,
-    <a href="/api/ticks">/api/ticks</a> &mdash; <code>?since_it=N</code></li>
-<li><code>/api/stream</code> &mdash; server-sent events
-    (<code>report</code>/<code>eval</code>/<code>tick</code>/<code>best</code>)</li>
-</ul>
-<pre id="s">loading summary…</pre>
-<script>
-const pre=document.getElementById('s');
-async function refresh(){try{const r=await fetch('/api/summary');
-pre.textContent=JSON.stringify(await r.json(),null,2);}catch(e){pre.textContent=''+e;}}
-refresh();setInterval(refresh,5000);
-</script></body></html>"""
+class Actions:
+    """The opt-in control plane (--allow-actions). POST-only, server-side state
+    validation, platform-specific registry:
+
+      * Windows (a relay/console session): "End session & hand back" drops the
+        STOP file -- the trainer checkpoints and exits at the iteration
+        boundary, and if fishrl.relay launched it, the handback runs itself.
+      * POSIX (the systemd box): stop/start the trainer unit and kick the eval
+        oneshot, via ``sudo -n systemctl`` (needs the NOPASSWD rule the relay
+        already relies on). A raw STOP file is wrong here: Restart=always
+        would just resurrect the trainer.
+
+    Nothing destructive is exposed -- no --fresh, no claim/force."""
+
+    def __init__(self, ckpt_dir: str, unit: str, eval_unit: str,
+                 os_name: str = os.name):
+        self.dir, self.unit, self.eval_unit, self.os_name = ckpt_dir, unit, eval_unit, os_name
+
+    def _trainer_live(self) -> bool:
+        return is_locked(os.path.join(self.dir, TRAINER_LOCK))
+
+    def list(self) -> list:
+        live = self._trainer_live()
+        if self.os_name == "nt":
+            return [{"id": "stop_session", "label": "End session & hand back",
+                     "danger": True, "enabled": live,
+                     "reason": None if live else "no trainer is running here"}]
+        return [
+            {"id": "stop_trainer", "label": f"Stop trainer ({self.unit})",
+             "danger": True, "enabled": live,
+             "reason": None if live else "trainer is not running"},
+            {"id": "start_trainer", "label": "Start trainer",
+             "danger": False, "enabled": not live,
+             "reason": None if not live else "trainer is already running"},
+            {"id": "run_eval", "label": "Run eval panel now",
+             "danger": False, "enabled": True, "reason": None},
+        ]
+
+    def _systemctl(self, verb: str, unit: str) -> tuple:
+        r = subprocess.run(["sudo", "-n", "systemctl", verb, unit],
+                           capture_output=True, text=True, timeout=180)
+        if r.returncode != 0:
+            return False, (f"systemctl {verb} {unit} failed: "
+                           f"{(r.stderr or r.stdout).strip() or r.returncode} "
+                           f"(is the NOPASSWD sudoers rule in place?)")
+        return True, f"systemctl {verb} {unit}: ok"
+
+    def run(self, action_id: str) -> tuple:
+        """(ok, message). Re-validates state at execution time -- the button the
+        client rendered may be stale."""
+        by_id = {a["id"]: a for a in self.list()}
+        a = by_id.get(action_id)
+        if a is None:
+            return False, f"unknown action '{action_id}'"
+        if not a["enabled"]:
+            return False, f"refused: {a['reason']}"
+        if action_id == "stop_session":
+            with open(os.path.join(self.dir, STOP_FILE), "w") as f:
+                f.write("stop requested via fishrl.serve\n")
+            return True, ("STOP written -- the trainer will checkpoint and exit at the "
+                          "iteration boundary (a relay session then hands back "
+                          "automatically)")
+        if action_id == "stop_trainer":
+            return self._systemctl("stop", self.unit)
+        if action_id == "start_trainer":
+            return self._systemctl("start", self.unit)
+        if action_id == "run_eval":
+            return self._systemctl("start", self.eval_unit)
+        return False, f"unhandled action '{action_id}'"
 
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     store: Store = None                                  # set by serve()
+    actions: Actions = None                              # None = read-only (the default)
 
     def log_message(self, fmt, *args):                   # quiet: no per-request spam
         pass
@@ -170,9 +226,14 @@ class Handler(BaseHTTPRequestHandler):
         q = parse_qs(u.query)
         try:
             if u.path == "/" or u.path == "/index.html":
-                self._send(200, INDEX_HTML.encode("utf-8"), "text/html; charset=utf-8")
+                self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
             elif u.path == "/api/summary":
                 self._json(self.store.summary())
+            elif u.path == "/api/actions":
+                if self.actions is None:
+                    self._json({"error": "actions disabled (--allow-actions)"}, code=403)
+                else:
+                    self._json({"actions": self.actions.list()})
             elif u.path in ("/api/reports", "/api/evals", "/api/ticks"):
                 kind = u.path.rsplit("/", 1)[1]
                 rows = self.store.since(kind, self._since_it(q))
@@ -183,6 +244,32 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": f"unknown path {u.path}"}, code=404)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             pass                                         # client went away; not our problem
+
+    def do_POST(self):                                   # noqa: N802 (http.server API)
+        """POST-only control plane: mutations can never be triggered by a stray
+        GET (browser prefetch, a crawler, a curious click on a link)."""
+        u = urlparse(self.path)
+        try:
+            if u.path != "/api/action":
+                self._json({"error": f"unknown path {u.path}"}, code=404)
+                return
+            if self.actions is None:
+                self._json({"error": "actions disabled (start with --allow-actions)"},
+                           code=403)
+                return
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+                action_id = body["action"]
+            except (ValueError, KeyError):
+                self._json({"error": "body must be JSON: {\"action\": \"<id>\"}"}, code=400)
+                return
+            ok, message = self.actions.run(action_id)
+            print(f"[serve] action '{action_id}' from {self.client_address[0]}: "
+                  f"{'ok' if ok else 'REFUSED'} -- {message}", flush=True)
+            self._json({"ok": ok, "message": message}, code=200 if ok else 409)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
 
     # -- SSE ---------------------------------------------------------------------
     def _stream(self, since_it) -> None:
@@ -280,11 +367,13 @@ def lan_ip() -> str:
     return "127.0.0.1"
 
 
-def serve(ckpt_dir: str, bind: str, port: int) -> ThreadingHTTPServer:
+def serve(ckpt_dir: str, bind: str, port: int,
+          actions: Actions | None = None) -> ThreadingHTTPServer:
     addr = lan_ip() if bind == "auto" else bind
     if addr == "0.0.0.0":                                # LAN-only by policy
         raise SystemExit("[serve] refusing to bind 0.0.0.0; pass a concrete interface IP")
     Handler.store = Store(ckpt_dir)
+    Handler.actions = actions
     httpd = ThreadingHTTPServer((addr, port), Handler)
     httpd.daemon_threads = True                          # SSE threads die with the server
     return httpd
@@ -296,12 +385,21 @@ def main() -> None:
     ap.add_argument("--bind", default="auto",
                     help="interface IP to bind ('auto' = primary LAN IPv4; never 0.0.0.0)")
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--allow-actions", action="store_true",
+                    help="mount the control plane (stop/start buttons on the dashboard); "
+                         "off = strictly read-only, the default")
+    ap.add_argument("--unit", default="fishrl-selfplay",
+                    help="systemd trainer unit the POSIX actions manage")
+    ap.add_argument("--eval-unit", default="fishrl-eval.service",
+                    help="systemd oneshot the 'Run eval panel now' action starts")
     args = ap.parse_args()
 
-    httpd = serve(args.ckpt_dir, args.bind, args.port)
+    actions = (Actions(args.ckpt_dir, args.unit, args.eval_unit)
+               if args.allow_actions else None)
+    httpd = serve(args.ckpt_dir, args.bind, args.port, actions)
     host, port = httpd.server_address[:2]
     print(f"[serve] http://{host}:{port}/  (ckpt-dir: {os.path.abspath(args.ckpt_dir)}; "
-          f"read-only; Ctrl-C to stop)", flush=True)
+          f"{'ACTIONS ENABLED' if actions else 'read-only'}; Ctrl-C to stop)", flush=True)
     try:
         httpd.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:

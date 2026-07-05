@@ -11,7 +11,7 @@ units). This directory is the committed source of truth for them.
 | `fishrl-eval.service`    | `/etc/systemd/system/fishrl-eval.service`     | oneshot out-of-band win-rate panel (100 games/anchor) |
 | `fishrl-eval.timer`      | `/etc/systemd/system/fishrl-eval.timer`       | drives the panel hourly |
 | `fishrl-eval.sh`         | `/home/zubekanov/bin/fishrl-eval.sh`          | panel launcher (`python -m fishrl.eval.parallel_panel`) |
-| `fishrl-serve.service`   | `/etc/systemd/system/fishrl-serve.service`    | LAN telemetry server (range API + SSE; read-only) |
+| `fishrl-serve.service`   | `/etc/systemd/system/fishrl-serve.service`    | LAN telemetry dashboard on :8765 (range API + SSE; `--allow-actions` mounts the stop/start/eval buttons) |
 
 Both launchers hardcode the repo path and the shared venv
 (`/home/zubekanov/Repositories/Website_Dev/.venv`); edit those two lines when

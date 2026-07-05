@@ -8,10 +8,14 @@ User=zubekanov
 Group=zubekanov
 WorkingDirectory=/home/zubekanov/Repositories/How-To-Train-Your-Fish
 Environment=PYTHONUNBUFFERED=1
-# Read-only sibling of the trainer: it never locks or writes the checkpoint dir, so
-# it can restart freely and keeps serving across trainer restarts / relay handoffs.
+# Sibling of the trainer: never locks or writes the training files, so it can
+# restart freely and keeps serving across trainer restarts / relay handoffs.
+# --allow-actions mounts the dashboard's stop/start/eval buttons (POST-only,
+# state-validated; systemctl via `sudo -n`, so the zubekanov NOPASSWD rule the
+# relay already uses must cover systemctl). Drop the flag for strictly read-only.
 ExecStart=/home/zubekanov/Repositories/Website_Dev/.venv/bin/python -m fishrl.serve \
-  --ckpt-dir /home/zubekanov/Repositories/How-To-Train-Your-Fish/checkpoints --port 8765
+  --ckpt-dir /home/zubekanov/Repositories/How-To-Train-Your-Fish/checkpoints --port 8765 \
+  --allow-actions
 Restart=always
 RestartSec=5
 

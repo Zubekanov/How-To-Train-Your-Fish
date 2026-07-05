@@ -428,6 +428,14 @@ def train(cfg: Config, models: Models | None = None, log=print,
     # handler just flips a flag, checked at the iteration boundary.
     stop = {"v": False}
     prev_handlers: dict = {}
+    # STOP-file protocol: dropping a file named STOP next to the checkpoint asks the
+    # trainer to checkpoint-and-exit at the next iteration boundary -- the graceful
+    # stop for processes you can't signal (another console on Windows; the fishrl.serve
+    # "End session" button). The file is CONSUMED on trigger, so under systemd
+    # (Restart=always) the restarted trainer doesn't immediately re-stop -- which is
+    # also why the ODROID dashboard stops via systemctl, not this file.
+    stop_file = (os.path.join(os.path.dirname(os.path.abspath(checkpoint_path)), "STOP")
+                 if checkpoint_path is not None else None)
     if checkpoint_path is not None:
         def _on_signal(signum, frame):
             stop["v"] = True
@@ -489,6 +497,13 @@ def train(cfg: Config, models: Models | None = None, log=print,
             if max_seconds is not None and total_elapsed() > max_seconds:
                 log(f"[stop] wall-clock budget {max_seconds:.0f}s reached at it={done}")
                 break
+            if stop_file is not None and os.path.exists(stop_file):
+                try:
+                    os.remove(stop_file)                 # consume: one stop per drop
+                except OSError:
+                    pass
+                stop["v"] = True
+                log(f"[stop] STOP file consumed at it={done}")
             if stop["v"]:
                 break
             # Split the iteration into mirror self-play + PFSP pool games. Pool games

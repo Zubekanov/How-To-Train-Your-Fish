@@ -14,7 +14,8 @@ import urllib.request
 
 import pytest
 
-from fishrl.serve.__main__ import Store, serve
+from fishrl.serve.__main__ import Actions, Store, serve
+from fishrl.train.locks import hold_lockfile, unlock
 
 
 @pytest.fixture()
@@ -100,3 +101,81 @@ def test_store_survives_missing_and_garbage_files(tmp_path):
 def test_refuses_wildcard_bind(tmp_path):
     with pytest.raises(SystemExit):
         serve(str(tmp_path), "0.0.0.0", 0)
+
+
+# ── control plane ─────────────────────────────────────────────────────────────
+
+def test_actions_registry_per_platform(tmp_path):
+    d = str(tmp_path)
+    nt = Actions(d, "fishrl-selfplay", "fishrl-eval.service", os_name="nt")
+    assert [a["id"] for a in nt.list()] == ["stop_session"]
+    px = Actions(d, "fishrl-selfplay", "fishrl-eval.service", os_name="posix")
+    assert [a["id"] for a in px.list()] == ["stop_trainer", "start_trainer", "run_eval"]
+
+
+def test_stop_session_validates_state_and_writes_stop_file(tmp_path):
+    d = str(tmp_path)
+    a = Actions(d, "u", "e", os_name="nt")
+    ok, msg = a.run("stop_session")                      # no trainer -> refused
+    assert ok is False and "no trainer" in msg
+    assert not os.path.exists(os.path.join(d, "STOP"))
+
+    h = hold_lockfile(os.path.join(d, "trainer.lock"))   # "trainer running"
+    try:
+        assert a.list()[0]["enabled"] is True
+        ok, msg = a.run("stop_session")
+        assert ok is True
+        assert os.path.exists(os.path.join(d, "STOP"))
+    finally:
+        unlock(h)
+        h.close()
+    ok, _ = a.run("bogus")
+    assert ok is False
+
+
+def test_actions_endpoints_disabled_by_default(site):
+    _, port = site
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _get(port, "/api/actions")
+    assert e.value.code == 403                           # read-only unless --allow-actions
+
+
+def test_action_post_roundtrip(tmp_path):
+    import threading
+    d = str(tmp_path)
+    httpd = serve(d, "127.0.0.1", 0, actions=Actions(d, "u", "e", os_name="nt"))
+    port = httpd.server_address[1]
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        assert _get(port, "/api/actions")["actions"][0]["enabled"] is False
+        assert _get(port, "/api/summary")["trainer_live"] is False
+
+        h = hold_lockfile(os.path.join(d, "trainer.lock"))
+        try:
+            assert _get(port, "/api/summary")["trainer_live"] is True
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/action",
+                data=json.dumps({"action": "stop_session"}).encode(),
+                headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(req, timeout=10) as r:
+                assert json.loads(r.read())["ok"] is True
+            assert os.path.exists(os.path.join(d, "STOP"))
+            # GET on the action path must never mutate
+            with pytest.raises(urllib.error.HTTPError) as e:
+                _get(port, "/api/action")
+            assert e.value.code == 404
+        finally:
+            unlock(h)
+            h.close()
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_dashboard_page_served(site):
+    _, port = site
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=10) as r:
+        html = r.read().decode()
+    for marker in ('id="wr"', 'id="loss"', 'id="thr"', 'id="mix"',
+                   "/api/stream", "EventSource"):
+        assert marker in html

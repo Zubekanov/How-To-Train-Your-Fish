@@ -38,7 +38,7 @@ from fishrl.train.collector import (
     fill_critic_values,
 )
 from fishrl.train.config import Config
-from fishrl.train.pfsp import LeagueMember, PFSPLeague
+from fishrl.train.pfsp import SCRIPTED_KINDS, LeagueMember, PFSPLeague
 from fishrl.train.ppo import aux_update, ppo_update
 
 
@@ -372,6 +372,13 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 # signal, NOT a skill measure) — mirrors the [scenario] line's wr table
                 # so the website replica gets it over HTTP instead of journald.
                 "scenario_wr": {mm.name: mm.wr for mm in scen_members},
+                # Same for the scripted league anchors, keyed by profile name —
+                # mirrors the [league] line's wr table. Matters most for the
+                # versioned heuristics (heuristic_1_1 / heuristic_1_2), which have
+                # no eval anchor, so this EMA is their only win-rate signal.
+                # Members that never played stay out (their 0.5 prior isn't data).
+                "league_wr": {mm.name: mm.wr for mm in league.anchors
+                              if mm.kind in SCRIPTED_KINDS and mm.games > 0},
                 # Harvested anchor outcomes this window as [wins, games] under the eval
                 # convention -- the eval service tops each anchor up to its target and
                 # publishes the combined estimate. Keyed with the EVAL names.

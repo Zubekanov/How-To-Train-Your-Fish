@@ -37,8 +37,8 @@ import tkinter as tk
 BG = "#101418"
 FG = "#d8dee6"
 GRID = "#2a3138"
-SERIES = {"heuristic": "#4fc3f7", "heuristic11": "#b39ddb", "random": "#9ccc65",
-          "attacker": "#ffb74d", "frozen": "#e57373"}
+SERIES = {"heuristic": "#4fc3f7", "heuristic11": "#b39ddb", "heuristic12": "#f8bbd0",
+          "random": "#9ccc65", "attacker": "#ffb74d", "frozen": "#e57373"}
 LOSSES = {"policy_loss": "#4fc3f7", "critic_loss": "#e57373",
           "guesser_loss": "#9ccc65", "public_loss": "#ffb74d",
           "entropy": "#b0bec5", "approx_kl": "#f06292"}

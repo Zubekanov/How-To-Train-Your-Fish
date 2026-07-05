@@ -279,6 +279,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
             f" | WR frozen@{frozen_it}={wr.get('frozen', nan):.2f} "
             f"random={wr['random']:.2f} attacker={wr['attacker']:.2f} "
             f"heuristic={wr['heuristic']:.2f} heuristic11={wr.get('heuristic11', float('nan')):.2f} "
+            f"heuristic12={wr.get('heuristic12', float('nan')):.2f} "
             f"(n={cfg.report_winrate_games}, eval {eval_s:.1f}s)"
             if wr is not None else " | WR via eval timer"
         )
@@ -399,6 +400,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     "took_s": eval_s, "frozen": wr.get("frozen"), "random": wr["random"],
                     "attacker": wr["attacker"], "heuristic": wr["heuristic"],
                     "heuristic11": wr.get("heuristic11"),
+                    "heuristic12": wr.get("heuristic12"),
                     "new_best": False, "source": "inline",
                 })
         if cfg.pool_frac > 0 and league.members():        # PFSP composition + win-rate table

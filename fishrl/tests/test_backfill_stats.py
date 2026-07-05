@@ -192,3 +192,19 @@ def test_parse_eval_with_heuristic11_and_old_lines_still_parse():
     assert r["new_best"] is True
     old = parse_evals([_EVAL_INF])[0]                # pre-v1.1 panel line
     assert old["heuristic"] == 0.07 and old["heuristic11"] is None
+
+
+# July 2026: heuristic v1.2 measured on the same panel (own seed band, still not
+# the best.pt anchor).
+_EVAL_H12 = (
+    "2026-07-05T18:00:00+10:00 [eval it=74500 @385.0h n=100 w=6 took=40.0s] "
+    "WR frozen@74028=0.520 random=0.970 attacker=0.930 heuristic=0.330 "
+    "heuristic11=0.150 heuristic12=0.090")
+
+
+def test_parse_eval_with_heuristic12():
+    r = parse_evals([_EVAL_H12])[0]
+    assert r["it"] == 74500
+    assert r["heuristic"] == 0.33 and r["heuristic11"] == 0.15
+    assert r["heuristic12"] == 0.09
+    assert parse_evals([_EVAL_H11])[0]["heuristic12"] is None   # pre-v1.2 panel line

@@ -66,17 +66,20 @@ def test_maybe_save_best_keeps_the_highest_heuristic(tmp_path):
     assert torch.load(bpt, weights_only=False)["tag"] == "d"
 
 
-TARGETS = {"heuristic": 100, "heuristic11": 100, "attacker": 50, "random": 30}
+TARGETS = {"heuristic": 100, "heuristic11": 100, "heuristic12": 100,
+           "attacker": 50, "random": 30}
 
 
 def test_plan_topup_deficits_and_even_rounding():
     # Deficit = target - harvested games; attacker rounds UP to even (seat pairs);
     # over-target harvest -> 0 deficit; missing anchors -> full target.
-    p = plan_topup(TARGETS, {"heuristic": [34, 40], "attacker": [5, 9], "random": [30, 31]})
+    p = plan_topup(TARGETS, {"heuristic": [34, 40], "attacker": [5, 9], "random": [30, 31],
+                             "heuristic12": [11, 126]})
     assert p["heuristic"] == (60, 34, 40)
     assert p["attacker"] == (42, 5, 9)               # 41 -> 42, even
     assert p["random"] == (0, 30, 31)                # already past target: no games
     assert p["heuristic11"] == (100, 0, 0)           # nothing harvested -> full panel
+    assert p["heuristic12"] == (0, 11, 126)          # v1.2 over-target: harvest only
 
 
 def test_plan_topup_no_harvest_is_the_full_panel():

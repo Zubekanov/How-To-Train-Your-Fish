@@ -210,11 +210,15 @@ def panel_winrates(models, frozen=None, n_games=30, max_decisions=2000,
                                         max_decisions=max_decisions, use_belief=use_belief),
         "heuristic": winrate_vs_heuristic(models, n_games=n_games, seed=900_000,
                                           max_decisions=max_decisions, use_belief=use_belief),
-        # v1.1 measured on its own fixed seed band; it is NOT the best.pt/gate
-        # anchor (that stays v1.0) — a second, harder yardstick on the same panel
+        # The versioned heuristics measured on their own fixed seed bands; they are
+        # NOT the best.pt/gate anchor (that stays v1.0) — harder yardsticks on the
+        # same panel.
         "heuristic11": winrate_vs_heuristic(models, n_games=n_games, seed=950_000,
                                             max_decisions=max_decisions, use_belief=use_belief,
                                             profile="heuristic_1_1"),
+        "heuristic12": winrate_vs_heuristic(models, n_games=n_games, seed=960_000,
+                                            max_decisions=max_decisions, use_belief=use_belief,
+                                            profile="heuristic_1_2"),
     }
     if frozen is not None:
         out["frozen"] = winrate_vs_frozen(models, frozen, n_games=n_games, seed=500_000,

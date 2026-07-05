@@ -63,8 +63,8 @@ svg text{font-family:inherit;font-size:11px;fill:var(--dim)}
 <div id="toast"></div>
 <script>
 "use strict";
-const WR = {heuristic:"#4fc3f7", heuristic11:"#b39ddb", random:"#9ccc65",
-            attacker:"#ffb74d", frozen:"#e57373"};
+const WR = {heuristic:"#4fc3f7", heuristic11:"#b39ddb", heuristic12:"#f8bbd0",
+            random:"#9ccc65", attacker:"#ffb74d", frozen:"#e57373"};
 const LOSS = {policy_loss:"#4fc3f7", critic_loss:"#e57373", guesser_loss:"#9ccc65",
               public_loss:"#ffb74d", entropy:"#b0bec5", approx_kl:"#f06292"};
 const MIX = {opp_self:"#4fc3f7", opp_past:"#b39ddb", opp_heuristic:"#e57373",
@@ -179,12 +179,6 @@ function render(){
     wrSeries.push({name:k, color:c, pts:smooth(raw, WR_SMOOTH),
       stars: k==="heuristic" ? ev.filter(r=>r.new_best&&r[k]!=null).map(r=>[r.it,r[k]]) : []});
   }
-  // heuristic v1.2 has no eval-panel anchor; its only win-rate signal is the PFSP
-  // league EMA on report rows (a curriculum signal, hence the thin line — not
-  // comparable to the clean n=100 panel numbers above).
-  const h12 = rp.filter(r=>r.league_wr && r.league_wr.heuristic_1_2!=null)
-                .map(r=>[r.it, r.league_wr.heuristic_1_2]);
-  if (h12.length) wrSeries.push({name:"heuristic12 (league ema)", color:"#f8bbd0", w:0.9, pts:h12});
   chart($("wr"), $("wrL"), wrSeries, {y0:0, y1:1, hline:0.5});
   const lossSrc = tk.length ? tk : rp;
   chart($("loss"), $("lossL"), Object.entries(LOSS).map(([k,c])=>({

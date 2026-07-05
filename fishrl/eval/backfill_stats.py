@@ -58,6 +58,7 @@ _STATUS_WR = re.compile(
     r"WR\s+frozen@(?P<fat>\d+)=(?P<frozen>[-\d.naif]+)\s+random=(?P<rand>[-\d.naif]+)\s+"
     r"attacker=(?P<att>[-\d.naif]+)\s+heuristic=(?P<heu>[-\d.naif]+)\s+"
     r"(?:heuristic11=(?P<heu11>[-\d.naif]+)\s+)?"      # newer inline panels only
+    r"(?:heuristic12=(?P<heu12>[-\d.naif]+)\s+)?"
     r"\(n=(?P<n>\d+),\s+eval\s+(?P<es>[\d.]+)s\)")
 
 # Opponent-mix tail of a `[status ...]` line: `... gmae=0.18 | opp trained=0.92 | ...`. Newer
@@ -91,7 +92,8 @@ _EVAL = re.compile(
     r"\[eval\s+it=(?P<it>\d+)\s+@(?P<eh>[\d.]+)h\s+n=(?P<n>\d+)\s+w=(?P<w>\d+)\s+"
     r"took=(?P<took>[\d.]+)s\]\s+WR\s+frozen@(?P<fat>\d+)=(?P<frozen>[-\d.naif]+)\s+"
     r"random=(?P<rand>[-\d.naif]+)\s+attacker=(?P<att>[-\d.naif]+)\s+heuristic=(?P<heu>[-\d.naif]+)"
-    r"(?:\s+heuristic11=(?P<heu11>[-\d.naif]+))?")     # newer panels only
+    r"(?:\s+heuristic11=(?P<heu11>[-\d.naif]+))?"      # newer panels only
+    r"(?:\s+heuristic12=(?P<heu12>[-\d.naif]+))?")
 
 
 def _f(s):
@@ -222,6 +224,7 @@ def parse_status(lines, league=None) -> tuple:
                 "took_s": _f(w.group("es")), "frozen": _f(w.group("frozen")),
                 "random": _f(w.group("rand")), "attacker": _f(w.group("att")),
                 "heuristic": _f(w.group("heu")), "heuristic11": _f(w.group("heu11")),
+                "heuristic12": _f(w.group("heu12")),
                 "new_best": False,
                 "source": "journald-inline",
             })
@@ -241,6 +244,7 @@ def parse_evals(lines) -> list:
             "frozen": _f(m.group("frozen")), "random": _f(m.group("rand")),
             "attacker": _f(m.group("att")), "heuristic": _f(m.group("heu")),
             "heuristic11": _f(m.group("heu11")),
+            "heuristic12": _f(m.group("heu12")),
             "new_best": "NEW BEST" in line, "source": "journald",
         })
     return recs

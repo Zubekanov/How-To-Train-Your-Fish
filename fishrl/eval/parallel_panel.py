@@ -134,13 +134,14 @@ def _chunks(n: int, k: int) -> list:
 # Per-anchor eval seeds -- identical to panel_winrates() so reports are comparable.
 SEED_RANDOM, SEED_ATTACKER, SEED_HEURISTIC = 800_000, 700_000, 900_000
 SEED_HEURISTIC11 = 950_000
+SEED_HEURISTIC12 = 960_000
 SEED_FROZEN_A, SEED_FROZEN_B = 500_000, 510_000
 
 # Anchors whose outcomes the trainer harvests from its own PFSP pool games (the
 # report rows' "wr_train": anchor -> [wins, games], eval convention). Frozen-self
 # is NOT harvestable: the league's past-selves are assorted ring members, not the
 # last-report snapshot this panel matches against.
-HARVEST_ANCHORS = ("heuristic", "heuristic11", "attacker", "random")
+HARVEST_ANCHORS = ("heuristic", "heuristic11", "heuristic12", "attacker", "random")
 
 
 def plan_topup(targets: dict, harvest: dict | None) -> dict:
@@ -222,7 +223,7 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
     """Compute win-rates vs random / attacker / heuristic / frozen-self from a checkpoint,
     fanning the games across a process pool. Returns the rates plus eval metadata.
 
-    `n_games` is the heuristic/heuristic11 target; `n_random`/`n_attacker`/`n_frozen`
+    `n_games` is the heuristic/heuristic11/heuristic12 target; `n_random`/`n_attacker`/`n_frozen`
     default to it (tiered targets: random saturates early, frozen is the most
     expensive anchor). With `harvest` (a report row's ``wr_train``), the panel only
     plays each anchor's DEFICIT below target and publishes the combined
@@ -244,7 +245,7 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
     # unchanged. Workers already run with set_num_threads(1).
     workers = max_workers or max(1, min(6, (os.cpu_count() or 2) - reserve_cores))
 
-    targets = {"heuristic": n_games, "heuristic11": n_games,
+    targets = {"heuristic": n_games, "heuristic11": n_games, "heuristic12": n_games,
                "attacker": n_attacker if n_attacker is not None else n_games,
                "random": n_random if n_random is not None else n_games}
     plan = plan_topup(targets, harvest)
@@ -268,6 +269,8 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
                           for s, c in _chunks(plan["heuristic"][0], workers)],
             "heuristic11": [ex.submit(_task_heuristic, s, c, SEED_HEURISTIC11, "heuristic_1_1")
                             for s, c in _chunks(plan["heuristic11"][0], workers)],
+            "heuristic12": [ex.submit(_task_heuristic, s, c, SEED_HEURISTIC12, "heuristic_1_2")
+                            for s, c in _chunks(plan["heuristic12"][0], workers)],
             "frozen_a": [ex.submit(_task_match, True, c, SEED_FROZEN_A + s) for s, c in fch],
             "frozen_b": [ex.submit(_task_match, False, c, SEED_FROZEN_B + s) for s, c in fch],
         }
@@ -290,7 +293,8 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
         "random": combined["random"],
         "attacker": combined["attacker"],
         "heuristic": combined["heuristic"],
-        "heuristic11": combined["heuristic11"],   # v1.1 yardstick; best.pt stays keyed on v1.0
+        "heuristic11": combined["heuristic11"],   # versioned yardsticks; best.pt
+        "heuristic12": combined["heuristic12"],   # stays keyed on v1.0
         "frozen": (mw / dec) if dec else 0.5,
         "n": n_games, "workers": workers,
         "anchor_n": anchor_n, "harvest_from": harvest_from,
@@ -307,7 +311,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Parallel out-of-band win-rate panel.")
     ap.add_argument("--ckpt-dir", default="checkpoints")
     ap.add_argument("--n-games", type=int, default=100,
-                    help="heuristic/heuristic11 target games (even)")
+                    help="heuristic-version target games (even)")
     ap.add_argument("--n-random", type=int, default=30,
                     help="random-anchor target (saturates near 1.0 early; cheap tier)")
     ap.add_argument("--n-attacker", type=int, default=50, help="attacker-anchor target")
@@ -355,6 +359,7 @@ def main() -> None:
         "wall_time": time.time(), "n": r["n"], "workers": r["workers"], "took_s": r["took_s"],
         "frozen": r["frozen"], "random": r["random"], "attacker": r["attacker"],
         "heuristic": r["heuristic"], "heuristic11": r["heuristic11"],
+        "heuristic12": r["heuristic12"],
         "anchor_n": r["anchor_n"], "harvest_from": r["harvest_from"],
         "new_best": bool(r.get("new_best")), "source": "eval",
     })
@@ -363,7 +368,7 @@ def main() -> None:
         f"[eval it={r['it']} @{r['elapsed_h']:.2f}h n={r['n']} w={r['workers']} "
         f"took={r['took_s']:.1f}s] WR frozen@{r['frozen_it']}={r['frozen']:.3f} "
         f"random={r['random']:.3f} attacker={r['attacker']:.3f} heuristic={r['heuristic']:.3f} "
-        f"heuristic11={r['heuristic11']:.3f}"
+        f"heuristic11={r['heuristic11']:.3f} heuristic12={r['heuristic12']:.3f}"
         f"{best}",
         flush=True,
     )

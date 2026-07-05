@@ -324,6 +324,13 @@ def parse(argv: list) -> tuple:
 def main() -> None:
     args, extra = parse(sys.argv[1:])
 
+    if args.cmd in ("train", "pull", "handback"):
+        # The relay must outlast the trainer awake: the handback export/scp runs
+        # AFTER the trainer exits, exactly when an idle-sleep timeout would
+        # otherwise put the PC to sleep mid-transfer.
+        from fishrl.train.keepawake import keep_awake
+        keep_awake(f"relay {args.cmd}")
+
     if args.local_remote is not None:
         remote: Ssh = LocalSim(args.local_remote)
         print(f"[relay] target: LOCAL SIMULATION dir {args.local_remote}", flush=True)

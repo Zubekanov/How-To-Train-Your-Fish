@@ -155,6 +155,9 @@ def main():
           f"pool: {cfg.pool_frac:.2f} (pfsp={cfg.pfsp_mode}, league={cfg.league_size}) | "
           f"resume: {resume} | ckpt: {latest}", flush=True)
 
+    from fishrl.train.keepawake import keep_awake
+    keep_awake("training")                            # Windows: no idle-sleep mid-run
+
     monitor = None
     if args.gui:
         import subprocess

@@ -41,6 +41,14 @@ python -m fishrl.train --resume --iters 0 --encoder flat --critic-encoder entity
 (or just run `deploy\fishrl-selfplay.ps1`). `Ctrl-C` = graceful stop with a
 final checkpoint. Resume with the same command.
 
+While the trainer, a relay session, or the eval panel is running, the PC's
+**idle-sleep is suspended** (`SetThreadExecutionState`; the display still blanks
+normally) — leave it training overnight with your usual short sleep timeout, and
+normal sleep behaviour returns the moment the process exits. The relay holds the
+flag through the handback, so the machine can't doze off mid-transfer after a
+remote "End session" click. The dashboard (`fishrl.serve`) deliberately does NOT
+keep the machine awake.
+
 ### `--reserve-cores N`
 
 Keeps N **physical** cores free of training threads so the machine stays

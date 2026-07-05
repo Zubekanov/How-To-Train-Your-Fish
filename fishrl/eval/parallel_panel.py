@@ -327,7 +327,9 @@ def main() -> None:
 
     from fishrl.train import stats as stats_io
     from fishrl.train.checkpoint import latest_path
+    from fishrl.train.keepawake import keep_awake
 
+    keep_awake("eval panel")                          # Windows: don't doze mid-panel
     latest = latest_path(args.ckpt_dir)
     if not os.path.exists(latest):
         print(f"[eval] no checkpoint at {latest}; nothing to evaluate", flush=True)

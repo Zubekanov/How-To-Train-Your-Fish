@@ -19,9 +19,9 @@ def test_parse_own_flags_never_leak_into_trainer_args():
     defaults. Relay flags must bind to relay wherever they appear; only tokens
     after the literal -- are trainer args."""
     args, extra = parse(["train", "--ckpt-dir", "L", "--local-remote", "S",
-                         "--", "--reserve-cores", "2", "--gui"])
+                         "--", "--reserve-cores", "2", "--collect-workers", "8"])
     assert args.ckpt_dir == "L" and args.local_remote == "S"
-    assert extra == ["--reserve-cores", "2", "--gui"]
+    assert extra == ["--reserve-cores", "2", "--collect-workers", "8"]
 
     args, extra = parse(["train"])
     assert args.local_remote is None and extra == []

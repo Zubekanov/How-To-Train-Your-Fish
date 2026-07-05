@@ -1,6 +1,6 @@
 # Running fishrl on Windows
 
-The trainer, eval panel, monitor GUI and transfer tool all run natively on
+The trainer, eval panel, telemetry dashboard and transfer tool all run natively on
 Windows (tested: Windows 10, 20-core desktop, RTX 3060, CPython 3.13). The
 systemd units in this directory are Linux-only — on Windows you run the
 modules directly (foreground), and `Ctrl-C` performs the same graceful
@@ -13,7 +13,7 @@ cd How-To-Train-Your-Fish
 python -m venv .venv            # (`py -3.13 -m venv .venv` if you use the launcher)
 .venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-pip install -e .[gui]           # gui extra = matplotlib for the monitor window
+pip install -e .
 ```
 
 **Torch**: keep every machine that shares checkpoints inside the
@@ -35,7 +35,7 @@ where CUDA exists.
 ```powershell
 python -m fishrl.train --resume --iters 0 --encoder flat --critic-encoder entity `
     --scenario-frac 0.3 --report-every-seconds 3600 --checkpoint-every-seconds 900 `
-    --reserve-cores 2 --gui
+    --collect-workers 8 --reserve-cores 2
 ```
 
 (or just run `deploy\fishrl-selfplay.ps1`). `Ctrl-C` = graceful stop with a
@@ -77,17 +77,6 @@ The eval panel takes the same flag (caps its worker processes):
 
 ```powershell
 python -m fishrl.eval.parallel_panel --ckpt-dir checkpoints --n-games 100 --reserve-cores 2
-```
-
-### `--gui` / the monitor
-
-`--gui` opens `fishrl.monitor` in a subprocess — a read-only tkinter window
-over `stats.json`/`best.json` (win-rates, losses, throughput, opponent mix,
-staleness badge). Closing it never affects training; it can also run
-standalone, including against a checkpoint dir another machine is writing:
-
-```powershell
-python -m fishrl.monitor --ckpt-dir checkpoints --refresh 5
 ```
 
 ## Telemetry: `fishrl.serve` and near-live ticks
@@ -133,7 +122,7 @@ deploy\fishrl-relay.ps1
 ```
 
 It stops the ODROID service (graceful checkpoint), exports/fetches/imports the lineage
-here, trains in the foreground (monitor window, `--reserve-cores 2`), and when you press
+here, trains in the foreground (`--collect-workers 8 --reserve-cores 2`), and when you press
 **Ctrl-C** it checkpoints, exports back, imports on the ODROID and restarts the service.
 `python -m fishrl.relay status` shows both sides; `pull` / `handback` run either leg
 alone (`handback` is also the recovery if a session ends without returning — as is just

@@ -141,8 +141,8 @@ running as the user via `User=`) drives this offline and auto-resumes on crash/r
 The unit files and launcher scripts are committed under [`deploy/`](deploy/) (see its
 README for install paths and the stale `--user` unit to ignore). Windows is also
 supported — see [`deploy/WINDOWS.md`](deploy/WINDOWS.md) for setup, `--reserve-cores`,
-the `--gui` monitor window, and `fishrl.transfer` (zip export/import of a run
-between machines):
+`--collect-workers`, the `fishrl.serve` dashboard, relay training, and
+`fishrl.transfer` (zip export/import of a run between machines):
 
 ```bash
 sudo systemctl daemon-reload

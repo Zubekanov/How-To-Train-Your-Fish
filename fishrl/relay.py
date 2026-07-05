@@ -1,7 +1,7 @@
 """One-command relay passovers: train the ODROID's lineage on this machine.
 
     python -m fishrl.relay train                  # full cycle: pull -> train -> hand back
-    python -m fishrl.relay train -- --reserve-cores 2 --gui      # extra trainer flags
+    python -m fishrl.relay train -- --reserve-cores 2 --collect-workers 8   # trainer flags
     python -m fishrl.relay pull                   # just take the turn (no training)
     python -m fishrl.relay handback               # just send the lineage home
     python -m fishrl.relay status                 # both sides' ownership + service state
@@ -308,7 +308,8 @@ def parse(argv: list) -> tuple:
                     help="train only; keep the lineage here (handback later)")
     ap.add_argument("--local-remote", default=None, metavar="DIR",
                     help="simulate the server with a local checkpoint dir (testing)")
-    ap.epilog = "args after a literal -- go to fishrl.train (e.g. -- --reserve-cores 2 --gui)"
+    ap.epilog = ("args after a literal -- go to fishrl.train "
+                 "(e.g. -- --reserve-cores 2 --collect-workers 8)")
 
     # Split the trainer passthrough BEFORE argparse. argparse.REMAINDER is not
     # usable here: it greedily swallows every token after the subcommand --

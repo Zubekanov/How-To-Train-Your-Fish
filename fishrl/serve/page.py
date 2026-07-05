@@ -2,7 +2,7 @@
 
 Inline CSS/JS + hand-rolled SVG charts only: the page must render on a LAN
 with no internet (no CDNs), against the JSON APIs and the SSE stream of the
-sibling __main__. Panels mirror the tkinter monitor: win-rates (with
+sibling __main__. Panels: win-rates (with
 new-best stars), losses, throughput, opponent mix, plus header/staleness
 and the (opt-in) actions bar, whose buttons come from /api/actions and are
 disabled server-side truth, not client guesswork.

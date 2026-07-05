@@ -39,10 +39,25 @@ def _winit(lite: dict) -> None:
     workers -- built lazily instead, each worker stalls ~4s the first time it is
     handed each scenario type, which shows up as unpredictable mid-training
     iteration spikes (measured: recurring 4-5s collect outliers)."""
+    import multiprocessing
+    import os
+    import threading
+
     import torch
 
     from fishrl.models.guesser import HandGuesser
     from fishrl.models.policy import MaskedActor
+
+    # Die with the parent. A gracefully-stopped trainer shuts the pool down, but
+    # a hard-killed one (TerminateProcess) leaves the workers orphaned -- observed
+    # as 16 stray torch processes after two killed runs. parent.join() returns the
+    # moment the parent exits, however it exits.
+    parent = multiprocessing.parent_process()
+    if parent is not None:
+        def _die_with_parent():
+            parent.join()
+            os._exit(0)
+        threading.Thread(target=_die_with_parent, daemon=True).start()
 
     torch.set_num_threads(1)
     hidden = tuple(lite["hidden"])

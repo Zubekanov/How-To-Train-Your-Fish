@@ -66,7 +66,7 @@ def _atomic_write(ckpt_dir: str, d: dict) -> None:
         json.dump(d, f, indent=2)
         f.flush()
         os.fsync(f.fileno())
-    # Windows: a reader (monitor GUI) holding the file open makes os.replace
+    # Windows: a reader (dashboard/export) holding the file open makes os.replace
     # raise PermissionError -- brief retry. POSIX takes the first attempt.
     for i in range(10):
         try:

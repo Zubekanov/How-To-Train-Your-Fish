@@ -28,8 +28,8 @@ def latest_path(ckpt_dir: str) -> str:
 
 def replace_with_retry(tmp: str, dst: str, attempts: int = 10, delay: float = 0.2) -> None:
     """`os.replace`, but tolerant of Windows readers. On POSIX a rename over an
-    open file is fine; on Windows it raises PermissionError while a reader (the
-    monitor GUI, the export tool) briefly holds `dst` open -- retry a few times
+    open file is fine; on Windows it raises PermissionError while a reader (a
+    dashboard fetch, the export tool) briefly holds `dst` open -- retry a few times
     before giving up. First attempt always taken, so POSIX is a passthrough."""
     for i in range(attempts):
         try:

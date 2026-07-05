@@ -3,7 +3,7 @@
     python -m fishrl.serve --ckpt-dir checkpoints                 # binds the LAN IP, :8765
     python -m fishrl.serve --ckpt-dir checkpoints --bind 127.0.0.1 --port 9000
 
-A SIBLING process to the trainer (like fishrl.monitor), never embedded in it:
+A SIBLING process to the trainer, never embedded in it:
 it only ever open/read/closes files the trainer replaces atomically
 (stats.json, ticks.json, best.json, owner.json, latest.pt mtime), so it can
 be killed, restarted, or wedged without any effect on training, and it

@@ -89,9 +89,6 @@ def main():
                     help="keep this many PHYSICAL cores free of training threads "
                          f"(default {DEFAULT_RESERVE} unless *_NUM_THREADS is already set "
                          "in the environment). Applied before torch loads; parsed early.")
-    ap.add_argument("--gui", action="store_true",
-                    help="open the fishrl.monitor window (a read-only subprocess over "
-                         "stats.json; closing it never affects training)")
     ap.add_argument("--claim", action="store_true",
                     help="take relay ownership of --ckpt-dir even if owner.json says "
                          "another host owns it or the lineage was exported (see "
@@ -163,33 +160,22 @@ def main():
     from fishrl.train.keepawake import keep_awake
     keep_awake("training")                            # Windows: no idle-sleep mid-run
 
-    monitor = None
-    if args.gui:
-        import subprocess
-        import sys as _sys
-        monitor = subprocess.Popen([_sys.executable, "-m", "fishrl.monitor",
-                                    "--ckpt-dir", args.ckpt_dir])
-
     max_seconds = args.max_hours * 3600.0 if args.max_hours else None
-    try:
-        models = train(cfg, build_models(cfg), log=lambda s: print(s, flush=True),
-                       max_seconds=max_seconds,
-                       resume_path=latest if resume else None, checkpoint_path=latest)
-        print(f"saved checkpoint -> {latest}", flush=True)
+    models = train(cfg, build_models(cfg), log=lambda s: print(s, flush=True),
+                   max_seconds=max_seconds,
+                   resume_path=latest if resume else None, checkpoint_path=latest)
+    print(f"saved checkpoint -> {latest}", flush=True)
 
-        # higher-game-count final readout for bounded runs (the in-loop status lines use fewer
-        # games each). Skipped for the unbounded service, which exits via signal and shouldn't
-        # spend tens of seconds on eval during shutdown.
-        if cfg.iters > 0:
-            # thread the run's belief/decision settings through — a belief-off run
-            # evaluated with belief ON feeds live guesser output to an actor trained on zeros
-            print("final win-rates:",
-                  panel_winrates(models, n_games=100, use_belief=cfg.use_belief,
-                                 max_decisions=cfg.max_decisions), flush=True)
-            print("estimators:", estimator_metrics(models, collect_eval_batch(models, n_games=8)), flush=True)
-    finally:
-        if monitor is not None and monitor.poll() is None:
-            monitor.terminate()                        # best-effort; monitor is read-only
+    # higher-game-count final readout for bounded runs (the in-loop status lines use fewer
+    # games each). Skipped for the unbounded service, which exits via signal and shouldn't
+    # spend tens of seconds on eval during shutdown.
+    if cfg.iters > 0:
+        # thread the run's belief/decision settings through — a belief-off run
+        # evaluated with belief ON feeds live guesser output to an actor trained on zeros
+        print("final win-rates:",
+              panel_winrates(models, n_games=100, use_belief=cfg.use_belief,
+                             max_decisions=cfg.max_decisions), flush=True)
+        print("estimators:", estimator_metrics(models, collect_eval_batch(models, n_games=8)), flush=True)
 
 
 if __name__ == "__main__":

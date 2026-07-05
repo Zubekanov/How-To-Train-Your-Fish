@@ -177,7 +177,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
     # Near-live per-iteration ticks (fishrl.serve's SSE feed; reports stay the hourly
     # durable record). Buffered in memory, flushed to ticks.json at most every
     # cfg.tick_every_seconds; the file keeps only the newest TICK_KEEP rows. Single
-    # writer + atomic replace -> readers (serve/monitor) need no lock. Existing rows
+    # writer + atomic replace -> readers (fishrl.serve) need no lock. Existing rows
     # are re-read at the first flush so a resume continues the ring, not resets it.
     TICK_KEEP = 2000
     ticks: list = []             # the ring, seeded from disk so resume continues it

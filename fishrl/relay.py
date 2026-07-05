@@ -4,6 +4,8 @@
     python -m fishrl.relay train -- --reserve-cores 2 --collect-workers 8   # trainer flags
     python -m fishrl.relay pull                   # just take the turn (no training)
     python -m fishrl.relay handback               # just send the lineage home
+    python -m fishrl.relay push-stats             # telemetry-only: merge local stats.json
+                                                  #   into the server's (no lineage move)
     python -m fishrl.relay status                 # both sides' ownership + service state
 
 ``train`` automates the whole handoff the runbook describes by hand:
@@ -123,6 +125,31 @@ class Ssh:
     def send(self, local_zip: str) -> None:
         subprocess.run(["scp", "-q", local_zip, f"{self.host}:{REMOTE_ZIP}"], check=True)
 
+    def merge_stats(self, local_stats: str) -> None:
+        """Telemetry-only sync: union the local stats.json into the server's
+        (existing rows win there). Never touches latest.pt/ownership/services.
+        A helper SCRIPT ships with the data so this works regardless of the
+        server checkout's age (it only needs stats.merge, the old API)."""
+        tmp_json = "/tmp/fishrl_pushed_stats.json"
+        tmp_py = "/tmp/fishrl_merge_stats.py"
+        script = tempfile.NamedTemporaryFile("w", suffix=".py", delete=False)
+        try:
+            script.write(
+                "import json, os, sys\n"
+                "sys.path.insert(0, os.getcwd())     # run by path: cwd (the repo) "
+                "isn't on sys.path like it is under -m\n"
+                "from fishrl.train.stats import merge\n"
+                "d = json.load(open(sys.argv[1], encoding='utf-8'))\n"
+                "print('[stats] merged:', merge('checkpoints',"
+                " reports=d.get('reports'), evals=d.get('evals')), flush=True)\n")
+            script.close()
+            subprocess.run(["scp", "-q", local_stats, f"{self.host}:{tmp_json}"], check=True)
+            subprocess.run(["scp", "-q", script.name, f"{self.host}:{tmp_py}"], check=True)
+            self._ssh(f"cd {self.repo} && {self.python} {tmp_py} {tmp_json} && "
+                      f"rm -f {tmp_py} {tmp_json}")
+        finally:
+            os.remove(script.name)
+
     def cleanup(self) -> None:
         self._ssh(f"rm -f {REMOTE_ZIP}", check=False)
 
@@ -165,6 +192,10 @@ class LocalSim(Ssh):
 
     def send(self, local_zip: str) -> None:
         shutil.copy2(local_zip, self.zip)
+
+    def merge_stats(self, local_stats: str) -> None:
+        from fishrl.train.stats import merge_file
+        merge_file(self.ckpt, local_stats)
 
     def cleanup(self) -> None:
         for p in (self.zip,):
@@ -225,6 +256,20 @@ def handback(remote: Ssh, ckpt_dir: str) -> None:
     remote.start_service()
     remote.cleanup()
     print("[relay] handback complete: the server owns the lineage again", flush=True)
+
+
+def push_stats(remote: Ssh, ckpt_dir: str) -> None:
+    """Telemetry-only sync: eval/report rows born on this machine (backfills,
+    follow-mode panels) reach the server WITHOUT a lineage handoff -- the safe
+    verb while the server owns and is actively training the lineage (a real
+    handback would ship a stale checkpoint over its newer state)."""
+    src = os.path.join(ckpt_dir, "stats.json")
+    if not os.path.exists(src):
+        raise SystemExit(f"[relay] no stats.json in {ckpt_dir}; nothing to push")
+    remote.preflight()
+    remote.merge_stats(src)
+    print("[relay] push-stats complete: telemetry merged on the server "
+          "(its existing rows won any conflicts)", flush=True)
 
 
 def run_trainer(ckpt_dir: str, extra: list) -> int:
@@ -296,7 +341,7 @@ def parse(argv: list) -> tuple:
     ap = argparse.ArgumentParser(
         prog="fishrl.relay",
         description="Automated relay passovers between this machine and the training server.")
-    ap.add_argument("cmd", choices=["train", "pull", "handback", "status"])
+    ap.add_argument("cmd", choices=["train", "pull", "handback", "push-stats", "status"])
     ap.add_argument("--ckpt-dir", default="checkpoints")
     ap.add_argument("--host", default=DEFAULT_HOST)
     ap.add_argument("--remote-repo", default=DEFAULT_REMOTE_REPO)
@@ -347,6 +392,8 @@ def main() -> None:
         pull(remote, args.ckpt_dir)
     elif args.cmd == "handback":
         handback(remote, args.ckpt_dir)
+    elif args.cmd == "push-stats":
+        push_stats(remote, args.ckpt_dir)
     else:
         status(remote, args.ckpt_dir)
 

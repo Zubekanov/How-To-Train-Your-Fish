@@ -103,6 +103,26 @@ def append_eval(ckpt_dir: str, record: dict) -> None:
     _append(ckpt_dir, "evals", record)
 
 
+def merge_file(ckpt_dir: str, path: str) -> dict:
+    """Union a stats-shaped JSON file (another machine's stats.json) into this
+    dir's, via `merge` -- lock-safe against a live trainer/eval service,
+    existing rows win. The receiving end of `fishrl.relay push-stats`."""
+    with open(path, encoding="utf-8") as f:
+        d = json.load(f)
+    return merge(ckpt_dir, reports=d.get("reports"), evals=d.get("evals"))
+
+
+def main() -> None:
+    import argparse
+    ap = argparse.ArgumentParser(
+        description="Merge a stats.json file from another machine into a checkpoint "
+                    "dir's stats history (telemetry only; existing rows win).")
+    ap.add_argument("--ckpt-dir", default="checkpoints")
+    ap.add_argument("--from", dest="src", required=True, help="stats-shaped JSON file")
+    args = ap.parse_args()
+    print(f"[stats] merged {args.src}: {merge_file(args.ckpt_dir, args.src)}", flush=True)
+
+
 def merge(ckpt_dir: str, reports=None, evals=None, key: str = "it",
           replace_sources=(), live_source=None, fill=()) -> dict:
     """Merge historic records into the file. For each array:
@@ -162,3 +182,7 @@ def merge(ckpt_dir: str, reports=None, evals=None, key: str = "it",
             added[name] = {"added": len(fresh), "filled": filled, "total": len(kept)}
         _atomic_write(ckpt_dir, d)
         return added
+
+
+if __name__ == "__main__":
+    main()

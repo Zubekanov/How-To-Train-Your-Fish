@@ -93,6 +93,29 @@ def test_handback_refused_while_local_trainer_live(tmp_path, server):
         h.close()
 
 
+def test_push_stats_is_telemetry_only(tmp_path, server):
+    # push-stats merges rows into the server's stats.json but must move NOTHING
+    # else: no ownership change, no checkpoint change.
+    import json
+
+    from fishrl.relay import push_stats
+    from fishrl.train import stats as stats_io
+
+    local = str(tmp_path / "local")
+    stats_io.append_eval(local, {"it": 80000, "heuristic": 0.25, "wall_time": 1.0})
+    stats_io.append_eval(str(tmp_path / "server"), {"it": 85000, "heuristic": 0.3,
+                                                    "wall_time": 2.0})
+    owner_before = o.read(server)
+    lat = os.path.getmtime(os.path.join(server, "latest.pt"))
+
+    push_stats(LocalSim(server), local)
+
+    merged = json.load(open(os.path.join(server, "stats.json")))
+    assert sorted(e["it"] for e in merged["evals"]) == [80000, 85000]
+    assert o.read(server) == owner_before                        # untouched
+    assert os.path.getmtime(os.path.join(server, "latest.pt")) == lat
+
+
 def test_pull_from_empty_server_aborts_cleanly(tmp_path):
     with pytest.raises(SystemExit):
         pull(LocalSim(str(tmp_path / "empty")), str(tmp_path / "local"))

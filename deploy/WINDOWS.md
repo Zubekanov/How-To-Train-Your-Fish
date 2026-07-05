@@ -101,7 +101,9 @@ ODROID log-volume choice, not a requirement.
 
 ## Relay training (this PC ↔ the ODROID)
 
-**The one command:**
+**The one click:** double-click `deploy\fishrl-pc.bat` (shortcut-friendly) — it starts
+the dashboard, opens it in your browser, and runs the relay session below in the
+console. **The one command** (same thing minus dashboard/browser):
 
 ```powershell
 deploy\fishrl-relay.ps1

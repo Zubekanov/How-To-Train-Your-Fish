@@ -179,6 +179,12 @@ function render(){
     wrSeries.push({name:k, color:c, pts:smooth(raw, WR_SMOOTH),
       stars: k==="heuristic" ? ev.filter(r=>r.new_best&&r[k]!=null).map(r=>[r.it,r[k]]) : []});
   }
+  // heuristic v1.2 has no eval-panel anchor; its only win-rate signal is the PFSP
+  // league EMA on report rows (a curriculum signal, hence the thin line — not
+  // comparable to the clean n=100 panel numbers above).
+  const h12 = rp.filter(r=>r.league_wr && r.league_wr.heuristic_1_2!=null)
+                .map(r=>[r.it, r.league_wr.heuristic_1_2]);
+  if (h12.length) wrSeries.push({name:"heuristic12 (league ema)", color:"#f8bbd0", w:0.9, pts:h12});
   chart($("wr"), $("wrL"), wrSeries, {y0:0, y1:1, hline:0.5});
   const lossSrc = tk.length ? tk : rp;
   chart($("loss"), $("lossL"), Object.entries(LOSS).map(([k,c])=>({

@@ -68,7 +68,8 @@ const WR = {heuristic:"#4fc3f7", heuristic11:"#b39ddb", random:"#9ccc65",
 const LOSS = {policy_loss:"#4fc3f7", critic_loss:"#e57373", guesser_loss:"#9ccc65",
               public_loss:"#ffb74d", entropy:"#b0bec5", approx_kl:"#f06292"};
 const MIX = {opp_self:"#4fc3f7", opp_past:"#b39ddb", opp_heuristic:"#e57373",
-             opp_heuristic11:"#ef9a9a", opp_attacker:"#ffb74d", opp_random:"#9ccc65",
+             opp_heuristic11:"#ef9a9a", opp_heuristic12:"#f8bbd0",
+             opp_attacker:"#ffb74d", opp_random:"#9ccc65",
              opp_scenario:"#80cbc4"};
 const WR_SMOOTH = 5000;   // win-rate running-mean window, in iterations
 const RATE_ITERS = 1000;  // "last-1k it/h" throughput window

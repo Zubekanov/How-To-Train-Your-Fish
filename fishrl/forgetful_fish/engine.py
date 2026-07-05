@@ -27,10 +27,11 @@ _OPENING_HAND = 7
 
 
 # Heuristic AI versions, keyed by ai_profile. "heuristic" is v1.0 (the RL run's
-# long-standing opponent/eval anchor); "heuristic_1_1" is the stronger testbench
-# line, exposed as a SEPARATE profile so it can join the PFSP pool without moving
-# the training baseline.
-_HEURISTIC_PROFILES = ("heuristic", "heuristic_1_1")
+# long-standing opponent/eval anchor); "heuristic_1_1" is the testbench line frozen
+# at its original release; "heuristic_1_2" is the current testbench line. Each is
+# exposed as a SEPARATE profile so it can join the PFSP pool without moving the
+# training baseline.
+_HEURISTIC_PROFILES = ("heuristic", "heuristic_1_1", "heuristic_1_2")
 
 
 def _ai_mod(g: "GameState" = None, pid: str = None):
@@ -39,9 +40,13 @@ def _ai_mod(g: "GameState" = None, pid: str = None):
     at call time. Without arguments (or for the default profile) this is v1.0."""
     if g is not None and pid is not None:
         p = g.players.get(pid)
-        if p is not None and getattr(p, "ai_profile", "heuristic") == "heuristic_1_1":
+        profile = getattr(p, "ai_profile", "heuristic") if p is not None else "heuristic"
+        if profile == "heuristic_1_1":
             from fishrl.forgetful_fish import ai_v1_1
             return ai_v1_1
+        if profile == "heuristic_1_2":
+            from fishrl.forgetful_fish import ai_v1_2
+            return ai_v1_2
     from fishrl.forgetful_fish import ai
     return ai
 

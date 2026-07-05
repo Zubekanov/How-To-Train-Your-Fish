@@ -34,9 +34,11 @@ class Config:
     # snapshots (true fictitious self-play). league_size is the past-self ring length
     # (0 -> anchors only). A snapshot is appended every status report.
     # "heuristic" is v1.0 — the eval anchor and the run's long-standing opponent;
-    # "heuristic_1_1" is the stronger testbench heuristic, a POOL opponent only
-    # (never the eval anchor, so the vs-heuristic baseline stays comparable).
-    pfsp_anchors: tuple = ("random", "attacker", "heuristic", "heuristic_1_1")
+    # "heuristic_1_1" (frozen at release) and "heuristic_1_2" (current testbench)
+    # are POOL opponents only (never the eval anchor, so the vs-heuristic baseline
+    # stays comparable).
+    pfsp_anchors: tuple = ("random", "attacker", "heuristic", "heuristic_1_1",
+                           "heuristic_1_2")
     league_size: int = 8
     # Opponent sampling priority over the learner's per-opponent win-rate `x`:
     #   "hard" -> (1-x)^pfsp_p  : focus on opponents you LOSE to (default)

@@ -72,10 +72,11 @@ _LEAGUE = re.compile(
     r"\[league\s+it=(?P<it>\d+)\]\s+games=(?P<games>\d+)\s+trained=[\d.]+\s+"
     r"\(self=(?P<self>\d+)\s+past=(?P<past>\d+)\s+heuristic=(?P<heu>\d+)\s+"
     r"attacker=(?P<att>\d+)\s+random=(?P<rand>\d+)\)"
-    # July 2026: heuristic v1.1 joins the pool. Its count rides after the paren
-    # block (`h11=N`) so the strict 5-token sequence stays stable; on those lines
-    # the paren `heuristic=` count is the MERGED v1.0+v1.1 total.
-    r"(?:\s+h11=(?P<h11>\d+))?")
+    # July 2026: heuristic v1.1 joins the pool, then v1.2. Their counts ride after
+    # the paren block (`h11=N h12=N`) so the strict 5-token sequence stays stable;
+    # on those lines the paren `heuristic=` count is the MERGED all-versions total.
+    r"(?:\s+h11=(?P<h11>\d+))?"
+    r"(?:\s+h12=(?P<h12>\d+))?")
 
 # Scenario-curriculum games this window, in either era's format:
 #   new: `[scenario it=9358] games=37 (survive_lethal=20 ...) | wr ...`
@@ -148,16 +149,19 @@ def parse_league(lines, scenarios=None) -> dict:
         it = int(m.group("it"))
         scen = scenarios.get(it)
         grand = (int(m.group("games")) + (scen or 0)) or 1
-        # Pre-split lines carry no h11 token: the whole heuristic count is v1.0
-        # (v1.1 did not exist) and opp_heuristic11 stays None, matching the live
-        # writer's schema. With h11, the paren count is merged - subtract it out.
+        # Pre-split lines carry no h11/h12 token: the whole heuristic count is v1.0
+        # (later versions did not exist) and opp_heuristic11/12 stay None, matching
+        # the live writer's schema. With the tokens, the paren count is the merged
+        # all-versions total - subtract them out to recover v1.0.
         h11 = int(m.group("h11")) if m.group("h11") is not None else None
+        h12 = int(m.group("h12")) if m.group("h12") is not None else None
         out[it] = {
             "opp_trained": (int(m.group("self")) + int(m.group("past"))) / grand,
             "opp_self": int(m.group("self")) / grand,
             "opp_past": int(m.group("past")) / grand,
-            "opp_heuristic": (int(m.group("heu")) - (h11 or 0)) / grand,
+            "opp_heuristic": (int(m.group("heu")) - (h11 or 0) - (h12 or 0)) / grand,
             "opp_heuristic11": h11 / grand if h11 is not None else None,
+            "opp_heuristic12": h12 / grand if h12 is not None else None,
             "opp_attacker": int(m.group("att")) / grand,
             "opp_random": int(m.group("rand")) / grand,
             "opp_scenario": scen / grand if scen is not None else None,

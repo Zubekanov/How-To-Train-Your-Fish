@@ -27,8 +27,8 @@ class HeuristicMatch:
     """A single-seat (p1) driver versus the engine heuristic AI (p2).
 
     `profile` selects the AI version: "heuristic" (v1.0 — the run's long-standing
-    opponent and eval anchor) or "heuristic_1_1" (the stronger testbench line,
-    used as a separate PFSP pool opponent)."""
+    opponent and eval anchor) or a versioned profile ("heuristic_1_1",
+    "heuristic_1_2", ... — separate PFSP pool opponents)."""
 
     def __init__(self, stops_mode: str = "default", max_decisions: int = 4000,
                  profile: str = "heuristic"):

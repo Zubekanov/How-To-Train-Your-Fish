@@ -71,8 +71,27 @@ def test_parse_league_splits_heuristic_versions():
     s = parse_league([_LEAGUE_H11])[60900]
     assert abs(s["opp_heuristic"] - 80 / 1200) < 1e-9     # merged 110 minus v1.1's 30
     assert abs(s["opp_heuristic11"] - 30 / 1200) < 1e-9
+    assert s["opp_heuristic12"] is None                   # pre-v1.2 line
     shares = ("opp_self", "opp_past", "opp_heuristic", "opp_heuristic11",
               "opp_attacker", "opp_random")
+    assert abs(sum(s[k] for k in shares) - 1.0) < 1e-9
+
+
+# July 2026: heuristic v1.2 joins the pool — a second post-paren token (h12) on
+# top of h11; the paren heuristic= count is now the merged v1.0+v1.1+v1.2 total.
+_LEAGUE_H12 = (
+    "2026-07-05T15:00:00+10:00 [league it=74100] games=1500 trained=0.85 "
+    "(self=900 past=375 heuristic=180 attacker=25 random=20) h11=60 h12=45 | "
+    "heuristic_1_2=0.05(90) heuristic_1_1=0.11(400) heuristic=0.20(2900)")
+
+
+def test_parse_league_splits_three_heuristic_versions():
+    s = parse_league([_LEAGUE_H12])[74100]
+    assert abs(s["opp_heuristic"] - 75 / 1500) < 1e-9     # merged 180 minus 60 minus 45
+    assert abs(s["opp_heuristic11"] - 60 / 1500) < 1e-9
+    assert abs(s["opp_heuristic12"] - 45 / 1500) < 1e-9
+    shares = ("opp_self", "opp_past", "opp_heuristic", "opp_heuristic11",
+              "opp_heuristic12", "opp_attacker", "opp_random")
     assert abs(sum(s[k] for k in shares) - 1.0) < 1e-9
 
 

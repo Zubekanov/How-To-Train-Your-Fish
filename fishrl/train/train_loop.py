@@ -15,6 +15,7 @@ import copy
 import json
 import math
 import os
+import platform
 import signal
 import time
 from dataclasses import dataclass
@@ -331,6 +332,10 @@ def train(cfg: Config, models: Models | None = None, log=print,
             # live only in the "evals" array.
             rec = {
                 "it": done, "elapsed_h": total_elapsed() / 3600.0, "wall_time": time.time(),
+                # Which machine trained this window: after a relay handoff the merged
+                # stats interleave hosts, and per-device throughput (the dashboard's
+                # last-1k it/h) needs to segment on this rather than guess.
+                "host": platform.node(),
                 "iters": win_iters, "iters_per_h": win_iters / dt_h, "transitions": win_T,
                 "policy_loss": mean["policy_loss"], "critic_loss": mean["critic_loss"],
                 "entropy": mean["entropy"], "approx_kl": mean["approx_kl"],

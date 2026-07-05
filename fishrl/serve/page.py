@@ -43,6 +43,7 @@ svg text{font-family:inherit;font-size:11px;fill:var(--dim)}
   <span>it <b id="it">—</b></span>
   <span><b id="elapsed">—</b> h</span>
   <span><b id="iph">—</b> it/h</span>
+  <span id="iph1kwrap" title="">last-1k <b id="iph1k">—</b> it/h</span>
   <span>best <b id="best">—</b></span>
   <span id="turn" class="chip idle">turn: …</span>
   <span id="live" class="chip idle">trainer: …</span>
@@ -50,7 +51,7 @@ svg text{font-family:inherit;font-size:11px;fill:var(--dim)}
   <span id="actions"></span>
 </header>
 <main>
-  <div class="panel"><h3>win-rates vs iteration (evals)</h3>
+  <div class="panel"><h3>win-rates vs iteration (5000-it running mean; dots = raw evals)</h3>
     <svg id="wr" viewBox="0 0 600 260"></svg><div class="legend" id="wrL"></div></div>
   <div class="panel"><h3>losses (per-iteration ticks)</h3>
     <svg id="loss" viewBox="0 0 600 260"></svg><div class="legend" id="lossL"></div></div>
@@ -69,6 +70,8 @@ const LOSS = {policy_loss:"#4fc3f7", critic_loss:"#e57373", guesser_loss:"#9ccc6
 const MIX = {opp_self:"#4fc3f7", opp_past:"#b39ddb", opp_heuristic:"#e57373",
              opp_heuristic11:"#ef9a9a", opp_attacker:"#ffb74d", opp_random:"#9ccc65",
              opp_scenario:"#80cbc4"};
+const WR_SMOOTH = 5000;   // win-rate running-mean window, in iterations
+const RATE_ITERS = 1000;  // "last-1k it/h" throughput window
 const S = {reports:new Map(), evals:new Map(), ticks:new Map(), best:null, summary:null};
 const key = {reports:r=>r.it, ticks:r=>r.it, evals:r=>r.it+":"+(r.wall_time||0)};
 const $ = id => document.getElementById(id);
@@ -125,6 +128,11 @@ function chart(svg, legendEl, series, opts){
   } else {
     for (const s of series){
       const [a,b] = s.right ? range([s]) : [ya,yb];
+      if (s.dots){                                  // faint raw datapoints behind the lines
+        for (const p of s.pts)
+          out.push(`<circle cx="${X(p[0])}" cy="${Y(p[1],a,b)}" r="1.8" fill="${s.color}" opacity="0.28"/>`);
+        continue;
+      }
       const line = s.pts.map(p=>`${X(p[0])},${Y(p[1],a,b)}`).join(" ");
       out.push(`<polyline points="${line}" fill="none" stroke="${s.color}" stroke-width="${s.w||1.4}" opacity="${s.right?0.8:1}"/>`);
       if (s.right){
@@ -136,7 +144,7 @@ function chart(svg, legendEl, series, opts){
     }
   }
   svg.innerHTML = out.join("");
-  legendEl.innerHTML = series.map(s =>
+  legendEl.innerHTML = series.filter(s => s.name).map(s =>
     `<span style="color:${s.color}">■ ${s.name}</span>`).join("");
 }
 function fmt(v){
@@ -149,14 +157,28 @@ function fmt(v){
 }
 
 // ── panels ───────────────────────────────────────────────────────────────────
+function smooth(pts, win){
+  // centered running mean over an iteration window (partial windows at the edges)
+  return pts.map(p => {
+    const lo = p[0] - win/2, hi = p[0] + win/2;
+    let sum = 0, n = 0;
+    for (const q of pts) if (q[0] >= lo && q[0] <= hi){ sum += q[1]; n++; }
+    return [p[0], sum/n];
+  });
+}
+
 function render(){
   dirty = false;
   const ev = rows("evals"), rp = rows("reports"), tk = rows("ticks");
-  chart($("wr"), $("wrL"), Object.entries(WR).map(([k,c])=>({
-      name:k, color:c,
-      pts: ev.filter(r=>r[k]!=null).map(r=>[r.it, r[k]]),
-      stars: k==="heuristic" ? ev.filter(r=>r.new_best&&r[k]!=null).map(r=>[r.it,r[k]]) : [],
-    })).filter(s=>s.pts.length), {y0:0, y1:1, hline:0.5});
+  const wrSeries = [];
+  for (const [k,c] of Object.entries(WR)){
+    const raw = ev.filter(r=>r[k]!=null).map(r=>[r.it, r[k]]);
+    if (!raw.length) continue;
+    wrSeries.push({name:"", color:c, dots:true, pts:raw});      // faint raw points
+    wrSeries.push({name:k, color:c, pts:smooth(raw, WR_SMOOTH),
+      stars: k==="heuristic" ? ev.filter(r=>r.new_best&&r[k]!=null).map(r=>[r.it,r[k]]) : []});
+  }
+  chart($("wr"), $("wrL"), wrSeries, {y0:0, y1:1, hline:0.5});
   const lossSrc = tk.length ? tk : rp;
   chart($("loss"), $("lossL"), Object.entries(LOSS).map(([k,c])=>({
       name:k, color:c, w:(k==="entropy"||k==="approx_kl")?0.9:1.4,
@@ -173,6 +195,38 @@ function render(){
     })).filter(s=>s.pts.length), {stack:true, y0:0, y1:1});
 }
 
+function rate1k(){
+  // Throughput over (up to) the last RATE_ITERS iterations ON ONE DEVICE, so the
+  // number is directly comparable between the server and the PC regardless of
+  // report cadence. Primary source: report rows (elapsed_h excludes downtime),
+  // restricted to the trailing run of rows sharing the newest row's host tag --
+  // merged relay histories interleave hosts. Fallback for a session too young
+  // for two reports: tick wall-clock (live device only).
+  const rp = rows("reports");
+  if (rp.length >= 2){
+    const last = rp[rp.length-1], host = last.host;
+    let i = rp.length - 1;
+    while (i > 0 && rp[i-1].host === host) i--;
+    const tail = rp.slice(i).filter(r => r.elapsed_h != null && r.it != null);
+    if (tail.length >= 2 && tail[tail.length-1].it - tail[0].it > 0){
+      let base = tail[0];
+      for (const r of tail){ if (r.it <= last.it - RATE_ITERS) base = r; else break; }
+      const dit = last.it - base.it, dh = last.elapsed_h - base.elapsed_h;
+      if (dit > 0 && dh > 0)
+        return {rate: dit/dh, span: dit, host: host || "?", src: "reports"};
+    }
+  }
+  const tk = rows("ticks");
+  if (tk.length >= 2){
+    const last = tk[tk.length-1];
+    let base = tk[0];
+    for (const t of tk){ if (t.it <= last.it - RATE_ITERS) base = t; else break; }
+    const dit = last.it - base.it, dh = (last.wall_time - base.wall_time)/3600;
+    if (dit > 0 && dh > 0) return {rate: dit/dh, span: dit, host: "this device", src: "ticks"};
+  }
+  return null;
+}
+
 function header(s){
   if (!s) return;
   $("host").textContent = s.host + " " + s.ckpt_dir.split(/[\\/]/).pop();
@@ -180,6 +234,10 @@ function header(s){
   $("it").textContent = lt.it!=null?lt.it:(lr.it!=null?lr.it:"—");
   $("elapsed").textContent = lr.elapsed_h!=null?lr.elapsed_h.toFixed(1):"—";
   $("iph").textContent = lr.iters_per_h!=null?lr.iters_per_h.toFixed(1):"—";
+  const rk = rate1k();
+  $("iph1k").textContent = rk ? rk.rate.toFixed(1) : "—";
+  $("iph1kwrap").title = rk ?
+    `${rk.rate.toFixed(1)} it/h over the last ${rk.span} it on ${rk.host} (${rk.src})` : "";
   $("best").textContent = s.best?`${s.best.heuristic.toFixed(2)}@${s.best.it}`:"—";
   const o = s.owner;
   set("turn", o?`turn: ${o.state==="active"?o.host:"released g"+o.generation}`:"turn: unclaimed",

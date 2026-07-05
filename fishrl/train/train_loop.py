@@ -319,6 +319,11 @@ def train(cfg: Config, models: Models | None = None, log=print,
             f"pub(acc={est.get('pub_acc', nan):.2f},brier={est.get('pub_brier', nan):.2f}) "
             f"gap={brier_gap:.2f} gmae={gmae:.2f}" + opp_str + game_str + wr_str
         )
+        # Per-scenario curriculum members (carve-out league or the main league's
+        # scenario anchors) — feeds both the stats.json report and the [scenario]
+        # log line below.
+        scen_members = (scen_league.members() if scen_league is not None
+                        else [mm for mm in league.anchors if mm.kind == "scenario"])
         if checkpoint_path is not None:                  # dump this datapoint to stats.json
             ckpt_dir = os.path.dirname(os.path.abspath(checkpoint_path))
             # Reports are PURE trainer metrics (no win-rates) so every row has one schema;
@@ -356,6 +361,10 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 "opp_random": opp_mix["random"] / grand_total,
                 "opp_scenario": scen_total / grand_total,
                 "scenario_mix": {k: v / grand_total for k, v in sorted(scen_mix.items())},
+                # PFSP curriculum win-rate EMA per scenario (the sampler's difficulty
+                # signal, NOT a skill measure) — mirrors the [scenario] line's wr table
+                # so the website replica gets it over HTTP instead of journald.
+                "scenario_wr": {mm.name: mm.wr for mm in scen_members},
                 # Harvested anchor outcomes this window as [wins, games] under the eval
                 # convention -- the eval service tops each anchor up to its target and
                 # publishes the combined estimate. Keyed with the EVAL names.
@@ -391,14 +400,11 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 f"attacker={opp_mix['attacker']} "
                 f"random={opp_mix['random']}) "
                 f"h11={opp_mix['heuristic_1_1']} | {league.summary(exclude_kinds=('scenario',))}")
-        # Per-scenario games this window + the PFSP win-rate driving selection — from
-        # the dedicated scenario league (carve-out mode) or the main league's scenario
-        # members (pool mode); the emitted line format is identical either way.
-        # Every registered scenario is listed (0 games shown too); win-rates are a
+        # Per-scenario games this window + the PFSP win-rate driving selection
+        # (scen_members computed above, before the stats.json report). Every
+        # registered scenario is listed (0 games shown too); win-rates are a
         # CURRICULUM signal (what to practise), not a success metric — judge real
         # progress on the vs-heuristic eval.
-        scen_members = (scen_league.members() if scen_league is not None
-                        else [mm for mm in league.anchors if mm.kind == "scenario"])
         if scen_members and (cfg.scenario_frac > 0 or cfg.scenarios_in_pool):
             counts = " ".join(f"{mm.name}={scen_mix.get(mm.name, 0)}"
                               for mm in scen_members)

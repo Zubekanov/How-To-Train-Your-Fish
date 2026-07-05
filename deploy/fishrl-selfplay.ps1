@@ -10,9 +10,12 @@ Set-Location $Repo
 Start-Process -WindowStyle Minimized -FilePath "$Repo\.venv\Scripts\python.exe" `
     -ArgumentList "-m","fishrl.eval.parallel_panel","--ckpt-dir","$Repo\checkpoints", `
                   "--follow","900","--reserve-cores","12"
+# Training-regime flags come from deploy\train.args (shared with the ODROID's
+# fishrl-selfplay.sh) so the lineage trains identically on both hosts; only
+# machine flags (cadences, workers) are set here.
+$Regime = ((Get-Content "$Repo\deploy\train.args" -Raw).Trim() -split '\s+')
 python -m fishrl.train --resume --iters 0 `
-    --encoder flat --critic-encoder entity `
-    --ckpt-dir "$Repo\checkpoints" --scenario-frac 0.3 --warmup-games 16 `
-    --report-every-seconds 3600 --report-winrate-games 0 `
+    --ckpt-dir "$Repo\checkpoints" $Regime `
+    --report-every-seconds 900 --report-winrate-games 0 `
     --checkpoint-every-seconds 900 `
     --collect-workers 8 --reserve-cores 2

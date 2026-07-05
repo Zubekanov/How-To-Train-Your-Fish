@@ -28,8 +28,12 @@ start "fishrl eval" /min "%PY%" -m fishrl.eval.parallel_panel --ckpt-dir "%REPO%
 ping -n 4 127.0.0.1 >nul
 start "" "http://%COMPUTERNAME%:8765/"
 
+rem Training-regime flags come from deploy\train.args (single line; shared with
+rem the ODROID's fishrl-selfplay.sh) so the lineage trains identically on both
+rem hosts; only machine flags (cadences, workers) are set here.
+set /p REGIME=<"%REPO%\deploy\train.args"
 "%PY%" -m fishrl.relay train --ckpt-dir "%REPO%\checkpoints" %* -- ^
-    --scenario-frac 0.3 --warmup-games 16 ^
+    %REGIME% ^
     --report-every-seconds 900 --report-winrate-games 0 ^
     --checkpoint-every-seconds 900 ^
     --collect-workers 8 --reserve-cores 2

@@ -1,0 +1,1 @@
+--encoder flat --critic-encoder entity --scenario-pool --pool-frac 0.5 --warmup-games 16

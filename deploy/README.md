@@ -17,6 +17,13 @@ Both launchers hardcode the repo path and the shared venv
 (`/home/zubekanov/Repositories/Website_Dev/.venv`); edit those two lines when
 deploying elsewhere.
 
+**`train.args`** holds the TRAINING-REGIME flags (scenario mode, pool fraction,
+encoders, warmup) and is read by every launcher on both machines — edit it (and
+commit) to change the regime everywhere at once; the launchers keep only
+machine-specific flags (cadences, worker counts). This exists because the two
+sets once drifted: the ODROID moved to `--scenario-pool --pool-frac 0.5` while
+the PC launchers still carried the older `--scenario-frac 0.3` carve-out.
+
 ## Install / update
 
 ```bash

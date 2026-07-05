@@ -49,6 +49,21 @@ flag through the handback, so the machine can't doze off mid-transfer after a
 remote "End session" click. The dashboard (`fishrl.serve`) deliberately does NOT
 keep the machine awake.
 
+### `--collect-workers N`
+
+Game collection is per-decision, single-threaded Python — the serial trainer
+uses one core while the rest idle (62% of iteration wall-clock on this box).
+`--collect-workers 8` fans each iteration's games across 8 persistent worker
+processes, shipping the **current** weights every iteration, so training
+semantics are unchanged (strictly on-policy, identical sampling decisions,
+all league/telemetry bookkeeping on the main thread) — wall-clock only.
+Measured on this machine: **2.7×** (528 → 1440 it/h in the bench; the serial
+CUDA update is the remaining bottleneck, so more than ~8 workers adds
+nothing at 8 games/iteration). Scenario snapshot pools pre-build in the
+workers at startup (one-time, parallel — expect a ~30s first iteration when
+scenarios are enabled). `0` (default) is the serial path, byte-identical:
+what the ODROID service runs.
+
 ### `--reserve-cores N`
 
 Keeps N **physical** cores free of training threads so the machine stays

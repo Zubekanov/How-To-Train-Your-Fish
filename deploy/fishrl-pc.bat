@@ -29,7 +29,7 @@ start "" "http://%COMPUTERNAME%:8765/"
     --scenario-frac 0.3 --warmup-games 16 ^
     --report-every-seconds 900 --report-winrate-games 0 ^
     --checkpoint-every-seconds 900 ^
-    --reserve-cores 2 --gui
+    --collect-workers 8 --reserve-cores 2 --gui
 
 echo.
 echo Session ended. If the handback failed above, the lineage is still on this

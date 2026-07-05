@@ -23,6 +23,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
+from fishrl.data.buffer import RolloutBuffer
 from fishrl.models import device_of
 from fishrl.models.estimators import PrivilegedCritic, PublicEstimator
 from fishrl.models.guesser import HandGuesser
@@ -467,6 +468,15 @@ def train(cfg: Config, models: Models | None = None, log=print,
         for sig in (signal.SIGTERM, signal.SIGINT):
             prev_handlers[sig] = signal.signal(sig, _on_signal)
 
+    # Parallel local collection (opt-in): a persistent pool of collector worker
+    # processes that plays each iteration's games with THIS iteration's weights.
+    # 0 = the serial path below, unchanged (the ODROID service default).
+    pcol = None
+    if getattr(cfg, "collect_workers", 0) > 0:
+        from fishrl.train.pcollect import ParallelCollector
+        pcol = ParallelCollector(cfg, int(cfg.collect_workers))
+        log(f"[pcollect] {cfg.collect_workers} collector worker processes")
+
     resuming = resume_path is not None and os.path.exists(resume_path)
     try:
         if resuming:
@@ -547,91 +557,153 @@ def train(cfg: Config, models: Models | None = None, log=print,
             n_self = rest - n_pool
             seed = cfg.seed + 1000 + done * cfg.games_per_iter
             t_collect = time.perf_counter()
-            buf = collect_games(benv, actor_act_fn(m.actor), n_self, seed,
-                                critic=None, max_decisions=cfg.max_decisions)
-            opp_mix["self"] += n_self                       # mirror self-play games this iter
-            # Mirror seat balance: decided mirror games only (buf holds ONLY the
-            # self-play games at this point). Drift from 0.5 = seat exploitation.
-            gwin["mirror_dec"] += sum(1 for w in buf.games if w in ("p1", "p2"))
-            gwin["mirror_p1"] += sum(1 for w in buf.games if w == "p1")
-            pool_rng = np.random.default_rng(cfg.seed + 900_000 + done)
-            for pidx in range(n_pool):
-                oseed = cfg.seed + 500_000 + done * cfg.games_per_iter + pidx * 17
-                member = league.sample(pool_rng)
-                if member is None:                          # empty league -> mirror fallback
-                    opp_mix["self"] += 1
-                    gbuf = collect_games(benv, actor_act_fn(m.actor), 1, oseed,
-                                         critic=None, max_decisions=cfg.max_decisions)
-                    gwin["mirror_dec"] += sum(1 for w in gbuf.games if w in ("p1", "p2"))
-                    gwin["mirror_p1"] += sum(1 for w in gbuf.games if w == "p1")
+            if pcol is not None:
+                # ── Parallel path. The spec-building below makes EXACTLY the same
+                # sampling decisions (same RNG streams, seeds and seat parity) as the
+                # serial branch in the else: -- keep the two in lockstep when editing
+                # either. Games run on the worker pool with THIS iteration's weights
+                # (strictly on-policy, like serial); buffers come back in spec order
+                # and every piece of bookkeeping is applied here on the main thread.
+                specs, metas = [], []
+                for gi in range(n_self):
+                    specs.append({"kind": "self", "seed": seed + gi})
+                    metas.append(("mirror", None, None))
+                pool_rng = np.random.default_rng(cfg.seed + 900_000 + done)
+                for pidx in range(n_pool):
+                    oseed = cfg.seed + 500_000 + done * cfg.games_per_iter + pidx * 17
+                    member = league.sample(pool_rng)
+                    if member is None:                      # empty league -> mirror fallback
+                        specs.append({"kind": "self", "seed": oseed})
+                        metas.append(("mirror", None, None))
+                    elif member.kind == "scenario":
+                        specs.append({"kind": "scenario", "name": member.name, "seed": oseed})
+                        metas.append(("pool_scen", member, "p1"))
+                    elif member.kind.startswith("heuristic"):
+                        specs.append({"kind": "heuristic", "profile": member.kind, "seed": oseed})
+                        metas.append(("pool", member, "p1"))
+                    else:
+                        lseat = "p1" if pidx % 2 == 0 else "p2"
+                        spec = {"kind": "opponent", "okind": member.kind,
+                                "seed": oseed, "lseat": lseat}
+                        if member.kind == "self":           # frozen nets ride with the spec
+                            spec["opp_state"] = pcol.opp_state_for(member)
+                        specs.append(spec)
+                        metas.append(("pool", member, lseat))
+                if n_scen > 0 and scen_league is not None and scen_league.members():
+                    scn_rng = np.random.default_rng(cfg.seed + 700_000 + done)
+                    for sidx in range(n_scen):
+                        smember = scen_league.sample(scn_rng)
+                        sseed = cfg.seed + 300_000 + done * cfg.games_per_iter + sidx * 31
+                        specs.append({"kind": "scenario", "name": smember.name, "seed": sseed})
+                        metas.append(("carve_scen", smember, "p1"))
+                bufs = pcol.collect(m, specs, done)
+                buf = RolloutBuffer()
+                for (tag, member, lseat), gbuf in zip(metas, bufs):
+                    won = gbuf.games[-1] if gbuf.games else None
+                    if tag == "mirror":
+                        opp_mix["self"] += 1
+                        gwin["mirror_dec"] += sum(1 for w in gbuf.games if w in ("p1", "p2"))
+                        gwin["mirror_p1"] += sum(1 for w in gbuf.games if w == "p1")
+                    elif tag in ("pool_scen", "carve_scen"):
+                        scen_mix[member.name] = scen_mix.get(member.name, 0) + 1
+                        gwin["scen_games"] += 1
+                        gwin["scen_T"] += len(gbuf.steps)
+                        if won in ("p1", "p2"):
+                            (league if tag == "pool_scen" else scen_league).update(
+                                member, won == "p1")
+                    else:                                   # pool game vs a league member
+                        opp_mix["pastself" if member.kind == "self" else member.kind] += 1
+                        if won in ("p1", "p2"):
+                            league.update(member, won == lseat)
+                        if member.kind in AWIN_KINDS:       # harvest: all games / strict wins
+                            _harvest_count(awin[member.kind], gbuf.games, lseat)
                     buf.merge(gbuf)
-                    continue
-                if member.kind == "scenario":               # pool-mode curriculum game:
-                    from fishrl.train.scenarios import ScenarioEnv, get_scenario
-                    lseat = "p1"                            # learner is p1, p2 the engine bot
-                    senv = BeliefAugmentedEnv(
-                        m.guesser, belief=cfg.use_belief,
-                        env=ScenarioEnv(get_scenario(member.name),
-                                        max_decisions=cfg.max_decisions,
-                                        enforce_free_attack=cfg.enforce_free_attack))
-                    gbuf = collect_games(senv, actor_act_fn(m.actor), 1, oseed,
-                                         critic=None, max_decisions=cfg.max_decisions)
-                    # scenario accounting, NOT opp_mix: the [league] paren counts and
-                    # mix_total stay scenario-free (same telemetry as carve-out mode)
-                    scen_mix[member.name] = scen_mix.get(member.name, 0) + 1
-                    gwin["scen_games"] += 1
-                    gwin["scen_T"] += len(gbuf.steps)
-                    if gbuf.games and gbuf.games[-1] in ("p1", "p2"):
-                        league.update(member, gbuf.games[-1] == "p1")
-                    buf.merge(gbuf)
-                    continue
-                opp_mix["pastself" if member.kind == "self" else member.kind] += 1
-                if member.kind.startswith("heuristic"):     # engine-driven -> learner is p1
-                    lseat = "p1"                            # (kind doubles as the ai_profile)
-                    gbuf = collect_heuristic_games(m.guesser, m.actor, 1, oseed,
-                                                   critic=None, use_belief=cfg.use_belief,
+            else:
+                buf = collect_games(benv, actor_act_fn(m.actor), n_self, seed,
+                                    critic=None, max_decisions=cfg.max_decisions)
+                opp_mix["self"] += n_self                       # mirror self-play games this iter
+                # Mirror seat balance: decided mirror games only (buf holds ONLY the
+                # self-play games at this point). Drift from 0.5 = seat exploitation.
+                gwin["mirror_dec"] += sum(1 for w in buf.games if w in ("p1", "p2"))
+                gwin["mirror_p1"] += sum(1 for w in buf.games if w == "p1")
+                pool_rng = np.random.default_rng(cfg.seed + 900_000 + done)
+                for pidx in range(n_pool):
+                    oseed = cfg.seed + 500_000 + done * cfg.games_per_iter + pidx * 17
+                    member = league.sample(pool_rng)
+                    if member is None:                          # empty league -> mirror fallback
+                        opp_mix["self"] += 1
+                        gbuf = collect_games(benv, actor_act_fn(m.actor), 1, oseed,
+                                             critic=None, max_decisions=cfg.max_decisions)
+                        gwin["mirror_dec"] += sum(1 for w in gbuf.games if w in ("p1", "p2"))
+                        gwin["mirror_p1"] += sum(1 for w in gbuf.games if w == "p1")
+                        buf.merge(gbuf)
+                        continue
+                    if member.kind == "scenario":               # pool-mode curriculum game:
+                        from fishrl.train.scenarios import ScenarioEnv, get_scenario
+                        lseat = "p1"                            # learner is p1, p2 the engine bot
+                        senv = BeliefAugmentedEnv(
+                            m.guesser, belief=cfg.use_belief,
+                            env=ScenarioEnv(get_scenario(member.name),
+                                            max_decisions=cfg.max_decisions,
+                                            enforce_free_attack=cfg.enforce_free_attack))
+                        gbuf = collect_games(senv, actor_act_fn(m.actor), 1, oseed,
+                                             critic=None, max_decisions=cfg.max_decisions)
+                        # scenario accounting, NOT opp_mix: the [league] paren counts and
+                        # mix_total stay scenario-free (same telemetry as carve-out mode)
+                        scen_mix[member.name] = scen_mix.get(member.name, 0) + 1
+                        gwin["scen_games"] += 1
+                        gwin["scen_T"] += len(gbuf.steps)
+                        if gbuf.games and gbuf.games[-1] in ("p1", "p2"):
+                            league.update(member, gbuf.games[-1] == "p1")
+                        buf.merge(gbuf)
+                        continue
+                    opp_mix["pastself" if member.kind == "self" else member.kind] += 1
+                    if member.kind.startswith("heuristic"):     # engine-driven -> learner is p1
+                        lseat = "p1"                            # (kind doubles as the ai_profile)
+                        gbuf = collect_heuristic_games(m.guesser, m.actor, 1, oseed,
+                                                       critic=None, use_belief=cfg.use_belief,
+                                                       max_decisions=cfg.max_decisions,
+                                                       profile=member.kind)
+                    else:                                       # scripted / past-self, seat-balanced
+                        lseat = "p1" if pidx % 2 == 0 else "p2"
+                        gbuf = collect_vs_opponent(m, member, 1, oseed, critic=None,
+                                                   use_belief=cfg.use_belief,
                                                    max_decisions=cfg.max_decisions,
-                                                   profile=member.kind)
-                else:                                       # scripted / past-self, seat-balanced
-                    lseat = "p1" if pidx % 2 == 0 else "p2"
-                    gbuf = collect_vs_opponent(m, member, 1, oseed, critic=None,
-                                               use_belief=cfg.use_belief,
-                                               max_decisions=cfg.max_decisions,
-                                               learner_seat=lseat,
-                                               enforce_free_attack=cfg.enforce_free_attack)
-                # Update the member's learner win-rate from the recorded game result —
-                # buf.games counts a game even when the learner never got a decision
-                # (losing before your first priority is still a loss; skipping those
-                # biased the EMA upward exactly against fast-killing opponents).
-                if gbuf.games and gbuf.games[-1] in ("p1", "p2"):
-                    league.update(member, gbuf.games[-1] == lseat)
-                if member.kind in AWIN_KINDS:            # harvest: all games / strict wins
-                    _harvest_count(awin[member.kind], gbuf.games, lseat)
-                buf.merge(gbuf)
-            # Scenario-seeded games: short, targeted start-states (terminal ±1 reward).
-            # Reuses the self-play collector via a belief-wrapped ScenarioEnv, so the
-            # transitions are identical in shape and merge into the same PPO buffer.
-            if n_scen > 0 and scen_league is not None and scen_league.members():
-                from fishrl.train.scenarios import ScenarioEnv, get_scenario
-                scn_rng = np.random.default_rng(cfg.seed + 700_000 + done)
-                for sidx in range(n_scen):
-                    member = scen_league.sample(scn_rng)    # PFSP over scenarios by difficulty
-                    sname = member.name
-                    senv = BeliefAugmentedEnv(
-                        m.guesser, belief=cfg.use_belief,
-                        env=ScenarioEnv(get_scenario(sname), max_decisions=cfg.max_decisions,
-                                        enforce_free_attack=cfg.enforce_free_attack))
-                    sseed = cfg.seed + 300_000 + done * cfg.games_per_iter + sidx * 31
-                    sbuf = collect_games(senv, actor_act_fn(m.actor), 1, sseed,
-                                         critic=None, max_decisions=cfg.max_decisions)
-                    gwin["scen_games"] += 1
-                    gwin["scen_T"] += len(sbuf.steps)       # scenario episode lengths
-                    buf.merge(sbuf)
-                    scen_mix[sname] = scen_mix.get(sname, 0) + 1
-                    # the learner is p1 (p2 is the engine bot); count the game even if
-                    # the learner never got a decision before it ended
-                    if sbuf.games and sbuf.games[-1] in ("p1", "p2"):
-                        scen_league.update(member, sbuf.games[-1] == "p1")
+                                                   learner_seat=lseat,
+                                                   enforce_free_attack=cfg.enforce_free_attack)
+                    # Update the member's learner win-rate from the recorded game result —
+                    # buf.games counts a game even when the learner never got a decision
+                    # (losing before your first priority is still a loss; skipping those
+                    # biased the EMA upward exactly against fast-killing opponents).
+                    if gbuf.games and gbuf.games[-1] in ("p1", "p2"):
+                        league.update(member, gbuf.games[-1] == lseat)
+                    if member.kind in AWIN_KINDS:            # harvest: all games / strict wins
+                        _harvest_count(awin[member.kind], gbuf.games, lseat)
+                    buf.merge(gbuf)
+                # Scenario-seeded games: short, targeted start-states (terminal ±1 reward).
+                # Reuses the self-play collector via a belief-wrapped ScenarioEnv, so the
+                # transitions are identical in shape and merge into the same PPO buffer.
+                if n_scen > 0 and scen_league is not None and scen_league.members():
+                    from fishrl.train.scenarios import ScenarioEnv, get_scenario
+                    scn_rng = np.random.default_rng(cfg.seed + 700_000 + done)
+                    for sidx in range(n_scen):
+                        member = scen_league.sample(scn_rng)    # PFSP over scenarios by difficulty
+                        sname = member.name
+                        senv = BeliefAugmentedEnv(
+                            m.guesser, belief=cfg.use_belief,
+                            env=ScenarioEnv(get_scenario(sname), max_decisions=cfg.max_decisions,
+                                            enforce_free_attack=cfg.enforce_free_attack))
+                        sseed = cfg.seed + 300_000 + done * cfg.games_per_iter + sidx * 31
+                        sbuf = collect_games(senv, actor_act_fn(m.actor), 1, sseed,
+                                             critic=None, max_decisions=cfg.max_decisions)
+                        gwin["scen_games"] += 1
+                        gwin["scen_T"] += len(sbuf.steps)       # scenario episode lengths
+                        buf.merge(sbuf)
+                        scen_mix[sname] = scen_mix.get(sname, 0) + 1
+                        # the learner is p1 (p2 is the engine bot); count the game even if
+                        # the learner never got a decision before it ended
+                        if sbuf.games and sbuf.games[-1] in ("p1", "p2"):
+                            scen_league.update(member, sbuf.games[-1] == "p1")
             fill_critic_values(buf, m.critic)
             # Window game telemetry from the merged buffer: how games ended (buf.meta),
             # forced-decision dilution (1-legal-action steps), collect wall-clock.
@@ -701,6 +773,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
         elif checkpoint_path is not None:
             _checkpoint()
     finally:
+        if pcol is not None:
+            pcol.close()
         for sig, h in prev_handlers.items():
             signal.signal(sig, h)
     return m

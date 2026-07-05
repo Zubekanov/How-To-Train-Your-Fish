@@ -32,6 +32,10 @@ def main():
     ap.add_argument("--gpu", action="store_true", help="train on CUDA if available")
     ap.add_argument("--iters", type=int, default=100, help="iteration cap; <=0 runs unbounded")
     ap.add_argument("--games-per-iter", type=int, default=8)
+    ap.add_argument("--collect-workers", type=int, default=Config.collect_workers,
+                    help="collector worker processes per iteration (0 = serial, the "
+                         "historic path; parallelism is across processes, torch pinned "
+                         "to 1 thread each -- see fishrl.train.pcollect)")
     ap.add_argument("--warmup-games", type=int, default=64)
     ap.add_argument("--pool-frac", type=float, default=Config.pool_frac,
                     help="fraction of each iteration's games played vs a PFSP league "
@@ -126,7 +130,8 @@ def main():
         print(f"[resume] no checkpoint at {latest}; starting fresh", flush=True)
 
     common = dict(device=resolve_device(args.gpu), iters=args.iters,
-                  games_per_iter=args.games_per_iter, warmup_games=args.warmup_games,
+                  games_per_iter=args.games_per_iter, collect_workers=args.collect_workers,
+                  warmup_games=args.warmup_games,
                   pool_frac=args.pool_frac, pfsp_mode=args.pfsp_mode,
                   league_size=args.league_size, scenario_frac=args.scenario_frac,
                   scenarios_in_pool=args.scenario_pool,

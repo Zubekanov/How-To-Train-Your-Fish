@@ -23,6 +23,12 @@ class Config:
     lam: float = 0.95
     max_decisions: int = 2000
     games_per_iter: int = 8
+    # Parallel local collection: fan each iteration's games across this many
+    # persistent collector worker processes (fishrl.train.pcollect), shipping the
+    # CURRENT weights every iteration -- wall-clock only, training semantics
+    # unchanged (collection was 62% of iteration time at 20 cores). 0 = the
+    # serial path, byte-identical: the ODROID service default.
+    collect_workers: int = 0
 
     # ── Opponent pool / PFSP (prioritized fictitious self-play) ──────────────
     # Fraction of each iteration's games the learner plays against a POOL opponent

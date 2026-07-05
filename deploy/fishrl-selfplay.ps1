@@ -9,4 +9,4 @@ python -m fishrl.train --resume --iters 0 `
     --ckpt-dir "$Repo\checkpoints" --scenario-frac 0.3 --warmup-games 16 `
     --report-every-seconds 3600 --report-winrate-games 0 `
     --checkpoint-every-seconds 900 `
-    --reserve-cores 2 --gui
+    --collect-workers 8 --reserve-cores 2 --gui

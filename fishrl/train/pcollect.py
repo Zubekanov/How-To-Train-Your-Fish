@@ -1,0 +1,167 @@
+"""Parallel local game collection: fan one iteration's games across persistent
+worker processes.
+
+Collection is per-decision, batch-1, single-threaded Python — on a many-core
+box it uses one core while the rest idle (measured 62% of iteration wall-clock
+at 20 cores). This module keeps a pool of collector processes alive across
+iterations and ships them the CURRENT learner weights with every batch of game
+specs, so the training semantics are unchanged: every game in an iteration is
+played by this iteration's policy (strictly on-policy, exactly like the serial
+path), transitions come back as ordinary RolloutBuffers merged in spec order,
+and ALL bookkeeping (league EMAs, harvest counts, telemetry) stays on the main
+thread. What changes is wall-clock only.
+
+Costs shipped per iteration: the learner actor+guesser state_dicts to each
+worker chunk (a few MB of pickled CPU tensors — trivial against a multi-second
+iteration), plus a frozen past-self's weights riding with any pool-game spec
+against one. Workers pin torch to one thread each (parallelism is across
+processes, the eval panel's proven pattern) and collect on CPU regardless of
+the trainer's device — the update phase, not collection, is what CUDA
+accelerates.
+
+Opt-in via Config.collect_workers / --collect-workers (default 0 = the serial
+path, byte-identical for the ODROID service).
+"""
+from __future__ import annotations
+
+from concurrent.futures import ProcessPoolExecutor
+from types import SimpleNamespace
+
+# ── worker side ───────────────────────────────────────────────────────────────
+_G: dict = {}
+
+
+def _winit(lite: dict) -> None:
+    """Once per worker: skeleton nets to load state into (learner + one opponent
+    slot) and the fixed collection settings. Torch pinned to 1 thread.
+
+    Scenario snapshot pools are built HERE, up front and in parallel across the
+    workers -- built lazily instead, each worker stalls ~4s the first time it is
+    handed each scenario type, which shows up as unpredictable mid-training
+    iteration spikes (measured: recurring 4-5s collect outliers)."""
+    import torch
+
+    from fishrl.models.guesser import HandGuesser
+    from fishrl.models.policy import MaskedActor
+
+    torch.set_num_threads(1)
+    hidden = tuple(lite["hidden"])
+    _G.update(
+        lite=lite,
+        actor=MaskedActor(hidden, lite["enc_actor"]),
+        guesser=HandGuesser(hidden, lite["enc_guesser"]),
+        opp_actor=MaskedActor(hidden, lite["enc_actor"]),
+        opp_guesser=HandGuesser(hidden, lite["enc_guesser"]),
+    )
+    if lite["scenario_names"]:
+        from fishrl.train.scenarios import get_scenario
+        for name in lite["scenario_names"]:
+            get_scenario(name).ensure_pool()
+
+
+def _collect_one(spec: dict):
+    """One game per the spec; mirrors the serial train-loop branches exactly."""
+    from fishrl.train.belief_env import BeliefAugmentedEnv
+    from fishrl.train.collector import (actor_act_fn, collect_games,
+                                        collect_heuristic_games, collect_vs_opponent)
+
+    lite = _G["lite"]
+    actor, guesser = _G["actor"], _G["guesser"]
+    kind = spec["kind"]
+    if kind == "self":
+        benv = BeliefAugmentedEnv(guesser, belief=lite["use_belief"],
+                                  max_decisions=lite["max_decisions"],
+                                  enforce_free_attack=lite["enforce_free_attack"])
+        return collect_games(benv, actor_act_fn(actor), 1, spec["seed"],
+                             critic=None, max_decisions=lite["max_decisions"])
+    if kind == "scenario":
+        from fishrl.train.scenarios import ScenarioEnv, get_scenario
+        senv = BeliefAugmentedEnv(
+            guesser, belief=lite["use_belief"],
+            env=ScenarioEnv(get_scenario(spec["name"]),
+                            max_decisions=lite["max_decisions"],
+                            enforce_free_attack=lite["enforce_free_attack"]))
+        return collect_games(senv, actor_act_fn(actor), 1, spec["seed"],
+                             critic=None, max_decisions=lite["max_decisions"])
+    if kind == "heuristic":
+        return collect_heuristic_games(guesser, actor, 1, spec["seed"], critic=None,
+                                       use_belief=lite["use_belief"],
+                                       max_decisions=lite["max_decisions"],
+                                       profile=spec["profile"])
+    # kind == "opponent": random / attacker / frozen past-self
+    okind = spec["okind"]
+    models = None
+    if okind == "self":
+        a_state, g_state = spec["opp_state"]           # frozen nets ride with the spec
+        _G["opp_actor"].load_state_dict(a_state)
+        _G["opp_guesser"].load_state_dict(g_state)
+        models = SimpleNamespace(actor=_G["opp_actor"], guesser=_G["opp_guesser"])
+    member = SimpleNamespace(kind=okind, models=models)
+    learner = SimpleNamespace(actor=actor, guesser=guesser)
+    return collect_vs_opponent(learner, member, 1, spec["seed"], critic=None,
+                               use_belief=lite["use_belief"],
+                               max_decisions=lite["max_decisions"],
+                               learner_seat=spec["lseat"],
+                               enforce_free_attack=lite["enforce_free_attack"])
+
+
+def _collect_chunk(learner_state: dict, specs: list, torch_seed: int) -> list:
+    """Load this iteration's learner weights once, then play the chunk's games.
+    Returns [(spec_index, RolloutBuffer), ...]."""
+    import torch
+    torch.manual_seed(torch_seed)                      # reproducible action sampling per chunk
+    _G["actor"].load_state_dict(learner_state["actor"])
+    _G["guesser"].load_state_dict(learner_state["guesser"])
+    return [(spec["idx"], _collect_one(spec)) for spec in specs]
+
+
+# ── main-process side ─────────────────────────────────────────────────────────
+
+def _cpu_state(net) -> dict:
+    return {k: v.detach().cpu() for k, v in net.state_dict().items()}
+
+
+class ParallelCollector:
+    """Persistent collector pool. `collect(m, specs, it)` plays every spec with
+    the CURRENT weights of `m` and returns the RolloutBuffers in spec order."""
+
+    def __init__(self, cfg, workers: int):
+        self.workers = workers
+        scen_names: list = []
+        if cfg.scenario_frac > 0 or cfg.scenarios_in_pool:
+            from fishrl.train.scenarios import scenario_names
+            scen_names = [n for n in scenario_names()
+                          if cfg.scenario_weights.get(n, 1.0) > 0]
+        lite = {"hidden": tuple(cfg.hidden),
+                "enc_actor": cfg.enc_for("actor"), "enc_guesser": cfg.enc_for("guesser"),
+                "use_belief": cfg.use_belief, "max_decisions": cfg.max_decisions,
+                "enforce_free_attack": cfg.enforce_free_attack,
+                "scenario_names": scen_names}
+        self._ex = ProcessPoolExecutor(max_workers=workers,
+                                       initializer=_winit, initargs=(lite,))
+
+    @staticmethod
+    def opp_state_for(member) -> tuple:
+        """A frozen past-self's nets as CPU state_dicts, shipped WITH its spec.
+        Workers are anonymous under ProcessPoolExecutor, so a ship-once cache
+        can't guarantee coverage -- and at 1-2 pool games per iteration, a few
+        MB alongside the per-chunk learner shipment is noise."""
+        return (_cpu_state(member.models.actor), _cpu_state(member.models.guesser))
+
+    def collect(self, m, specs: list, it: int) -> list:
+        """Round-robin the specs over the workers; one weights shipment per chunk."""
+        for i, s in enumerate(specs):
+            s["idx"] = i
+        learner_state = {"actor": _cpu_state(m.actor), "guesser": _cpu_state(m.guesser)}
+        chunks = [specs[w::self.workers] for w in range(self.workers)]
+        futs = [self._ex.submit(_collect_chunk, learner_state, chunk,
+                                (it * 1009 + w) % (2**31))
+                for w, chunk in enumerate(chunks) if chunk]
+        out: dict = {}
+        for f in futs:
+            for idx, buf in f.result():
+                out[idx] = buf
+        return [out[i] for i in range(len(specs))]
+
+    def close(self) -> None:
+        self._ex.shutdown(wait=False, cancel_futures=True)

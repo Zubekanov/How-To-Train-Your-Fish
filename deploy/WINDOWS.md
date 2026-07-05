@@ -90,12 +90,25 @@ ODROID log-volume choice, not a requirement.
 
 ## Relay training (this PC ↔ the ODROID)
 
-One lineage, one trainer at a time: `owner.json` (whose turn) + `trainer.lock` (live
-right now) enforce it — see the runbook in `deploy/README.md`. In short: stop the
-ODROID service, `transfer export` there (releases its ownership), copy the zip here,
-`transfer import --force --merge-stats`, train fast (CUDA + `--reserve-cores`), then
-export back the same way. A dir that refuses to train tells you exactly why and how to
-fix it; `python -m fishrl.transfer claim` is the recovery for an interrupted handoff.
+**The one command:**
+
+```powershell
+deploy\fishrl-relay.ps1
+```
+
+It stops the ODROID service (graceful checkpoint), exports/fetches/imports the lineage
+here, trains in the foreground (monitor window, `--reserve-cores 2`), and when you press
+**Ctrl-C** it checkpoints, exports back, imports on the ODROID and restarts the service.
+`python -m fishrl.relay status` shows both sides; `pull` / `handback` run either leg
+alone (`handback` is also the recovery if a session ends without returning — as is just
+re-running `train`, which skips the pull when the lineage is already here).
+
+Under the hood it's the ownership protocol (`owner.json` = whose turn, `trainer.lock` =
+live right now): one lineage, one trainer, every interruption resolves to at most one
+owner, and `python -m fishrl.transfer claim` un-sticks an interrupted handoff. The
+manual `transfer export/import` runbook in `deploy/README.md` remains the fallback.
+`ssh`/`scp` use the `odroid-lan` host config; `sudo systemctl` on the ODROID prompts
+unless a NOPASSWD rule covers those two commands.
 
 ## Moving training between machines
 

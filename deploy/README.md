@@ -36,6 +36,11 @@ checkpoint time to land first.
 
 ## Relay training (ODROID ↔ PC)
 
+**Automated:** on the PC, `deploy\fishrl-relay.ps1` (i.e. `python -m fishrl.relay
+train`) runs this whole section as one command — remote stop → export → import here →
+train → Ctrl-C → export → import there → restart. The steps below are what it does,
+kept as the manual fallback and the recovery reference.
+
 One model lineage, exactly one trainer at a time (see `fishrl.train.ownership`).
 `owner.json` in the checkpoint dir tracks whose turn it is; `trainer.lock` is held by a
 live trainer (`transfer export` refuses while it's held). Every interrupted handoff

@@ -25,7 +25,7 @@ Two deliberate properties (per the review guards):
 """
 import numpy as np
 
-from fishrl.data.features import encode_god, encode_god_ref
+from fishrl.data.features import encode_god, encode_god_ref, encode_public, encode_public_ref
 from fishrl.env.aec_env import FishAEC
 from fishrl.forgetful_fish.state import text_variant
 from fishrl.obs.encoder import encode_observation, encode_observation_ref
@@ -72,11 +72,13 @@ def _play_and_compare(seeds, max_iter=2000) -> dict:
             _assert_equal(env.g, agent, prog, f"seed={sd} acting")
             opp = "p2" if agent == "p1" else "p1"
             _assert_equal(env.g, opp, 0.0, f"seed={sd} non-acting")    # both seats covered
-            god_fast, god_ref = encode_god(env.g), encode_god_ref(env.g)
-            if not np.array_equal(god_fast, god_ref):
-                j = int(np.flatnonzero(god_fast != god_ref)[0])
-                raise AssertionError(f"seed={sd}: encode_god diverges at index {j} "
-                                     f"(fast={god_fast[j]} ref={god_ref[j]})")
+            for nm, fast_fn, ref_fn in (("encode_god", encode_god, encode_god_ref),
+                                        ("encode_public", encode_public, encode_public_ref)):
+                a, b = fast_fn(env.g), ref_fn(env.g)
+                if not np.array_equal(a, b):
+                    j = int(np.flatnonzero(a != b)[0])
+                    raise AssertionError(f"seed={sd}: {nm} diverges at index {j} "
+                                         f"(fast={a[j]} ref={b[j]})")
             for s, on in _strata_for(env.g, agent, prog).items():
                 hits[s] += int(on)
             comparisons += 1
@@ -119,3 +121,46 @@ def test_fast_encoder_matches_reference_on_text_change():
     assert text_variant(target) == "swamp"      # the function the lean path must call
     for viewer in ("p1", "p2"):
         _assert_equal(env.g, viewer, 0.0, "synthetic text-change")
+
+
+def test_fast_encoder_chain_without_string_change():
+    """The static-template cache keys on (name, type_line, oracle_text, text_variant) --
+    text_variant EXPLICITLY, because a text-change chain can exist on a card whose printed
+    text never contained the changed word: the strings stay identical to the base card while
+    the variant bit fires. Two objects that differ ONLY in that chain must not share a
+    template. (This is the one way a string-only cache key would silently corrupt rows.)"""
+    env = FishAEC()
+    env.reset(seed=5)
+    o = next(iter(env.g.objects.values()))
+    base_tl, base_ot = o.type_line, o.oracle_text
+    for viewer in ("p1", "p2"):
+        _assert_equal(env.g, viewer, 0.0, "pre chain-only change")   # seeds the base template
+    o.text_changes = [{"frm": "Island", "to": "Swamp"}]              # chain, strings untouched
+    assert (o.type_line, o.oracle_text) == (base_tl, base_ot)
+    assert text_variant(o) == "swamp"
+    for viewer in ("p1", "p2"):
+        _assert_equal(env.g, viewer, 0.0, "chain-only text change")
+    o.text_changes = []                                              # and back: base again
+    for viewer in ("p1", "p2"):
+        _assert_equal(env.g, viewer, 0.0, "chain removed")
+
+
+def test_template_cache_never_leaks_dynamic_state():
+    """Same-identity cards with different dynamic state (tapped etc.) share one template;
+    the dynamic writes must fully cover everything object-specific. Flip one card's tapped
+    bit back and forth: the re-encoding must exactly reproduce the original vector (a
+    template polluted by a previous encode would fail the round trip)."""
+    env = FishAEC()
+    env.reset(seed=7)
+    bf = env.g.players["p1"].battlefield
+    if not bf:                                   # ensure at least one battlefield object
+        bf.append(next(iter(env.g.objects)))
+    o = env.g.objects[bf[0]]
+    before = encode_observation(env.g, "p1", 0.0)
+    o.tapped = not o.tapped
+    mid = encode_observation(env.g, "p1", 0.0)
+    assert not np.array_equal(before, mid)       # the flip is visible
+    o.tapped = not o.tapped
+    after = encode_observation(env.g, "p1", 0.0)
+    assert np.array_equal(before, after)         # perfect round trip: no cache pollution
+    _assert_equal(env.g, "p1", 0.0, "post round-trip vs reference")

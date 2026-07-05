@@ -137,8 +137,9 @@ def encode_god(g) -> np.ndarray:
     return np.concatenate(parts).astype(np.float32)
 
 
-def encode_public(g) -> np.ndarray:
-    """Mutual-knowledge, p1-oriented feature vector (PUB_DIM) from spectator_view."""
+def encode_public_ref(g) -> np.ndarray:
+    """REFERENCE public encoder (dict path through spectator_view) -- the contract
+    `encode_public` must stay bit-identical to (test_encoder_equivalence)."""
     view = spectator_view(g)
     pl = view["players"]
 
@@ -161,6 +162,48 @@ def encode_public(g) -> np.ndarray:
         gv += _player_scalars(pv.get("life", 0), pv.get("hand_count", 0),
                               pv.get("battlefield", []), pv.get("mana_pool", {}),
                               g.players[pid].mulligans, pv.get("has_lost"))
+    gv += [g.turn_number / 40.0, float(g.active_player == "p1"),
+           float(g.priority_player == "p1"), len(g.library) / 80.0, len(g.stack) / 6.0]
+    parts.append(np.asarray(gv, dtype=np.float32))
+    return np.concatenate(parts).astype(np.float32)
+
+
+def encode_public(g) -> np.ndarray:
+    """Mutual-knowledge, p1-oriented feature vector (PUB_DIM). Fast object-native
+    path re-deriving spectator_view's filters (engine objects read-only):
+
+      * a HAND card is mutual knowledge iff the NON-owner knows it,
+      * both battlefields / graveyard / exile / stack are public,
+      * a LIBRARY slot shows iff BOTH players know it.
+
+    Bit-identical to `encode_public_ref` -- guarded by test_encoder_equivalence."""
+    obj = g.objects
+
+    def hand_objs(pid, other):
+        return [obj[iid] if other in (obj[iid].known_by or []) else None
+                for iid in g.players[pid].hand]
+
+    bf = {pid: [obj[iid] for iid in g.players[pid].battlefield if iid in obj]
+          for pid in ("p1", "p2")}
+    parts = [
+        _zone_obj(hand_objs("p1", "p2"), PUB_SLOTS["p1_hand"], "p1"),
+        _zone_obj(hand_objs("p2", "p1"), PUB_SLOTS["p2_hand"], "p1"),
+        _zone_obj(bf["p1"], PUB_SLOTS["p1_bf"], "p1"),
+        _zone_obj(bf["p2"], PUB_SLOTS["p2_bf"], "p1"),
+        _zone_obj([obj[iid] for iid in g.graveyard if iid in obj],
+                  PUB_SLOTS["graveyard"], "p1"),
+        _zone_obj([obj[iid] for iid in g.exile if iid in obj], PUB_SLOTS["exile"], "p1"),
+        _zone_obj([obj.get(s.source_instance_id) for s in g.stack],
+                  PUB_SLOTS["stack"], "p1"),
+        _zone_obj([obj[s.instance_id] for s in g.library
+                   if s.known_by.get("p1") and s.known_by.get("p2")],
+                  PUB_SLOTS["library"], "p1"),
+    ]
+    gv = []
+    for pid in ("p1", "p2"):
+        p = g.players[pid]
+        gv += _player_scalars_obj(p.life, len(p.hand), bf[pid], p.mana_pool,
+                                  p.mulligans, p.has_lost)
     gv += [g.turn_number / 40.0, float(g.active_player == "p1"),
            float(g.priority_player == "p1"), len(g.library) / 80.0, len(g.stack) / 6.0]
     parts.append(np.asarray(gv, dtype=np.float32))

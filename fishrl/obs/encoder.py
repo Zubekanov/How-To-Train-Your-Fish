@@ -216,43 +216,61 @@ def encode_observation_ref(g, viewer: str, builder_progress: float = 0.0) -> np.
 # vendored edit). They MUST stay bit-identical to the *_ref path -- see test_encoder_equivalence.
 
 
+# A card row's first _STATIC_END floats (name one-hot/unknown, type flags, both
+# basic-type multihots, text-altered bit) plus the trailing known bit depend ONLY
+# on (name, type_line, oracle_text, text_variant) -- and the distinct combinations
+# in a shared-deck format number a few dozen, while `_encode_obj_into` runs ~100x
+# per decision. So the static part is built once per combination and row-copied;
+# only the 7 dynamic floats (stats, tapped/entered/controller) are written per
+# call. text_variant is IN the key (not derived from the strings): a text-change
+# chain can exist on a card whose printed text never contained the changed word,
+# leaving the strings untouched while the variant bit fires.
+_STATIC_END = V.N_NAMES + 1 + 4 + 5 + 5 + 1
+_TEMPLATES: dict = {}
+
+
+def _static_template(name: str, tl: str, ot: str, tv) -> np.ndarray:
+    key = (name, tl, ot, tv)
+    t = _TEMPLATES.get(key)
+    if t is None:
+        t = np.zeros(CARD_F, dtype=np.float32)
+        idx = V.NAME_INDEX.get(name)
+        if idx is not None:
+            t[idx] = 1.0
+        else:
+            t[V.N_NAMES] = 1.0
+        off = V.N_NAMES + 1
+        tll = tl.lower()
+        t[off + 0] = float("land" in tll)
+        t[off + 1] = float("creature" in tll)
+        t[off + 2] = float("instant" in tll)
+        t[off + 3] = float("sorcery" in tll)
+        _basic_multihot(tl, t, off + 4)                    # effective basic land type (5)
+        _basic_multihot(ot, t, off + 9)                    # basic types named in text (5)
+        t[off + 14] = 1.0 if tv else 0.0                   # text-altered (Island lineage moved)
+        t[CARD_F - 1] = 1.0                                # known bit
+        _TEMPLATES[key] = t
+    return t
+
+
 def _encode_obj_into(o, viewer: str, v: np.ndarray) -> None:
     """Object-native twin of `_encode_card_into`: write a CardInstance's CARD_F-wide row from
     its attributes. `o is None` encodes the hidden/unknown slot (opp's unseen hand, empty stack
-    source). Mirrors `_encode_card_into` field-for-field; text_variant is a FUNCTION of the
-    card's text-change chain (NOT an attribute), so it is recomputed the same way the view does."""
+    source). Field-for-field identical to `_encode_card_into` (the equivalence oracle), via a
+    cached static template + the 7 dynamic floats."""
     if o is None:
         v[V.N_NAMES] = 1.0          # "unknown/hidden" bit
         return
-    idx = V.NAME_INDEX.get(o.name)
-    if idx is not None:
-        v[idx] = 1.0
-    else:
-        v[V.N_NAMES] = 1.0
-    off = V.N_NAMES + 1
-    tl = o.type_line or ""
-    tll = tl.lower()
-    v[off + 0] = float("land" in tll)
-    v[off + 1] = float("creature" in tll)
-    v[off + 2] = float("instant" in tll)
-    v[off + 3] = float("sorcery" in tll)
-    off += 4
-    _basic_multihot(tl, v, off)                            # effective basic land type (5)
-    off += 5
-    _basic_multihot(o.oracle_text or "", v, off)           # basic types named in text (5)
-    off += 5
-    v[off] = 1.0 if text_variant(o) else 0.0               # text-altered (Island lineage moved)
-    off += 1
+    np.copyto(v, _static_template(o.name, o.type_line or "", o.oracle_text or "",
+                                  text_variant(o)))
+    off = _STATIC_END
     v[off + 0] = (o.power or 0) / 10.0
     v[off + 1] = (o.toughness or 0) / 10.0
     v[off + 2] = (o.damage_marked or 0) / 10.0
     v[off + 3] = sum((o.counters or {}).values()) / 10.0
-    off += 4
-    v[off + 0] = float(bool(o.tapped))
-    v[off + 1] = float(bool(o.entered_this_turn))
-    v[off + 2] = float(o.controller == viewer)
-    off += 3
-    v[off] = 1.0                       # known bit
+    v[off + 4] = float(bool(o.tapped))
+    v[off + 5] = float(bool(o.entered_this_turn))
+    v[off + 6] = float(o.controller == viewer)
 
 
 def _zone_obj(objs: list, n: int, viewer: str) -> np.ndarray:

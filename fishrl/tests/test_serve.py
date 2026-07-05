@@ -103,6 +103,27 @@ def test_refuses_wildcard_bind(tmp_path):
         serve(str(tmp_path), "0.0.0.0", 0)
 
 
+def test_wait_lan_ip_polls_past_late_dhcp():
+    # --bind auto at boot can race DHCP: loopback first, real address later.
+    from fishrl.serve.__main__ import wait_lan_ip
+    ips = iter(["127.0.0.1", "127.0.0.1", "192.168.4.35"])
+    assert wait_lan_ip(timeout=60.0, poll=0.0,
+                       ip_fn=lambda: next(ips), sleep_fn=lambda _s: None) == "192.168.4.35"
+
+
+def test_wait_lan_ip_gives_up_to_loopback():
+    from fishrl.serve.__main__ import wait_lan_ip
+    calls = {"n": 0}
+
+    def always_lo():
+        calls["n"] += 1
+        return "127.0.0.1"
+
+    assert wait_lan_ip(timeout=0.0, poll=0.0,
+                       ip_fn=always_lo, sleep_fn=lambda _s: None) == "127.0.0.1"
+    assert calls["n"] == 1                       # expired deadline = no spin
+
+
 # ── control plane ─────────────────────────────────────────────────────────────
 
 def test_actions_registry_per_platform(tmp_path):

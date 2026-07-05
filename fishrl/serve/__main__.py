@@ -367,9 +367,24 @@ def lan_ip() -> str:
     return "127.0.0.1"
 
 
+def wait_lan_ip(timeout: float = 60.0, poll: float = 2.0,
+                ip_fn=lan_ip, sleep_fn=time.sleep) -> str:
+    """lan_ip(), but tolerant of starting before DHCP has assigned an address
+    (systemd's network-online.target can fire seconds early on netplan/
+    NetworkManager split-stack boxes). Polls until a non-loopback IP appears,
+    then falls back to loopback for real off-network hosts."""
+    deadline = time.monotonic() + timeout
+    ip = ip_fn()
+    while ip.startswith("127.") and time.monotonic() < deadline:
+        print(f"[serve] no LAN address yet (got {ip}); waiting...", flush=True)
+        sleep_fn(poll)
+        ip = ip_fn()
+    return ip
+
+
 def serve(ckpt_dir: str, bind: str, port: int,
           actions: Actions | None = None) -> ThreadingHTTPServer:
-    addr = lan_ip() if bind == "auto" else bind
+    addr = wait_lan_ip() if bind == "auto" else bind
     if addr == "0.0.0.0":                                # LAN-only by policy
         raise SystemExit("[serve] refusing to bind 0.0.0.0; pass a concrete interface IP")
     Handler.store = Store(ckpt_dir)

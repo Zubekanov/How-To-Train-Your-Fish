@@ -230,7 +230,9 @@ function rate1k(){
 
 function header(s){
   if (!s) return;
-  $("host").textContent = s.host + " " + s.ckpt_dir.split(/[\\/]/).pop();
+  const dev = (s.last_report||{}).device;
+  $("host").textContent = s.host + " " + s.ckpt_dir.split(/[\\/]/).pop() +
+    (dev ? " [" + dev + "]" : "");
   const lr = s.last_report||{}, lt = s.last_tick||{};
   $("it").textContent = lt.it!=null?lt.it:(lr.it!=null?lr.it:"—");
   $("elapsed").textContent = lr.elapsed_h!=null?lr.elapsed_h.toFixed(1):"—";

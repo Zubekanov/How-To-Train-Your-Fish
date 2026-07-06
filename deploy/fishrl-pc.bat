@@ -36,7 +36,7 @@ set /p REGIME=<"%REPO%\deploy\train.args"
     %REGIME% ^
     --report-every-seconds 900 --report-winrate-games 0 ^
     --checkpoint-every-seconds 900 ^
-    --collect-workers 8 --reserve-cores 2
+    --gpu --collect-workers 8 --reserve-cores 2
 
 echo.
 echo Session ended. If the handback failed above, the lineage is still on this

@@ -1,4 +1,4 @@
-# THE one command for training on this PC: pulls the lineage off the ODROID
+﻿# THE one command for training on this PC: pulls the lineage off the ODROID
 # (stops its service, exports, imports here), trains in the foreground, and on
 # Ctrl-C checkpoints + hands the result back and restarts the ODROID service.
 # Watch it on the dashboard (deploy\fishrl-serve.ps1). Ownership is enforced end-to-end; if anything is
@@ -24,4 +24,4 @@ python -m fishrl.relay train --ckpt-dir "$Repo\checkpoints" @args -- `
     $Regime `
     --report-every-seconds 900 --report-winrate-games 0 `
     --checkpoint-every-seconds 900 `
-    --collect-workers 8 --reserve-cores 2
+    --gpu --collect-workers 8 --reserve-cores 2

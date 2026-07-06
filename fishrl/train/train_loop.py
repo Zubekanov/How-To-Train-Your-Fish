@@ -339,6 +339,9 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 # stats interleave hosts, and per-device throughput (the dashboard's
                 # last-1k it/h) needs to segment on this rather than guess.
                 "host": platform.node(),
+                # ...and on what device. Three PC sessions once ran CPU updates
+                # unnoticed (launchers missing --gpu); the dashboard shows this.
+                "device": str(cfg.device),
                 "iters": win_iters, "iters_per_h": win_iters / dt_h, "transitions": win_T,
                 "policy_loss": mean["policy_loss"], "critic_loss": mean["critic_loss"],
                 "entropy": mean["entropy"], "approx_kl": mean["approx_kl"],

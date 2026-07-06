@@ -1,4 +1,4 @@
-# Windows analogue of fishrl-selfplay.sh: resume-and-run-forever self-play.
+﻿# Windows analogue of fishrl-selfplay.sh: resume-and-run-forever self-play.
 # Ctrl-C = graceful checkpoint (same as SIGTERM under systemd). Core reservation
 # replaces the systemd unit's *_NUM_THREADS env. Watch it on the fishrl-serve
 # dashboard (deploy\fishrl-serve.ps1).
@@ -18,4 +18,4 @@ python -m fishrl.train --resume --iters 0 `
     --ckpt-dir "$Repo\checkpoints" $Regime `
     --report-every-seconds 900 --report-winrate-games 0 `
     --checkpoint-every-seconds 900 `
-    --collect-workers 8 --reserve-cores 2
+    --gpu --collect-workers 8 --reserve-cores 2

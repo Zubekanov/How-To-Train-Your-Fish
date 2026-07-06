@@ -7,10 +7,33 @@ import glob
 import os
 
 import pytest
+import torch
 
 from fishrl.train import checkpoint as ckpt
 from fishrl.train.config import Config
-from fishrl.train.train_loop import build_models, train
+from fishrl.train.train_loop import _rng_state, _set_rng_state, build_models, train
+
+
+def test_set_rng_state_survives_map_location_move():
+    """Regression: resume loads the payload with map_location=cfg.device, so a
+    --gpu resume hands _set_rng_state CUDA-moved ByteTensors -- torch requires
+    CPU ones ("RNG state must be a torch.ByteTensor"). The restore must coerce;
+    on CPU the coercion is a no-op (the ODROID path is bit-identical)."""
+    rng = _rng_state("cpu")
+    _set_rng_state(rng)                                  # CPU round trip
+    if torch.cuda.is_available():
+        moved = {"torch": rng["torch"].to("cuda"), "numpy": rng["numpy"]}
+        _set_rng_state(moved)                            # the exact live crash case
+        cuda_rng = _rng_state("cuda")
+        cuda_rng["torch"] = cuda_rng["torch"].to("cuda")
+        cuda_rng["cuda"] = [s.to("cuda") for s in cuda_rng["cuda"]]
+        _set_rng_state(cuda_rng)
+    # determinism survives the coercion
+    before = _rng_state("cpu")
+    a = torch.rand(4)
+    _set_rng_state(before)
+    b = torch.rand(4)
+    assert torch.equal(a, b)
 
 # The train()-based integration tests spin up warmup + a win-rate panel (~40s) and so are
 # opt-in, matching the project's preference for a fast default suite. The pure-module tests

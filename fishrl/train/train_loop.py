@@ -104,10 +104,14 @@ def _rng_state(device: str) -> dict:
 
 
 def _set_rng_state(rng: dict) -> None:
-    torch.set_rng_state(rng["torch"])
+    # .cpu(): resume loads the payload with map_location=cfg.device, which on a
+    # --gpu resume moves EVERY tensor to CUDA -- including these RNG states, and
+    # torch requires CPU ByteTensors here ("RNG state must be a torch.ByteTensor").
+    # On a CPU resume .cpu() returns the same tensor, so the ODROID path is untouched.
+    torch.set_rng_state(rng["torch"].cpu())
     np.random.set_state(rng["numpy"])
     if "cuda" in rng and torch.cuda.is_available():
-        torch.cuda.set_rng_state_all(rng["cuda"])
+        torch.cuda.set_rng_state_all([s.cpu() for s in rng["cuda"]])
 
 
 def train(cfg: Config, models: Models | None = None, log=print,

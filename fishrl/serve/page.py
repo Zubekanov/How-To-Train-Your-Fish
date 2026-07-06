@@ -47,6 +47,7 @@ svg text{font-family:inherit;font-size:11px;fill:var(--dim)}
   <span>best <b id="best">—</b></span>
   <span id="turn" class="chip idle">turn: …</span>
   <span id="live" class="chip idle">trainer: …</span>
+  <a id="peer" class="chip idle" style="display:none;text-decoration:none" href="#">peer</a>
   <span id="stale" class="chip warn">no data yet</span>
   <span id="actions"></span>
 </header>
@@ -74,6 +75,7 @@ const MIX = {opp_self:"#4fc3f7", opp_past:"#b39ddb", opp_heuristic:"#e57373",
 const WR_SMOOTH = 5000;   // win-rate running-mean window, in iterations
 const RATE_ITERS = 1000;  // "last-1k it/h" throughput window
 const S = {reports:new Map(), evals:new Map(), ticks:new Map(), best:null, summary:null};
+let dataViaPeer = null;   // where the charts' data comes from (set on first poll)
 const key = {reports:r=>r.it, ticks:r=>r.it, evals:r=>r.it+":"+(r.wall_time||0)};
 const $ = id => document.getElementById(id);
 let dirty = false;
@@ -247,6 +249,24 @@ function header(s){
       o&&o.state==="active"?"ok":"warn");
   set("live", s.trainer_live?"trainer: RUNNING":"trainer: stopped",
       s.trainer_live?"ok":"idle");
+  // Relay peer: the lineage's telemetry lives elsewhere (peer.json). The chip
+  // links to that dashboard; charts here already stream from it via the
+  // server's 307 redirect when the peer is reachable.
+  const p = s.peer, pe = $("peer");
+  if (p && p.url && !s.trainer_live){
+    pe.style.display = "inline-block";
+    pe.href = p.url;
+    pe.textContent = "training on " + (p.host || "peer") + " ↗";
+    pe.className = "chip " + (s.peer_alive ? "ok" : "idle");
+    pe.title = s.peer_alive
+      ? "charts stream live from " + p.url + " (redirect)"
+      : p.host + " holds the lineage but is unreachable; showing local history";
+  } else pe.style.display = "none";
+  // If where the data comes from flipped (handoff mid-view), reload so the
+  // SSE stream and history re-follow (or stop following) the redirect.
+  const viaPeer = !!(p && p.url && !s.trainer_live && s.peer_alive);
+  if (dataViaPeer === null) dataViaPeer = viaPeer;
+  else if (viaPeer !== dataViaPeer) location.reload();
   if (s.staleness_s==null) set("stale","no data yet","warn");
   else {
     const m = s.staleness_s/60;

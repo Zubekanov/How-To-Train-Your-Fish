@@ -124,6 +124,85 @@ def test_wait_lan_ip_gives_up_to_loopback():
     assert calls["n"] == 1                       # expired deadline = no spin
 
 
+# ── peer redirect (relay handoff telemetry) ───────────────────────────────────
+
+def _raw_get(port, path):
+    """GET without following redirects (urllib auto-follows 307s)."""
+    import http.client
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    try:
+        c.request("GET", path)
+        r = c.getresponse()
+        return r.status, dict(r.getheaders()), r.read()
+    finally:
+        c.close()
+
+
+def _stamp_peer(d, url="http://192.0.2.7:8765/"):
+    with open(os.path.join(d, "peer.json"), "w") as f:
+        json.dump({"host": "gaming-pc", "url": url}, f)
+    return url
+
+
+def test_peer_redirect_follows_the_lineage(site, monkeypatch):
+    """Released dir + reachable peer -> the data endpoints 307 to the SAME
+    path there (query intact), so the website polls one stable address and
+    follows the lineage. /api/summary stays local and advertises the peer."""
+    import fishrl.serve.__main__ as sm
+    d, port = site
+    url = _stamp_peer(d)
+    monkeypatch.setattr(sm, "peer_alive", lambda _u: True)
+
+    for path in ("/api/reports?since_it=5", "/api/evals", "/api/ticks", "/api/stream"):
+        status, headers, _ = _raw_get(port, path)
+        assert status == 307
+        assert headers["Location"] == url.rstrip("/") + path
+        assert headers["Access-Control-Allow-Origin"] == "*"   # EventSource can follow
+
+    s = _get(port, "/api/summary")                       # never redirected
+    assert s["peer"]["host"] == "gaming-pc" and s["peer_alive"] is True
+
+
+def test_peer_redirect_degrades_when_peer_dead_or_trainer_live(site, monkeypatch):
+    import fishrl.serve.__main__ as sm
+    d, port = site
+    _stamp_peer(d)
+
+    monkeypatch.setattr(sm, "peer_alive", lambda _u: False)    # peer asleep/offline
+    assert [r["it"] for r in _get(port, "/api/reports")["reports"]] == [10, 20]
+    assert _get(port, "/api/summary")["peer_alive"] is False
+
+    monkeypatch.setattr(sm, "peer_alive", lambda _u: True)
+    h = hold_lockfile(os.path.join(d, "trainer.lock"))         # WE are the live trainer
+    try:
+        assert _get(port, "/api/reports")["count"] == 2        # never redirect away
+    finally:
+        unlock(h)
+        h.close()
+
+
+def test_peer_redirect_disabled_by_flag(site, monkeypatch):
+    import fishrl.serve.__main__ as sm
+    d, port = site
+    _stamp_peer(d)
+    monkeypatch.setattr(sm, "peer_alive", lambda _u: True)
+    monkeypatch.setattr(sm.Handler, "redirect", False)         # --no-redirect
+    assert _get(port, "/api/reports")["count"] == 2
+
+
+def test_peer_alive_probe_and_cache(site):
+    """The real probe: this test's own server is a live peer; a closed port is
+    not. Both verdicts cache (TTL) so a dead peer can't tax every request."""
+    import fishrl.serve.__main__ as sm
+    _, port = site
+    sm._peer_probe_cache.clear()
+    live, dead = f"http://127.0.0.1:{port}/", "http://127.0.0.1:1/"
+    assert sm.peer_alive(live) is True
+    assert sm.peer_alive(dead) is False
+    assert set(sm._peer_probe_cache) == {live, dead}           # both verdicts cached
+    assert sm.peer_alive(dead) is False                        # served from cache
+
+
 # ── control plane ─────────────────────────────────────────────────────────────
 
 def test_actions_registry_per_platform(tmp_path):

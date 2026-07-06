@@ -61,3 +61,17 @@ def test_claim_preserves_generation_by_default(tmp_path):
     o.release(d)
     s = o.claim(d, "pc")
     assert s["generation"] == 8                      # released bumped it; claim keeps it
+
+
+def test_peer_stamp_round_trip_and_claim_clears(tmp_path):
+    """peer.json is the telemetry redirect breadcrumb the relay leaves on the
+    released side; taking the turn (claim, i.e. any import) must clear it --
+    an active owner IS the telemetry source, pointing away would loop."""
+    d = str(tmp_path)
+    assert o.read_peer(d) is None
+    o.write_peer(d, "pc", "http://192.168.4.99:8765/")
+    p = o.read_peer(d)
+    assert p["host"] == "pc" and p["url"] == "http://192.168.4.99:8765/" and p["ts"]
+    o.claim(d, "odroid")
+    assert o.read_peer(d) is None
+    o.clear_peer(d)                                  # idempotent on an absent file

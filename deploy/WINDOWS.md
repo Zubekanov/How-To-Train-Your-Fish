@@ -122,6 +122,14 @@ files. While actively tweaking on this machine you can also drop
 `--report-every-seconds` (e.g. 600) for denser report rows — the hourly default is an
 ODROID log-volume choice, not a requirement.
 
+**Peer redirect**: after a relay handoff each side knows where the lineage went
+(`peer.json`, stamped by the relay). A serve instance that is NOT hosting a live
+trainer answers its data endpoints with 307 to the active side — so the ODROID
+dashboard/website shows this PC's live rows during a PC session, and this PC's
+dashboard follows the lineage home after handback. The header gains a *training on
+&lt;host&gt; ↗* chip linking to the peer; an unreachable peer (PC asleep) falls back to
+local history. `--no-redirect` disables. See deploy/README.md → "Telemetry redirect".
+
 ## Relay training (this PC ↔ the ODROID)
 
 **The one click:** double-click `deploy\fishrl-pc.bat` (shortcut-friendly) — it starts

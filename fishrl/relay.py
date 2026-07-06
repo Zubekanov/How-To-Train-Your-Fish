@@ -20,6 +20,13 @@
      further Ctrl-C while it hands the result back),
   5. export here, push the zip, import on the server, restart the unit.
 
+Each successful handoff also leaves a telemetry breadcrumb on the side the
+lineage LEFT: a ``peer.json`` stamp with the new owner's dashboard URL
+(``--serve-url`` / ``--remote-serve-url`` override the defaults). The
+webserver there uses it to redirect telemetry pulls at the machine actually
+training -- see fishrl.serve. Stamping is best-effort: a failure warns and
+never fails the handoff.
+
 Every step rides the ownership protocol (fishrl.train.ownership), so an
 interruption anywhere leaves at most one owner and a clear next move:
 re-run ``train`` (it skips the pull leg when this machine already owns the
@@ -37,6 +44,7 @@ simulation backend the tests (and a cautious first run) use; it implies
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import signal
@@ -47,6 +55,7 @@ import time
 
 # The production server layout (deploy/README.md); every value has a flag.
 DEFAULT_HOST = "odroid-lan"
+SERVE_PORT = 8765                                      # fishrl.serve's default port
 DEFAULT_REMOTE_REPO = "/home/zubekanov/Repositories/How-To-Train-Your-Fish"
 DEFAULT_REMOTE_PYTHON = "/home/zubekanov/Repositories/Website_Dev/.venv/bin/python"
 DEFAULT_UNIT = "fishrl-selfplay"
@@ -125,6 +134,26 @@ class Ssh:
     def send(self, local_zip: str) -> None:
         subprocess.run(["scp", "-q", local_zip, f"{self.host}:{REMOTE_ZIP}"], check=True)
 
+    def write_peer(self, stamp: dict) -> None:
+        """Drop peer.json in the server's checkpoint dir (tmp+mv so its serve
+        process never reads a half-written file)."""
+        peer = f"{self.repo}/checkpoints/peer.json"
+        subprocess.run(["ssh", "-o", "ConnectTimeout=10", self.host,
+                        f"cat > {peer}.tmp && mv {peer}.tmp {peer}"],
+                       input=json.dumps(stamp, indent=2).encode(), check=True)
+
+    def serve_url(self) -> str | None:
+        """The server's own dashboard URL -- its LAN IP asked of itself (the ssh
+        alias here need not be resolvable by other LAN hosts). None if the
+        checkout there predates fishrl.serve."""
+        r = subprocess.run(["ssh", "-o", "ConnectTimeout=10", self.host,
+                            f"cd {self.repo} && {self.python} -c "
+                            f"'from fishrl.serve.__main__ import lan_ip; print(lan_ip())'"],
+                           capture_output=True, text=True)
+        ip = (r.stdout.strip().splitlines()[-1].strip()
+              if r.returncode == 0 and r.stdout.strip() else "")
+        return f"http://{ip}:{SERVE_PORT}/" if ip and not ip.startswith("127.") else None
+
     def merge_stats(self, local_stats: str) -> None:
         """Telemetry-only sync: union the local stats.json into the server's
         (existing rows win there). Never touches latest.pt/ownership/services.
@@ -193,6 +222,13 @@ class LocalSim(Ssh):
     def send(self, local_zip: str) -> None:
         shutil.copy2(local_zip, self.zip)
 
+    def write_peer(self, stamp: dict) -> None:
+        from fishrl.train import ownership
+        ownership.write_peer(self.ckpt, stamp["host"], stamp["url"])
+
+    def serve_url(self) -> str | None:
+        return f"http://{self.host}:{SERVE_PORT}/"
+
     def merge_stats(self, local_stats: str) -> None:
         from fishrl.train.stats import merge_file
         merge_file(self.ckpt, local_stats)
@@ -214,8 +250,32 @@ def _local_owner_active(ckpt_dir: str) -> bool:
             and stamp.get("host") == ownership.this_host())
 
 
-def pull(remote: Ssh, ckpt_dir: str) -> None:
+def _stamp_peer(write_fn, where: str, host: str, url: str | None) -> None:
+    """Best-effort telemetry breadcrumb on the side the lineage just left --
+    its webserver redirects pulls at `url` (fishrl.serve). A failure here must
+    never fail a completed handoff: warn and move on."""
+    if not url:
+        print(f"[relay] note: no dashboard URL for the new owner; {where} will "
+              f"serve stale local telemetry until the lineage returns", flush=True)
+        return
+    try:
+        write_fn({"host": host, "url": url,
+                  "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+        print(f"[relay] telemetry redirect stamped on {where} -> {url}", flush=True)
+    except Exception as e:                             # noqa: BLE001 -- best-effort by design
+        print(f"[relay] note: could not stamp the telemetry redirect on {where} "
+              f"({e}); it will serve stale local telemetry until the lineage "
+              f"returns", flush=True)
+
+
+def _my_serve_url() -> str:
+    from fishrl.serve.__main__ import lan_ip
+    return f"http://{lan_ip()}:{SERVE_PORT}/"
+
+
+def pull(remote: Ssh, ckpt_dir: str, serve_url: str | None = None) -> None:
     """Take the turn: stop the server's trainer, export there, import here."""
+    from fishrl.train import ownership
     from fishrl.transfer import import_run
     remote.preflight()
     remote.stop_service()
@@ -233,12 +293,15 @@ def pull(remote: Ssh, ckpt_dir: str) -> None:
             os.remove(local_zip)
         except OSError:
             pass
+    _stamp_peer(remote.write_peer, remote.host, ownership.this_host(),
+                serve_url or _my_serve_url())
     remote.cleanup()
     print("[relay] pull complete: this machine owns the lineage", flush=True)
 
 
-def handback(remote: Ssh, ckpt_dir: str) -> None:
+def handback(remote: Ssh, ckpt_dir: str, remote_serve_url: str | None = None) -> None:
     """Send the lineage home: export here, import + restart on the server."""
+    from fishrl.train import ownership
     from fishrl.transfer import export
     remote.preflight()
     local_zip = os.path.join(tempfile.gettempdir(), "fishrl_relay_back.zip")
@@ -254,6 +317,14 @@ def handback(remote: Ssh, ckpt_dir: str) -> None:
         except OSError:
             pass
     remote.start_service()
+
+    def _local_write(stamp: dict) -> None:
+        ownership.write_peer(ckpt_dir, stamp["host"], stamp["url"])
+    try:
+        url = remote_serve_url or remote.serve_url()
+    except Exception:                                   # noqa: BLE001 -- best-effort
+        url = None
+    _stamp_peer(_local_write, f"this machine ({ckpt_dir})", remote.host, url)
     remote.cleanup()
     print("[relay] handback complete: the server owns the lineage again", flush=True)
 
@@ -291,12 +362,13 @@ def run_trainer(ckpt_dir: str, extra: list) -> int:
     return rc
 
 
-def train_cycle(remote: Ssh, ckpt_dir: str, extra: list, no_return: bool) -> None:
+def train_cycle(remote: Ssh, ckpt_dir: str, extra: list, no_return: bool,
+                serve_url: str | None = None, remote_serve_url: str | None = None) -> None:
     if _local_owner_active(ckpt_dir):
         print(f"[relay] {ckpt_dir} is already this machine's turn -- skipping the "
               f"pull leg (a previous session that never handed back)", flush=True)
     else:
-        pull(remote, ckpt_dir)
+        pull(remote, ckpt_dir, serve_url=serve_url)
     rc = run_trainer(ckpt_dir, extra)
     if rc != 0:
         print(f"[relay] trainer exited with code {rc}; handing back anyway (the "
@@ -310,7 +382,7 @@ def train_cycle(remote: Ssh, ckpt_dir: str, extra: list, no_return: bool) -> Non
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     for attempt in range(3):
         try:
-            handback(remote, ckpt_dir)
+            handback(remote, ckpt_dir, remote_serve_url=remote_serve_url)
             return
         except (subprocess.CalledProcessError, SystemExit) as e:
             if attempt == 2:
@@ -328,8 +400,10 @@ def status(remote: Ssh, ckpt_dir: str) -> None:
     from fishrl.train.locks import is_locked
     stamp = ownership.read(ckpt_dir)
     held = is_locked(ownership.trainer_lock_path(ckpt_dir))
+    peer = ownership.read_peer(ckpt_dir)
     print(f"[relay] local  {ckpt_dir}: owner={stamp or '(none)'} "
-          f"trainer={'RUNNING' if held else 'stopped'}", flush=True)
+          f"trainer={'RUNNING' if held else 'stopped'}"
+          + (f" telemetry->{peer['url']}" if peer else ""), flush=True)
     remote.preflight()
     print(f"[relay] remote {remote.host}: unit={remote.service_state()} "
           f"owner={remote.owner()}", flush=True)
@@ -351,6 +425,14 @@ def parse(argv: list) -> tuple:
                     help="skip the systemctl stop/start (server trainer managed by hand)")
     ap.add_argument("--no-return", action="store_true",
                     help="train only; keep the lineage here (handback later)")
+    ap.add_argument("--serve-url", default=None,
+                    help="THIS machine's dashboard URL, stamped on the server at pull "
+                         "so its webserver redirects telemetry here "
+                         f"(default: http://<lan-ip>:{SERVE_PORT}/)")
+    ap.add_argument("--remote-serve-url", default=None,
+                    help="the server's dashboard URL, stamped here at handback "
+                         "(default: ask the server for its LAN IP, port "
+                         f"{SERVE_PORT})")
     ap.add_argument("--local-remote", default=None, metavar="DIR",
                     help="simulate the server with a local checkpoint dir (testing)")
     ap.epilog = ("args after a literal -- go to fishrl.train "
@@ -387,11 +469,12 @@ def main() -> None:
               f"local ckpt-dir: {args.ckpt_dir}", flush=True)
 
     if args.cmd == "train":
-        train_cycle(remote, args.ckpt_dir, extra, args.no_return)
+        train_cycle(remote, args.ckpt_dir, extra, args.no_return,
+                    serve_url=args.serve_url, remote_serve_url=args.remote_serve_url)
     elif args.cmd == "pull":
-        pull(remote, args.ckpt_dir)
+        pull(remote, args.ckpt_dir, serve_url=args.serve_url)
     elif args.cmd == "handback":
-        handback(remote, args.ckpt_dir)
+        handback(remote, args.ckpt_dir, remote_serve_url=args.remote_serve_url)
     elif args.cmd == "push-stats":
         push_stats(remote, args.ckpt_dir)
     else:

@@ -120,3 +120,24 @@ def test_pull_from_empty_server_aborts_cleanly(tmp_path):
     with pytest.raises(SystemExit):
         pull(LocalSim(str(tmp_path / "empty")), str(tmp_path / "local"))
     assert not os.path.exists(os.path.join(str(tmp_path / "local"), "latest.pt"))
+
+
+def test_handoffs_stamp_and_clear_the_telemetry_redirect(tmp_path, server):
+    """Each leg leaves peer.json (the new owner's dashboard URL) on the side
+    the lineage LEFT, and the import on the receiving side clears any stale
+    pointer there -- so at most one side ever points away, and it points true."""
+    local = str(tmp_path / "local")
+    sim = LocalSim(server)
+
+    pull(sim, local, serve_url="http://192.168.4.99:8765/")
+    p = o.read_peer(server)                              # server now points at us
+    assert p["url"] == "http://192.168.4.99:8765/" and p["host"] == o.this_host()
+    assert o.read_peer(local) is None                    # active owner points nowhere
+
+    handback(sim, local, remote_serve_url="http://192.168.4.28:8765/")
+    assert o.read_peer(local)["url"] == "http://192.168.4.28:8765/"   # we point home
+    assert o.read_peer(server) is None                   # import_back's claim cleared it
+
+    pull(sim, local, serve_url="http://192.168.4.99:8765/")
+    assert o.read_peer(local) is None                    # our import cleared OUR pointer
+    assert o.read_peer(server)["url"] == "http://192.168.4.99:8765/"

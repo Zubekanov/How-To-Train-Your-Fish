@@ -81,6 +81,25 @@ whose zip never got imported leaves NOBODY active — `python -m fishrl.transfer
 on whichever machine should resume. A stale zip (older generation than the local
 stamp) is refused on import. Worst case is never corruption, only a deliberate choice.
 
+### Telemetry redirect (`peer.json`)
+
+`owner.json` never records who TOOK the lineage (release happens before the far side
+imports), so each successful relay leg also drops `peer.json` — the new owner's
+dashboard URL — on the side the lineage left. `fishrl.serve` then answers its data
+endpoints (`/api/reports|evals|ticks|stream`) with **307 → the same path on the peer**
+whenever no trainer is live locally and the peer passes a cached reachability probe.
+Net effect: the website keeps polling the ODROID's one stable address and transparently
+reads live rows from the PC during a PC session. If the PC is asleep/unreachable, the
+ODROID serves its own (stale but valid) rows instead — the idempotent `since_it`
+queries self-heal once the lineage hands back. `/api/summary` is never redirected; it
+advertises `peer` + `peer_alive` so a client can also re-point itself explicitly.
+
+Importing (claiming the turn) clears the local `peer.json`, so at most one side ever
+points away, and it points at the active trainer. Stamping is best-effort: a failed
+stamp only means stale telemetry for that session, never a failed handoff. URLs
+default to `http://<lan-ip>:8765/` on both sides (`--serve-url` / `--remote-serve-url`
+on `fishrl.relay` override; `--no-redirect` on `fishrl.serve` disables serving 307s).
+
 ## Note: stale `--user` unit
 
 An older `fishrl-selfplay` **user** unit (`systemctl --user`) exists on this box from

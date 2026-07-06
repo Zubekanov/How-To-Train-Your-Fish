@@ -24,6 +24,18 @@ range queries, /api/stream, and / (a minimal human status page). Responses set
 ``Access-Control-Allow-Origin: *`` so a browser frontend served from another
 LAN host (the website) can fetch/stream directly.
 
+Peer redirect: after a relay handoff the lineage's live telemetry lives on the
+OTHER machine, and the relay leaves ``peer.json`` (the new owner's dashboard
+URL) behind -- see fishrl.train.ownership. When no trainer is live here and
+the peer answers a cached reachability probe, the data endpoints
+(/api/reports|evals|ticks|stream) answer 307 to the same path there, so the
+website keeps polling ONE stable address (this server) and follows the
+lineage wherever it trains. An unreachable peer (PC asleep) degrades to
+serving the local rows -- stale but valid; the idempotent since_it queries
+self-heal once the lineage returns. /api/summary is NEVER redirected: it
+reports this machine's state and advertises the peer (+ liveness) so a
+client can also re-point itself explicitly. ``--no-redirect`` disables.
+
 Binding: NEVER 0.0.0.0. ``--bind auto`` (default) resolves the machine's
 primary LAN IPv4; pass an explicit address to override.
 """
@@ -36,6 +48,7 @@ import socket
 import subprocess
 import threading
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -46,6 +59,29 @@ STREAM_POLL_S = 1.0
 HEARTBEAT_S = 15.0
 TRAINER_LOCK = "trainer.lock"                          # fishrl.train.ownership's name
 STOP_FILE = "STOP"                                     # train_loop's stop-file protocol
+PEER = "peer.json"                                     # fishrl.train.ownership's name
+PEER_PROBE_TIMEOUT_S = 2.0
+PEER_PROBE_TTL_S = 15.0
+
+_peer_probe_cache: dict = {}                           # url -> (monotonic ts, alive)
+
+
+def peer_alive(url: str) -> bool:
+    """Cached reachability probe of a peer serve instance. The cache (15s TTL,
+    hits and misses alike) keeps a dead peer from costing every request a
+    2-second timeout, and a live one from being probed per-request."""
+    now = time.monotonic()
+    hit = _peer_probe_cache.get(url)
+    if hit is not None and now - hit[0] < PEER_PROBE_TTL_S:
+        return hit[1]
+    try:
+        with urllib.request.urlopen(url.rstrip("/") + "/api/summary",
+                                    timeout=PEER_PROBE_TIMEOUT_S) as r:
+            alive = 200 <= r.status < 300
+    except Exception:                                  # noqa: BLE001 -- any failure = not alive
+        alive = False
+    _peer_probe_cache[url] = (now, alive)
+    return alive
 
 
 def _read_json(path):
@@ -79,6 +115,9 @@ class Store:
             return self.ticks()
         return self.stats().get(kind, [])
 
+    def peer(self) -> dict | None:
+        return _read_json(os.path.join(self.dir, PEER))
+
     def since(self, kind: str, since_it) -> list:
         rows = self.rows(kind)
         if since_it is None:
@@ -105,6 +144,7 @@ class Store:
             latest_mtime = None
         newest = max([r.get("wall_time") or 0 for r in
                       (stats["reports"][-1:] + stats["evals"][-1:] + ticks[-1:])] + [0])
+        peer = self.peer()
         return {
             "ckpt_dir": os.path.abspath(self.dir),
             "host": socket.gethostname(),
@@ -117,6 +157,9 @@ class Store:
                        "ticks": len(ticks)},
             "best": best,
             "owner": owner,
+            "peer": peer,
+            "peer_alive": (peer_alive(peer["url"])
+                           if peer and peer.get("url") else None),
             "latest_pt_mtime": latest_mtime,
             "staleness_s": (time.time() - newest) if newest else None,
         }
@@ -206,6 +249,7 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     store: Store = None                                  # set by serve()
     actions: Actions = None                              # None = read-only (the default)
+    redirect: bool = True                                # follow peer.json (--no-redirect off)
 
     def log_message(self, fmt, *args):                   # quiet: no per-request spam
         pass
@@ -229,6 +273,32 @@ class Handler(BaseHTTPRequestHandler):
         except (KeyError, ValueError, IndexError):
             return None
 
+    def _peer_target(self) -> str | None:
+        """Where the lineage's live telemetry actually is, when it isn't here:
+        the peer.json breadcrumb the relay leaves on the released side of a
+        handoff. Redirect only when no trainer is live locally (never redirect
+        away from live data) and the peer answers the cached probe (a
+        sleeping/offline peer degrades to serving local rows, not errors)."""
+        if not self.redirect:
+            return None
+        peer = self.store.peer()
+        url = (peer or {}).get("url")
+        if not url:
+            return None
+        if is_locked(os.path.join(self.store.dir, TRAINER_LOCK)):
+            return None
+        if not peer_alive(url):
+            return None
+        return url.rstrip("/")
+
+    def _redirect_to(self, location: str) -> None:
+        self.send_response(307)                          # method+body preserved; GET here
+        self.send_header("Location", location)
+        self.send_header("Access-Control-Allow-Origin", "*")   # EventSource/fetch follow
+        self.send_header("Cache-Control", "no-store")          # cross-origin only w/ CORS
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     # -- routes ----------------------------------------------------------------
     def do_GET(self):                                    # noqa: N802 (http.server API)
         u = urlparse(self.path)
@@ -243,12 +313,16 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"error": "actions disabled (--allow-actions)"}, code=403)
                 else:
                     self._json({"actions": self.actions.list()})
-            elif u.path in ("/api/reports", "/api/evals", "/api/ticks"):
-                kind = u.path.rsplit("/", 1)[1]
-                rows = self.store.since(kind, self._since_it(q))
-                self._json({kind: rows, "count": len(rows)})
-            elif u.path == "/api/stream":
-                self._stream(self._since_it(q))
+            elif u.path in ("/api/reports", "/api/evals", "/api/ticks", "/api/stream"):
+                target = self._peer_target()
+                if target is not None:                   # live data is on the peer
+                    self._redirect_to(target + self.path)
+                elif u.path == "/api/stream":
+                    self._stream(self._since_it(q))
+                else:
+                    kind = u.path.rsplit("/", 1)[1]
+                    rows = self.store.since(kind, self._since_it(q))
+                    self._json({kind: rows, "count": len(rows)})
             else:
                 self._json({"error": f"unknown path {u.path}"}, code=404)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -392,12 +466,13 @@ def wait_lan_ip(timeout: float = 60.0, poll: float = 2.0,
 
 
 def serve(ckpt_dir: str, bind: str, port: int,
-          actions: Actions | None = None) -> ThreadingHTTPServer:
+          actions: Actions | None = None, redirect: bool = True) -> ThreadingHTTPServer:
     addr = wait_lan_ip() if bind == "auto" else bind
     if addr == "0.0.0.0":                                # LAN-only by policy
         raise SystemExit("[serve] refusing to bind 0.0.0.0; pass a concrete interface IP")
     Handler.store = Store(ckpt_dir)
     Handler.actions = actions
+    Handler.redirect = redirect
     httpd = ThreadingHTTPServer((addr, port), Handler)
     httpd.daemon_threads = True                          # SSE threads die with the server
     return httpd
@@ -412,6 +487,9 @@ def main() -> None:
     ap.add_argument("--allow-actions", action="store_true",
                     help="mount the control plane (stop/start buttons on the dashboard); "
                          "off = strictly read-only, the default")
+    ap.add_argument("--no-redirect", action="store_true",
+                    help="never 307 data endpoints at a relay peer (peer.json); "
+                         "always serve the local rows")
     ap.add_argument("--unit", default="fishrl-selfplay",
                     help="systemd trainer unit the POSIX actions manage")
     ap.add_argument("--eval-unit", default="fishrl-eval.service",
@@ -420,7 +498,8 @@ def main() -> None:
 
     actions = (Actions(args.ckpt_dir, args.unit, args.eval_unit)
                if args.allow_actions else None)
-    httpd = serve(args.ckpt_dir, args.bind, args.port, actions)
+    httpd = serve(args.ckpt_dir, args.bind, args.port, actions,
+                  redirect=not args.no_redirect)
     host, port = httpd.server_address[:2]
     print(f"[serve] http://{host}:{port}/  (ckpt-dir: {os.path.abspath(args.ckpt_dir)}; "
           f"{'ACTIONS ENABLED' if actions else 'read-only'}; Ctrl-C to stop)", flush=True)

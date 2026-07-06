@@ -20,6 +20,13 @@ Complementing the stamp, the LIVE-trainer signal is ``trainer.lock`` (see
 ``locks.hold_lockfile``): held by the trainer process for its lifetime,
 probed by ``transfer export`` and by second-trainer startups. The stamp says
 "whose turn"; the lock says "running right now".
+
+``peer.json`` is the third, telemetry-only piece: the released side's stamp
+never records WHO took the lineage (release happens before the import), so
+the relay -- the one process that sees both ends of a handoff -- stamps the
+new owner's dashboard URL on the side it just left. ``fishrl.serve`` uses it
+to redirect telemetry pulls at the machine that is actually training.
+Claiming the turn clears it: an active owner IS the telemetry source.
 """
 from __future__ import annotations
 
@@ -32,10 +39,15 @@ from fishrl.train.checkpoint import replace_with_retry
 
 OWNER = "owner.json"
 TRAINER_LOCK = "trainer.lock"
+PEER = "peer.json"
 
 
 def owner_path(ckpt_dir: str) -> str:
     return os.path.join(ckpt_dir, OWNER)
+
+
+def peer_path(ckpt_dir: str) -> str:
+    return os.path.join(ckpt_dir, PEER)
 
 
 def trainer_lock_path(ckpt_dir: str) -> str:
@@ -56,13 +68,13 @@ def read(ckpt_dir: str) -> dict | None:
         return None
 
 
-def _write(ckpt_dir: str, stamp: dict) -> dict:
+def _write(ckpt_dir: str, stamp: dict, path_fn=owner_path) -> dict:
     os.makedirs(ckpt_dir, exist_ok=True)
     stamp["ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    tmp = owner_path(ckpt_dir) + ".tmp"
+    tmp = path_fn(ckpt_dir) + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(stamp, f, indent=2)
-    replace_with_retry(tmp, owner_path(ckpt_dir))
+    replace_with_retry(tmp, path_fn(ckpt_dir))
     return stamp
 
 
@@ -73,6 +85,7 @@ def claim(ckpt_dir: str, host: str | None = None, generation: int | None = None)
     prev = read(ckpt_dir)
     if generation is None:
         generation = int(prev["generation"]) if prev else 0
+    clear_peer(ckpt_dir)                     # the active owner IS the telemetry source
     return _write(ckpt_dir, {"host": host or this_host(), "state": "active",
                              "generation": int(generation)})
 
@@ -106,3 +119,27 @@ def check(ckpt_dir: str, host: str | None = None) -> str | None:
             f"{stamp.get('generation')} by '{stamp.get('host')}'). Import the newer "
             f"run zip to continue the lineage here, or fork it deliberately with "
             f"--claim / 'python -m fishrl.transfer claim --ckpt-dir {ckpt_dir}'.")
+
+
+# ── peer redirect stamp (telemetry-only; never gates training) ────────────────
+
+def read_peer(ckpt_dir: str) -> dict | None:
+    """Where the lineage's live telemetry went, or None (it's here / unknown)."""
+    try:
+        with open(peer_path(ckpt_dir), encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def write_peer(ckpt_dir: str, host: str, url: str) -> dict:
+    """Stamp the new owner's dashboard URL on a released dir. Written by the
+    relay AFTER the far side's import succeeds (only then is the pointer true)."""
+    return _write(ckpt_dir, {"host": host, "url": url}, path_fn=peer_path)
+
+
+def clear_peer(ckpt_dir: str) -> None:
+    try:
+        os.remove(peer_path(ckpt_dir))
+    except OSError:
+        pass

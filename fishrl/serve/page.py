@@ -54,7 +54,7 @@ svg text{font-family:inherit;font-size:11px;fill:var(--dim)}
 <main>
   <div class="panel"><h3>win-rates vs iteration (5000-it running mean; dots = raw evals)</h3>
     <svg id="wr" viewBox="0 0 600 260"></svg><div class="legend" id="wrL"></div></div>
-  <div class="panel"><h3>losses (per-iteration ticks)</h3>
+  <div class="panel"><h3>losses (5000-it running mean; dots = raw ticks)</h3>
     <svg id="loss" viewBox="0 0 600 260"></svg><div class="legend" id="lossL"></div></div>
   <div class="panel"><h3>throughput (reports)</h3>
     <svg id="thr" viewBox="0 0 600 260"></svg><div class="legend" id="thrL"></div></div>
@@ -104,7 +104,14 @@ function chart(svg, legendEl, series, opts){
   const X = v => L + (v-x0)/(x1-x0)*(W-L-R);
   const Y = (v,a,b) => T + (1-(v-a)/(b-a))*(H-T-B);
   let out = [];
-  for (let i=0;i<=4;i++){                         // grid + axis labels
+  if (opts.yStep){                                // grid at fixed data intervals
+    const k0 = Math.ceil((ya-1e-9)/opts.yStep), k1 = Math.floor((yb+1e-9)/opts.yStep);
+    for (let k=k0;k<=k1;k++){
+      const gv = k*opts.yStep, gy = Y(gv,ya,yb), major = k%2===0;   // label every 2nd
+      out.push(`<line x1="${L}" y1="${gy}" x2="${W-R}" y2="${gy}" stroke="#2a3138" stroke-width="${major?0.8:0.4}"/>`);
+      if (major) out.push(`<text x="${L-4}" y="${gy+4}" text-anchor="end">${fmt(gv)}</text>`);
+    }
+  } else for (let i=0;i<=4;i++){                  // grid + axis labels (quarters)
     const gy = T + i*(H-T-B)/4, gv = yb - i*(yb-ya)/4;
     out.push(`<line x1="${L}" y1="${gy}" x2="${W-R}" y2="${gy}" stroke="#2a3138" stroke-width="0.5"/>`);
     out.push(`<text x="${L-4}" y="${gy+4}" text-anchor="end">${fmt(gv)}</text>`);
@@ -133,7 +140,7 @@ function chart(svg, legendEl, series, opts){
       const [a,b] = s.right ? range([s]) : [ya,yb];
       if (s.dots){                                  // faint raw datapoints behind the lines
         for (const p of s.pts)
-          out.push(`<circle cx="${X(p[0])}" cy="${Y(p[1],a,b)}" r="1.8" fill="${s.color}" opacity="0.28"/>`);
+          out.push(`<circle cx="${X(p[0])}" cy="${Y(p[1],a,b)}" r="${s.r||1.8}" fill="${s.color}" opacity="0.28"/>`);
         continue;
       }
       const line = s.pts.map(p=>`${X(p[0])},${Y(p[1],a,b)}`).join(" ");
@@ -161,13 +168,18 @@ function fmt(v){
 
 // ── panels ───────────────────────────────────────────────────────────────────
 function smooth(pts, win){
-  // centered running mean over an iteration window (partial windows at the edges)
-  return pts.map(p => {
-    const lo = p[0] - win/2, hi = p[0] + win/2;
-    let sum = 0, n = 0;
-    for (const q of pts) if (q[0] >= lo && q[0] <= hi){ sum += q[1]; n++; }
-    return [p[0], sum/n];
-  });
+  // centered running mean over an iteration window (partial windows at the
+  // edges). Two-pointer sliding window -- pts arrive sorted by iteration, so
+  // this stays O(n) even for the ~2000-point tick series.
+  const out = new Array(pts.length);
+  let lo = 0, hi = 0, sum = 0;
+  for (let i=0;i<pts.length;i++){
+    const a = pts[i][0] - win/2, b = pts[i][0] + win/2;
+    while (hi < pts.length && pts[hi][0] <= b){ sum += pts[hi][1]; hi++; }
+    while (pts[lo][0] < a){ sum -= pts[lo][1]; lo++; }
+    out[i] = [pts[i][0], sum/(hi-lo)];
+  }
+  return out;
 }
 
 function render(){
@@ -181,12 +193,17 @@ function render(){
     wrSeries.push({name:k, color:c, pts:smooth(raw, WR_SMOOTH),
       stars: k==="heuristic" ? ev.filter(r=>r.new_best&&r[k]!=null).map(r=>[r.it,r[k]]) : []});
   }
-  chart($("wr"), $("wrL"), wrSeries, {y0:0, y1:1, hline:0.5});
+  chart($("wr"), $("wrL"), wrSeries, {y0:0, y1:1, hline:0.5, yStep:0.05});
   const lossSrc = tk.length ? tk : rp;
-  chart($("loss"), $("lossL"), Object.entries(LOSS).map(([k,c])=>({
-      name:k, color:c, w:(k==="entropy"||k==="approx_kl")?0.9:1.4,
-      pts: lossSrc.filter(r=>r[k]!=null).map(r=>[r.it, r[k]]),
-    })).filter(s=>s.pts.length), {});
+  const lossSeries = [];
+  for (const [k,c] of Object.entries(LOSS)){
+    const raw = lossSrc.filter(r=>r[k]!=null).map(r=>[r.it, r[k]]);
+    if (!raw.length) continue;
+    lossSeries.push({name:"", color:c, dots:true, r:1.2, pts:raw});  // faint raw ticks
+    lossSeries.push({name:k, color:c, w:(k==="entropy"||k==="approx_kl")?0.9:1.4,
+                     pts:smooth(raw, WR_SMOOTH)});
+  }
+  chart($("loss"), $("lossL"), lossSeries, {});
   chart($("thr"), $("thrL"), [
       {name:"iters/h", color:"#4fc3f7", pts: rp.filter(r=>r.iters_per_h!=null).map(r=>[r.it,r.iters_per_h])},
       {name:"transitions", color:"#9ccc65", right:true,

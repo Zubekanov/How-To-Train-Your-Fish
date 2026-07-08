@@ -276,6 +276,6 @@ def test_dashboard_page_served(site):
     _, port = site
     with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=10) as r:
         html = r.read().decode()
-    for marker in ('id="wr"', 'id="loss"', 'id="thr"', 'id="mix"',
+    for marker in ('id="wr"', 'id="sys"', 'id="thr"', 'id="mix"',
                    "/api/stream", "EventSource"):
         assert marker in html

@@ -162,9 +162,9 @@ sibling process exposing it all on the LAN:
 deploy\fishrl-serve.ps1                  # binds the primary LAN IPv4 on :8765
 ```
 
-* `/` — the **dashboard**: live SVG charts (win-rates with new-best stars, losses from
-  per-iteration ticks, throughput, opponent mix), owner/turn + trainer + staleness
-  chips, updating over SSE,
+* `/` — the **dashboard**: live SVG charts (win-rates with new-best stars, system
+  utilization %cpu/%gpu/%ram from per-iteration ticks, throughput, opponent mix),
+  owner/turn + trainer + staleness chips, updating over SSE,
 * `/api/reports|evals|ticks?since_it=N` — idempotent range queries (the website DB
   pulls these; omit `since_it` to rebuild from scratch),
 * `/api/stream` — server-sent events for the "watch it now" view,

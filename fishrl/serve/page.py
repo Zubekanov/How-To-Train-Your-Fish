@@ -3,7 +3,9 @@
 Inline CSS/JS + hand-rolled SVG charts only: the page must render on a LAN
 with no internet (no CDNs), against the JSON APIs and the SSE stream of the
 sibling __main__. Panels: win-rates (with
-new-best stars), losses, throughput, opponent mix, plus header/staleness
+new-best stars), system utilization (%cpu/%gpu/%ram from the ticks -- the
+losses panel it replaced was a flat line: a 5000-it mean over the 2000-it
+tick ring), throughput, opponent mix, plus header/staleness
 and the (opt-in) actions bar, whose buttons come from /api/actions and are
 disabled server-side truth, not client guesswork.
 """
@@ -54,8 +56,8 @@ svg text{font-family:inherit;font-size:11px;fill:var(--dim)}
 <main>
   <div class="panel"><h3>win-rates vs iteration (5000-it running mean; dots = raw evals)</h3>
     <svg id="wr" viewBox="0 0 600 260"></svg><div class="legend" id="wrL"></div></div>
-  <div class="panel"><h3>losses (5000-it running mean; dots = raw ticks)</h3>
-    <svg id="loss" viewBox="0 0 600 260"></svg><div class="legend" id="lossL"></div></div>
+  <div class="panel"><h3>system utilization % (250-it running mean; dots = raw ticks)</h3>
+    <svg id="sys" viewBox="0 0 600 260"></svg><div class="legend" id="sysL"></div></div>
   <div class="panel"><h3>throughput (reports)</h3>
     <svg id="thr" viewBox="0 0 600 260"></svg><div class="legend" id="thrL"></div></div>
   <div class="panel"><h3>opponent mix (reports)</h3>
@@ -66,8 +68,8 @@ svg text{font-family:inherit;font-size:11px;fill:var(--dim)}
 "use strict";
 const WR = {heuristic:"#4fc3f7", heuristic11:"#b39ddb", heuristic12:"#f8bbd0",
             random:"#9ccc65", attacker:"#ffb74d", frozen:"#e57373"};
-const LOSS = {policy_loss:"#4fc3f7", critic_loss:"#e57373", guesser_loss:"#9ccc65",
-              public_loss:"#ffb74d", entropy:"#b0bec5", approx_kl:"#f06292"};
+const SYS = {cpu:"#4fc3f7", gpu:"#9ccc65", ram:"#b39ddb"};   // utilization % per tick
+const SYS_SMOOTH = 250;   // system-panel running-mean window (ticks span ~2000 it)
 const MIX = {opp_self:"#4fc3f7", opp_past:"#b39ddb", opp_heuristic:"#e57373",
              opp_heuristic11:"#ef9a9a", opp_heuristic12:"#f8bbd0",
              opp_attacker:"#ffb74d", opp_random:"#9ccc65",
@@ -161,6 +163,7 @@ function fmt(v){
   if (!isFinite(v)) return "";
   const a = Math.abs(v);
   if (a>=100000) return (v/1000).toFixed(0)+"k";
+  if (Number.isInteger(v)) return v.toString();   // 0/10/20 grid labels, not "10.00"
   if (a>=100) return v.toFixed(0);
   if (a>=1) return v.toFixed(2);
   return v.toFixed(3);
@@ -194,16 +197,14 @@ function render(){
       stars: k==="heuristic" ? ev.filter(r=>r.new_best&&r[k]!=null).map(r=>[r.it,r[k]]) : []});
   }
   chart($("wr"), $("wrL"), wrSeries, {y0:0, y1:1, hline:0.5, yStep:0.05});
-  const lossSrc = tk.length ? tk : rp;
-  const lossSeries = [];
-  for (const [k,c] of Object.entries(LOSS)){
-    const raw = lossSrc.filter(r=>r[k]!=null).map(r=>[r.it, r[k]]);
-    if (!raw.length) continue;
-    lossSeries.push({name:"", color:c, dots:true, r:1.2, pts:raw});  // faint raw ticks
-    lossSeries.push({name:k, color:c, w:(k==="entropy"||k==="approx_kl")?0.9:1.4,
-                     pts:smooth(raw, WR_SMOOTH)});
+  const sysSeries = [];
+  for (const [k,c] of Object.entries(SYS)){
+    const raw = tk.filter(r=>r[k]!=null).map(r=>[r.it, r[k]]);
+    if (!raw.length) continue;                            // e.g. no gpu on the ODROID
+    sysSeries.push({name:"", color:c, dots:true, r:1.2, pts:raw});  // faint raw ticks
+    sysSeries.push({name:k+" %", color:c, pts:smooth(raw, SYS_SMOOTH)});
   }
-  chart($("loss"), $("lossL"), lossSeries, {});
+  chart($("sys"), $("sysL"), sysSeries, {y0:0, y1:100, yStep:10});
   chart($("thr"), $("thrL"), [
       {name:"iters/h", color:"#4fc3f7", pts: rp.filter(r=>r.iters_per_h!=null).map(r=>[r.it,r.iters_per_h])},
       {name:"transitions", color:"#9ccc65", right:true,

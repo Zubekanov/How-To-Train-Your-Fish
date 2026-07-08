@@ -39,6 +39,7 @@ from fishrl.train.collector import (
     fill_critic_values,
 )
 from fishrl.train.config import Config
+from fishrl.train import sysstats
 from fishrl.train.pfsp import SCRIPTED_KINDS, LeagueMember, PFSPLeague
 from fishrl.train.ppo import aux_update, ppo_update
 
@@ -186,6 +187,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
     TICK_KEEP = 2000
     ticks: list = []             # the ring, seeded from disk so resume continues it
     if checkpoint_path is not None and cfg.tick_every_seconds > 0:
+        sysstats.start()         # background %cpu/%ram/%gpu sampler feeding the ticks
         try:
             with open(os.path.join(os.path.dirname(os.path.abspath(checkpoint_path)),
                                    "ticks.json")) as f:
@@ -790,6 +792,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
             last_batch = batch
             done += 1
             if checkpoint_path is not None and cfg.tick_every_seconds > 0:
+                sysv = sysstats.latest()
                 ticks.append({
                     "it": done, "wall_time": time.time(), "T": len(buf),
                     "games": len(buf.games),
@@ -799,6 +802,11 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     "guesser_loss": aux_stats["guesser_loss"],
                     "public_loss": aux_stats["public_loss"],
                     "collect_s": round(iter_collect_s, 3), "update_s": round(iter_update_s, 3),
+                    # machine utilization at the last sampler beat (%; None = unknown) --
+                    # the dashboard's system panel plots these over iteration
+                    "cpu": None if sysv["cpu"] is None else round(sysv["cpu"], 1),
+                    "ram": None if sysv["ram"] is None else round(sysv["ram"], 1),
+                    "gpu": None if sysv["gpu"] is None else round(sysv["gpu"], 1),
                 })
                 tick_pending = True
                 if time.perf_counter() - last_tick_flush >= cfg.tick_every_seconds:

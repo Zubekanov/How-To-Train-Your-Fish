@@ -64,6 +64,19 @@ workers at startup (one-time, parallel — expect a ~30s first iteration when
 scenarios are enabled). `0` (default) is the serial path, byte-identical:
 what the ODROID service runs.
 
+### `--collect-affinity LP,LP,…`
+
+This box's i7-14700KF is hybrid (8 P-cores as logical processors 0–15 in
+hyperthread pairs, 12 E-cores as LPs 16–27) and **Windows 10's scheduler is
+not hybrid-aware**: unpinned collector workers drift onto E-cores, measured
+**2.3× slower per decision** (1.4 ms/dec on a P-core vs 3.3 ms on an E-core
+for this workload). `--collect-affinity 0,2,4,6,8,10,12,14` restricts every
+worker to one LP per physical P-core; with 8 workers the scheduler settles
+one on each, and the main process / eval panel / OS get the E-cores and HT
+siblings. Machine flag only — placement, never training semantics; default
+`""` (unpinned) everywhere else, including the ODROID. Give at least as many
+LPs as workers or they queue inside the mask.
+
 ### `--reserve-cores N`
 
 Keeps N **physical** cores free of training threads so the machine stays

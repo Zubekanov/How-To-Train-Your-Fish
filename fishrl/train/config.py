@@ -29,6 +29,15 @@ class Config:
     # unchanged (collection was 62% of iteration time at 20 cores). 0 = the
     # serial path, byte-identical: the ODROID service default.
     collect_workers: int = 0
+    # CPU affinity for the collector workers: comma-separated LOGICAL-processor
+    # indices every worker is restricted to (the scheduler distributes them
+    # within the set). "" = unpinned, the default everywhere. Machine flag, not
+    # regime: on hybrid Intel parts under Windows 10 (which is not
+    # hybrid-scheduler-aware) unpinned workers drift onto E-cores measured
+    # 2.3x slower per decision -- pin one LP per physical P-core (HT siblings
+    # enumerate adjacently, so e.g. "0,2,4,6,8,10,12,14" on an 8P-core part).
+    # Give at least as many LPs as workers or they queue inside the mask.
+    collect_affinity: str = ""
 
     # ── Opponent pool / PFSP (prioritized fictitious self-play) ──────────────
     # Fraction of each iteration's games the learner plays against a POOL opponent

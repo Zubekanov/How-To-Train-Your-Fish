@@ -24,11 +24,48 @@ path, byte-identical for the ODROID service).
 """
 from __future__ import annotations
 
+import pickle
 from concurrent.futures import ProcessPoolExecutor
 from types import SimpleNamespace
 
 # ── worker side ───────────────────────────────────────────────────────────────
 _G: dict = {}
+
+
+def parse_affinity(spec: str) -> list:
+    """'0,2,4' -> [0, 2, 4]; ''/None -> []. Raises ValueError on junk so a typo
+    fails the trainer at startup, not silently unpinned."""
+    if not spec:
+        return []
+    return sorted({int(tok) for tok in str(spec).split(",") if tok.strip() != ""})
+
+
+def _apply_affinity(lps: list) -> None:
+    """Restrict THIS process to the given logical processors. Every worker gets
+    the same mask; with >= as many LPs as workers the scheduler settles one
+    each. Purpose: hybrid Intel parts under Windows 10 (whose scheduler is not
+    hybrid-aware) drift collector workers onto E-cores measured 2.3x slower per
+    decision. Best-effort: an invalid mask warns rather than kills the worker."""
+    if not lps:
+        return
+    try:
+        import os
+        if hasattr(os, "sched_setaffinity"):            # POSIX
+            os.sched_setaffinity(0, set(lps))
+            return
+        import ctypes                                   # Windows
+        mask = 0
+        for lp in lps:
+            mask |= 1 << lp
+        k32 = ctypes.windll.kernel32
+        k32.GetCurrentProcess.restype = ctypes.c_void_p
+        k32.SetProcessAffinityMask.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+        k32.SetProcessAffinityMask.restype = ctypes.c_size_t
+        if not k32.SetProcessAffinityMask(k32.GetCurrentProcess(), mask):
+            raise OSError(f"SetProcessAffinityMask({mask:#x}) failed")
+    except Exception as e:                              # noqa: BLE001 -- best-effort
+        print(f"[pcollect] affinity {lps} not applied ({e}); worker runs unpinned",
+              flush=True)
 
 
 def _winit(lite: dict) -> None:
@@ -60,6 +97,7 @@ def _winit(lite: dict) -> None:
         threading.Thread(target=_die_with_parent, daemon=True).start()
 
     torch.set_num_threads(1)
+    _apply_affinity(lite.get("affinity") or [])
     hidden = tuple(lite["hidden"])
     _G.update(
         lite=lite,
@@ -120,11 +158,14 @@ def _collect_one(spec: dict):
                                enforce_free_attack=lite["enforce_free_attack"])
 
 
-def _collect_chunk(learner_state: dict, specs: list, torch_seed: int) -> list:
+def _collect_chunk(learner_blob: bytes, specs: list, torch_seed: int) -> list:
     """Load this iteration's learner weights once, then play the chunk's games.
-    Returns [(spec_index, RolloutBuffer), ...]."""
+    Returns [(spec_index, RolloutBuffer), ...]. The weights arrive PRE-PICKLED:
+    the main process serializes the 14 MB state dict once per iteration instead
+    of once per chunk (the executor then only memcpys bytes per submit)."""
     import torch
     torch.manual_seed(torch_seed)                      # reproducible action sampling per chunk
+    learner_state = pickle.loads(learner_blob)
     _G["actor"].load_state_dict(learner_state["actor"])
     _G["guesser"].load_state_dict(learner_state["guesser"])
     return [(spec["idx"], _collect_one(spec)) for spec in specs]
@@ -151,7 +192,8 @@ class ParallelCollector:
                 "enc_actor": cfg.enc_for("actor"), "enc_guesser": cfg.enc_for("guesser"),
                 "use_belief": cfg.use_belief, "max_decisions": cfg.max_decisions,
                 "enforce_free_attack": cfg.enforce_free_attack,
-                "scenario_names": scen_names}
+                "scenario_names": scen_names,
+                "affinity": parse_affinity(getattr(cfg, "collect_affinity", ""))}
         self._ex = ProcessPoolExecutor(max_workers=workers,
                                        initializer=_winit, initargs=(lite,))
 
@@ -167,9 +209,11 @@ class ParallelCollector:
         """Round-robin the specs over the workers; one weights shipment per chunk."""
         for i, s in enumerate(specs):
             s["idx"] = i
-        learner_state = {"actor": _cpu_state(m.actor), "guesser": _cpu_state(m.guesser)}
+        learner_blob = pickle.dumps(
+            {"actor": _cpu_state(m.actor), "guesser": _cpu_state(m.guesser)},
+            protocol=pickle.HIGHEST_PROTOCOL)          # serialize ONCE, memcpy per chunk
         chunks = [specs[w::self.workers] for w in range(self.workers)]
-        futs = [self._ex.submit(_collect_chunk, learner_state, chunk,
+        futs = [self._ex.submit(_collect_chunk, learner_blob, chunk,
                                 (it * 1009 + w) % (2**31))
                 for w, chunk in enumerate(chunks) if chunk]
         out: dict = {}

@@ -6,16 +6,19 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
 from fishrl.train.config import Config
+from fishrl.train.pcollect import parse_affinity
 from fishrl.train.train_loop import build_models, train
 
 
-def _run(workers: int) -> dict:
+def _run(workers: int, affinity: str = "") -> dict:
     cfg = Config(iters=2, games_per_iter=6, warmup_games=2, warmup_epochs=1,
                  max_decisions=300, report_winrate_games=0,
                  pool_frac=0.5, league_size=2,
                  pfsp_anchors=("random", "attacker", "heuristic"),
-                 collect_workers=workers, seed=0)
+                 collect_workers=workers, collect_affinity=affinity, seed=0)
     lines: list = []
     train(cfg, build_models(cfg), log=lines.append)
     status = next(line for line in reversed(lines) if line.startswith("[status"))
@@ -30,9 +33,19 @@ def _run(workers: int) -> dict:
     return out
 
 
+def test_affinity_spec_parses_strictly():
+    assert parse_affinity("") == [] and parse_affinity(None) == []
+    assert parse_affinity("0,2,4") == [0, 2, 4]
+    assert parse_affinity("4, 2,2") == [2, 4]            # order/dupes normalized
+    with pytest.raises(ValueError):                      # typo fails at startup,
+        parse_affinity("0,x")                            # never silently unpinned
+
+
 def test_parallel_matches_serial_game_accounting():
     serial = _run(0)
-    par = _run(2)
+    # affinity "0,1": LPs that exist on any machine -- exercises the pin path in
+    # the real workers (placement only; results must still match serial).
+    par = _run(2, affinity="0,1")
     # Identical sampling decisions -> identical game counts, same league members
     # seen in the same composition. Transitions differ (independent action-RNG
     # streams) but must exist in quantity.

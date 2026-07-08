@@ -473,7 +473,24 @@ def serve(ckpt_dir: str, bind: str, port: int,
     Handler.store = Store(ckpt_dir)
     Handler.actions = actions
     Handler.redirect = redirect
-    httpd = ThreadingHTTPServer((addr, port), Handler)
+    httpd = ThreadingHTTPServer((addr, port), Handler, bind_and_activate=False)
+    if os.name == "nt":
+        # http.server's SO_REUSEADDR means something different on Windows: it
+        # permits a SECOND server to bind the same port outright (not just
+        # TIME_WAIT reuse), and the OLDEST binding keeps winning connections --
+        # observed as a stale instance shadowing dashboard updates for days.
+        # Disable it so a duplicate start dies loudly instead. POSIX keeps the
+        # default: there SO_REUSEADDR is the sane TIME_WAIT behaviour systemd
+        # restarts rely on, and duplicate binds still fail.
+        httpd.allow_reuse_address = False
+    try:
+        httpd.server_bind()
+        httpd.server_activate()
+    except OSError as e:
+        httpd.server_close()
+        raise SystemExit(f"[serve] cannot bind {addr}:{port} ({e}); is another "
+                         f"fishrl.serve already running? Stop it (or use "
+                         f"deploy\\fishrl-serve.ps1, which replaces it) and retry")
     httpd.daemon_threads = True                          # SSE threads die with the server
     return httpd
 

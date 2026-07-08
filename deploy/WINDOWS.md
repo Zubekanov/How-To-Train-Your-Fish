@@ -118,10 +118,12 @@ exactly the lag PPO's importance ratio + clip absorb. Measured on this box
 entropy unchanged). `--games-per-iter 16` is NOT worth it here: its 16th–9th
 workers sit on E-cores whose games straggle the whole iteration (+5% for 2×
 batch size), and with pipelining it matches the gpi-8 pipeline anyway — keep
-gpi 8. Not in the launchers by default: it changes data-generation semantics
-(regime), so enable it deliberately and judge the win-rate trend. Report rows
-carry `"pipeline": true` so regimes stay separable in telemetry. Requires
-`--collect-workers > 0`; the serial ODROID trainer ignores it with a warning.
+gpi 8. **Enabled in the PC launchers since 2026-07-08** (a deliberate regime
+decision — PC sessions generate one-update-stale data, ODROID sessions stay
+strict); judge it by the smoothed heuristic win-rate trend and pull the flag
+from the launchers to revert. Report rows carry `"pipeline": true` so the
+regimes stay separable in telemetry forever. Requires `--collect-workers > 0`;
+the serial ODROID trainer ignores it with a warning.
 
 ### `--reserve-cores N`
 

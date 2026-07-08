@@ -40,6 +40,11 @@ def main():
                     help="comma-separated logical-processor indices the collector "
                          "workers are restricted to (machine flag; keeps them off "
                          "slow E-cores on hybrid CPUs -- see Config.collect_affinity)")
+    ap.add_argument("--pipeline-collect", action="store_true",
+                    default=Config.pipeline_collect,
+                    help="REGIME: collect iteration N+1's games while updating on N's "
+                         "batch (one-update-stale behavior policy; PPO's ratio absorbs "
+                         "it). Requires --collect-workers > 0.")
     ap.add_argument("--warmup-games", type=int, default=64)
     ap.add_argument("--pool-frac", type=float, default=Config.pool_frac,
                     help="fraction of each iteration's games played vs a PFSP league "
@@ -133,6 +138,7 @@ def main():
     common = dict(device=resolve_device(args.gpu), iters=args.iters,
                   games_per_iter=args.games_per_iter, collect_workers=args.collect_workers,
                   collect_affinity=args.collect_affinity,
+                  pipeline_collect=args.pipeline_collect,
                   warmup_games=args.warmup_games,
                   pool_frac=args.pool_frac, pfsp_mode=args.pfsp_mode,
                   league_size=args.league_size, scenario_frac=args.scenario_frac,

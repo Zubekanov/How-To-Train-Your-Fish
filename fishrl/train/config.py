@@ -38,6 +38,14 @@ class Config:
     # enumerate adjacently, so e.g. "0,2,4,6,8,10,12,14" on an 8P-core part).
     # Give at least as many LPs as workers or they queue inside the mask.
     collect_affinity: str = ""
+    # Pipelined collection (REGIME, not machine: it changes training semantics).
+    # When on, the workers play iteration N+1's games WHILE the GPU updates on
+    # iteration N's batch, hiding the update under collection. The behavior
+    # policy is then one update STALE relative to the policy being optimized --
+    # PPO's importance ratio + clip absorb exactly this kind of lag (ratios
+    # simply don't start at 1), visible as a higher approx_kl floor. Off by
+    # default; requires collect_workers > 0 (a serial trainer cannot overlap).
+    pipeline_collect: bool = False
 
     # ── Opponent pool / PFSP (prioritized fictitious self-play) ──────────────
     # Fraction of each iteration's games the learner plays against a POOL opponent

@@ -41,6 +41,37 @@ def test_affinity_spec_parses_strictly():
         parse_affinity("0,x")                            # never silently unpinned
 
 
+def test_pipeline_flag_ignored_without_workers():
+    """--pipeline-collect on a serial trainer must warn and fall back, never crash
+    (the ODROID path if the flag ever leaks into train.args)."""
+    cfg = Config(iters=1, games_per_iter=2, warmup_games=1, warmup_epochs=1,
+                 max_decisions=100, report_winrate_games=0, pool_frac=0.0,
+                 collect_workers=0, pipeline_collect=True, seed=3)
+    lines: list = []
+    train(cfg, build_models(cfg), log=lines.append)
+    assert any("--pipeline-collect ignored" in line for line in lines)
+    status = next(line for line in reversed(lines) if line.startswith("[status"))
+    assert int(re.search(r"games=(\d+)", status).group(1)) == 2
+
+
+def test_pipelined_run_completes_with_full_game_accounting():
+    """Pipelined collection changes WHEN games are played (overlapped with the
+    update, one-update-stale weights), never HOW MANY: every iteration's games
+    must all arrive and be booked. League evolution legitimately differs from
+    serial (sampling sees EMAs one iteration late), so only counts are pinned."""
+    cfg = Config(iters=3, games_per_iter=4, warmup_games=2, warmup_epochs=1,
+                 max_decisions=200, report_winrate_games=0,
+                 pool_frac=0.5, league_size=2,
+                 pfsp_anchors=("random", "attacker"),
+                 collect_workers=2, pipeline_collect=True, seed=1)
+    lines: list = []
+    train(cfg, build_models(cfg), log=lines.append)
+    assert any("PIPELINED" in line for line in lines)
+    status = next(line for line in reversed(lines) if line.startswith("[status"))
+    assert int(re.search(r"games=(\d+)", status).group(1)) == 12   # 3 iters x 4 games
+    assert int(re.search(r"T=(\d+)", status).group(1)) > 100
+
+
 def test_parallel_matches_serial_game_accounting():
     serial = _run(0)
     # affinity "0,1": LPs that exist on any machine -- exercises the pin path in

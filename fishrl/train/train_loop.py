@@ -346,6 +346,10 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 # ...and on what device. Three PC sessions once ran CPU updates
                 # unnoticed (launchers missing --gpu); the dashboard shows this.
                 "device": str(cfg.device),
+                # Regime marker for A/B analysis: rows trained with pipelined
+                # (one-update-stale) collection must be distinguishable later.
+                # Sparse on purpose -- absent means strictly on-policy.
+                **({"pipeline": True} if pipeline else {}),
                 "iters": win_iters, "iters_per_h": win_iters / dt_h, "transitions": win_T,
                 "policy_loss": mean["policy_loss"], "critic_loss": mean["critic_loss"],
                 "entropy": mean["entropy"], "approx_kl": mean["approx_kl"],
@@ -483,6 +487,15 @@ def train(cfg: Config, models: Models | None = None, log=print,
         from fishrl.train.pcollect import ParallelCollector
         pcol = ParallelCollector(cfg, int(cfg.collect_workers))
         log(f"[pcollect] {cfg.collect_workers} collector worker processes")
+    pipeline = bool(getattr(cfg, "pipeline_collect", False))
+    if pipeline and pcol is None:
+        log("[pcollect] --pipeline-collect ignored: needs --collect-workers > 0 "
+            "(a serial trainer has nothing to overlap the update with)")
+        pipeline = False
+    if pipeline:
+        log("[pcollect] PIPELINED collection: iteration N+1's games play during "
+            "N's update (behavior policy one update stale; see Config.pipeline_collect)")
+    pipe_pending = None                # (specs, metas, futures) of the in-flight iteration
 
     resuming = resume_path is not None and os.path.exists(resume_path)
     try:
@@ -532,6 +545,64 @@ def train(cfg: Config, models: Models | None = None, log=print,
 
         benv = BeliefAugmentedEnv(m.guesser, belief=cfg.use_belief, max_decisions=cfg.max_decisions,
                                   enforce_free_attack=cfg.enforce_free_attack)
+
+        def _split_games() -> tuple:
+            """(n_self, n_pool, n_scen) for one iteration -- pure cfg, shared by the
+            serial branch and _pspecs so the two can never drift apart."""
+            n_scen = (int(round(cfg.games_per_iter * cfg.scenario_frac))
+                      if cfg.scenario_frac > 0 else 0)
+            n_scen = max(0, min(n_scen, cfg.games_per_iter))
+            if cfg.scenarios_in_pool:
+                n_scen = 0                              # scenarios come out of the pool budget
+            rest = cfg.games_per_iter - n_scen
+            n_pool = int(round(rest * cfg.pool_frac))
+            n_pool = max(0, min(n_pool, rest))
+            return rest - n_pool, n_pool, n_scen
+
+        def _pspecs(done_it: int) -> tuple:
+            """Game specs + bookkeeping metas for PARALLEL collection of iteration
+            `done_it`. Makes EXACTLY the same sampling decisions (same RNG streams,
+            seeds and seat parity) as the serial branch in the loop below -- keep
+            the two in lockstep when editing either. A function of the iteration
+            counter so pipelined mode can build iteration N+1's specs before N's
+            bookkeeping lands (league EMAs are then one iteration stale for
+            sampling -- part of the disclosed staleness regime)."""
+            n_self, n_pool, n_scen = _split_games()
+            seed = cfg.seed + 1000 + done_it * cfg.games_per_iter
+            specs, metas = [], []
+            for gi in range(n_self):
+                specs.append({"kind": "self", "seed": seed + gi})
+                metas.append(("mirror", None, None))
+            pool_rng = np.random.default_rng(cfg.seed + 900_000 + done_it)
+            for pidx in range(n_pool):
+                oseed = cfg.seed + 500_000 + done_it * cfg.games_per_iter + pidx * 17
+                member = league.sample(pool_rng)
+                if member is None:                      # empty league -> mirror fallback
+                    specs.append({"kind": "self", "seed": oseed})
+                    metas.append(("mirror", None, None))
+                elif member.kind == "scenario":
+                    specs.append({"kind": "scenario", "name": member.name, "seed": oseed})
+                    metas.append(("pool_scen", member, "p1"))
+                elif member.kind.startswith("heuristic"):
+                    specs.append({"kind": "heuristic", "profile": member.kind, "seed": oseed})
+                    metas.append(("pool", member, "p1"))
+                else:
+                    lseat = "p1" if pidx % 2 == 0 else "p2"
+                    spec = {"kind": "opponent", "okind": member.kind,
+                            "seed": oseed, "lseat": lseat}
+                    if member.kind == "self":           # frozen nets ride with the spec
+                        spec["opp_state"] = pcol.opp_state_for(member)
+                    specs.append(spec)
+                    metas.append(("pool", member, lseat))
+            if n_scen > 0 and scen_league is not None and scen_league.members():
+                scn_rng = np.random.default_rng(cfg.seed + 700_000 + done_it)
+                for sidx in range(n_scen):
+                    smember = scen_league.sample(scn_rng)
+                    sseed = cfg.seed + 300_000 + done_it * cfg.games_per_iter + sidx * 31
+                    specs.append({"kind": "scenario", "name": smember.name, "seed": sseed})
+                    metas.append(("carve_scen", smember, "p1"))
+            return specs, metas
+
         run_start = time.perf_counter()         # exclude warmup/resume setup from elapsed
         last_report = last_ckpt = run_start
 
@@ -554,56 +625,30 @@ def train(cfg: Config, models: Models | None = None, log=print,
             # buffer (each sub-collect runs critic=None). pool_frac<=0 -> pure self-play.
             # Carve scenario-seeded games out first; the rest splits self-play / PFSP pool
             # exactly as before. scenario_frac <= 0 -> n_scen 0 -> unchanged behaviour.
-            n_scen = int(round(cfg.games_per_iter * cfg.scenario_frac)) if cfg.scenario_frac > 0 else 0
-            n_scen = max(0, min(n_scen, cfg.games_per_iter))
-            if cfg.scenarios_in_pool:
-                n_scen = 0                              # scenarios come out of the pool budget
-            rest = cfg.games_per_iter - n_scen
-            n_pool = int(round(rest * cfg.pool_frac))
-            n_pool = max(0, min(n_pool, rest))
-            n_self = rest - n_pool
+            n_self, n_pool, n_scen = _split_games()
             seed = cfg.seed + 1000 + done * cfg.games_per_iter
             t_collect = time.perf_counter()
             if pcol is not None:
-                # ── Parallel path. The spec-building below makes EXACTLY the same
-                # sampling decisions (same RNG streams, seeds and seat parity) as the
-                # serial branch in the else: -- keep the two in lockstep when editing
-                # either. Games run on the worker pool with THIS iteration's weights
-                # (strictly on-policy, like serial); buffers come back in spec order
-                # and every piece of bookkeeping is applied here on the main thread.
-                specs, metas = [], []
-                for gi in range(n_self):
-                    specs.append({"kind": "self", "seed": seed + gi})
-                    metas.append(("mirror", None, None))
-                pool_rng = np.random.default_rng(cfg.seed + 900_000 + done)
-                for pidx in range(n_pool):
-                    oseed = cfg.seed + 500_000 + done * cfg.games_per_iter + pidx * 17
-                    member = league.sample(pool_rng)
-                    if member is None:                      # empty league -> mirror fallback
-                        specs.append({"kind": "self", "seed": oseed})
-                        metas.append(("mirror", None, None))
-                    elif member.kind == "scenario":
-                        specs.append({"kind": "scenario", "name": member.name, "seed": oseed})
-                        metas.append(("pool_scen", member, "p1"))
-                    elif member.kind.startswith("heuristic"):
-                        specs.append({"kind": "heuristic", "profile": member.kind, "seed": oseed})
-                        metas.append(("pool", member, "p1"))
-                    else:
-                        lseat = "p1" if pidx % 2 == 0 else "p2"
-                        spec = {"kind": "opponent", "okind": member.kind,
-                                "seed": oseed, "lseat": lseat}
-                        if member.kind == "self":           # frozen nets ride with the spec
-                            spec["opp_state"] = pcol.opp_state_for(member)
-                        specs.append(spec)
-                        metas.append(("pool", member, lseat))
-                if n_scen > 0 and scen_league is not None and scen_league.members():
-                    scn_rng = np.random.default_rng(cfg.seed + 700_000 + done)
-                    for sidx in range(n_scen):
-                        smember = scen_league.sample(scn_rng)
-                        sseed = cfg.seed + 300_000 + done * cfg.games_per_iter + sidx * 31
-                        specs.append({"kind": "scenario", "name": smember.name, "seed": sseed})
-                        metas.append(("carve_scen", smember, "p1"))
-                bufs = pcol.collect(m, specs, done)
+                # ── Parallel path. Specs come from _pspecs (kept in lockstep with the
+                # serial branch in the else:); buffers come back in spec order and every
+                # piece of bookkeeping is applied here on the main thread.
+                if pipeline:
+                    # This iteration's games were submitted during the previous one
+                    # (first pass: submit now). Then start N+1's games BEFORE the
+                    # update below, with the current -- pre-update -- weights: that is
+                    # exactly the one-update staleness the flag buys throughput with.
+                    # collect_s under pipeline therefore measures the STALL waiting
+                    # for workers, not the games' wall-clock.
+                    if pipe_pending is None:
+                        specs, metas = _pspecs(done)
+                        pipe_pending = (specs, metas, pcol.submit(m, specs, done))
+                    specs, metas, futs = pipe_pending
+                    bufs = pcol.gather(futs, len(specs))
+                    nspecs, nmetas = _pspecs(done + 1)
+                    pipe_pending = (nspecs, nmetas, pcol.submit(m, nspecs, done + 1))
+                else:
+                    specs, metas = _pspecs(done)
+                    bufs = pcol.collect(m, specs, done)   # strictly on-policy
                 buf = RolloutBuffer()
                 for (tag, member, lseat), gbuf in zip(metas, bufs):
                     won = gbuf.games[-1] if gbuf.games else None

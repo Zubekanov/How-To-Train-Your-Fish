@@ -205,22 +205,35 @@ class ParallelCollector:
         MB alongside the per-chunk learner shipment is noise."""
         return (_cpu_state(member.models.actor), _cpu_state(member.models.guesser))
 
-    def collect(self, m, specs: list, it: int) -> list:
-        """Round-robin the specs over the workers; one weights shipment per chunk."""
+    def submit(self, m, specs: list, it: int) -> list:
+        """Ship the CURRENT weights of `m` and start the specs' games on the pool;
+        returns the futures. Round-robin chunking; one weights shipment per chunk.
+        Split from `gather` so a pipelined trainer can overlap the games with the
+        GPU update -- the weights are snapshotted HERE, so what the games are
+        played with is fixed at submit time regardless of later updates to `m`."""
         for i, s in enumerate(specs):
             s["idx"] = i
         learner_blob = pickle.dumps(
             {"actor": _cpu_state(m.actor), "guesser": _cpu_state(m.guesser)},
             protocol=pickle.HIGHEST_PROTOCOL)          # serialize ONCE, memcpy per chunk
         chunks = [specs[w::self.workers] for w in range(self.workers)]
-        futs = [self._ex.submit(_collect_chunk, learner_blob, chunk,
+        return [self._ex.submit(_collect_chunk, learner_blob, chunk,
                                 (it * 1009 + w) % (2**31))
                 for w, chunk in enumerate(chunks) if chunk]
+
+    @staticmethod
+    def gather(futs: list, n_specs: int) -> list:
+        """Block on the futures and return the RolloutBuffers in spec order."""
         out: dict = {}
         for f in futs:
             for idx, buf in f.result():
                 out[idx] = buf
-        return [out[i] for i in range(len(specs))]
+        return [out[i] for i in range(n_specs)]
+
+    def collect(self, m, specs: list, it: int) -> list:
+        """Synchronous submit+gather: play every spec with the CURRENT weights of
+        `m` (strictly on-policy, exactly like the serial path)."""
+        return self.gather(self.submit(m, specs, it), len(specs))
 
     def close(self) -> None:
         self._ex.shutdown(wait=False, cancel_futures=True)

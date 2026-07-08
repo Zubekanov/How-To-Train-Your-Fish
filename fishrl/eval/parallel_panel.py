@@ -32,17 +32,23 @@ BEST, BEST_META = "best.pt", "best.json"
 _G: dict = {}
 
 
-def _init(cfg_dict: dict, models_state: dict, frozen_state: dict, max_decisions: int) -> None:
+def _init(cfg_dict: dict, models_state: dict, frozen_state: dict, max_decisions: int,
+          affinity: list | None = None) -> None:
     """Subprocess initializer: rebuild the two policies once per worker and pin to 1 thread.
 
     Parallelism here is across processes; letting each worker also spin up a BLAS/torch
-    thread pool would oversubscribe the box, so we cap intra-op threads to 1."""
+    thread pool would oversubscribe the box, so we cap intra-op threads to 1. `affinity`
+    optionally restricts the worker to given logical processors -- on the hybrid PC the
+    launchers park panel workers on E-cores so a mid-session panel never time-slices
+    against the trainer's P-core-pinned collectors (see Config.collect_affinity)."""
     import torch
 
     from fishrl.train.config import Config
+    from fishrl.train.pcollect import _apply_affinity
     from fishrl.train.train_loop import build_models, _load_model_state
 
     torch.set_num_threads(1)
+    _apply_affinity(affinity or [])
     per_net = {f"{n}_encoder": cfg_dict["encoders"][n] for n in NETS}
     cfg = Config(seed=cfg_dict["seed"], use_belief=cfg_dict.get("use_belief", True),
                  critic_hidden=tuple(cfg_dict.get("critic_hidden", (512, 512, 256))), **per_net)
@@ -219,7 +225,8 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
                    max_decisions: int = 2000, save_best: bool = False,
                    reserve_cores: int = 0, n_random: int | None = None,
                    n_attacker: int | None = None, n_frozen: int | None = None,
-                   harvest: dict | None = None, harvest_from: int | None = None) -> dict:
+                   harvest: dict | None = None, harvest_from: int | None = None,
+                   affinity: str = "") -> dict:
     """Compute win-rates vs random / attacker / heuristic / frozen-self from a checkpoint,
     fanning the games across a process pool. Returns the rates plus eval metadata.
 
@@ -256,9 +263,11 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
     half = max(2, nf // 2)
     fch = _chunks(half, workers)
 
+    from fishrl.train.pcollect import parse_affinity
     t0 = time.perf_counter()
     ex = ProcessPoolExecutor(max_workers=workers, initializer=_init,
-                             initargs=(cfg_dict, pl["models"], pl["frozen"], max_decisions))
+                             initargs=(cfg_dict, pl["models"], pl["frozen"], max_decisions,
+                                       parse_affinity(affinity)))
     try:
         futs = {
             "random":   [ex.submit(_task_random, s, c, SEED_RANDOM)
@@ -350,7 +359,8 @@ def run_once(args, ckpt_path: str, allow_harvest: bool) -> None:
                        max_decisions=args.max_decisions, save_best=not args.no_best,
                        reserve_cores=args.reserve_cores, n_random=args.n_random,
                        n_attacker=args.n_attacker, n_frozen=args.n_frozen,
-                       harvest=harvest, harvest_from=harvest_from)
+                       harvest=harvest, harvest_from=harvest_from,
+                       affinity=args.affinity)
     stats_io.append_eval(args.ckpt_dir, {                # dump this panel to stats.json["evals"]
         "it": r["it"], "frozen_at": r["frozen_it"], "elapsed_h": r["elapsed_h"],
         "wall_time": time.time(), "n": r["n"], "workers": r["workers"], "took_s": r["took_s"],
@@ -394,6 +404,10 @@ def main() -> None:
                     help="frozen-self match games (panel-only: not harvestable)")
     ap.add_argument("--max-workers", type=int, default=None)
     ap.add_argument("--max-decisions", type=int, default=2000)
+    ap.add_argument("--affinity", default="",
+                    help="comma-separated logical-processor indices the panel workers "
+                         "are restricted to (machine flag; the PC launchers park them "
+                         "on E-cores away from the trainer's collectors)")
     ap.add_argument("--reserve-cores", type=int, default=0,
                     help="keep this many CPUs free of eval workers (0 = historic behaviour)")
     ap.add_argument("--no-best", action="store_true",

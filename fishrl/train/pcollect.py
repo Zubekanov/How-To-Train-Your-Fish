@@ -25,6 +25,7 @@ path, byte-identical for the ODROID service).
 from __future__ import annotations
 
 import pickle
+import zlib
 from concurrent.futures import ProcessPoolExecutor
 from types import SimpleNamespace
 
@@ -158,17 +159,23 @@ def _collect_one(spec: dict):
                                enforce_free_attack=lite["enforce_free_attack"])
 
 
-def _collect_chunk(learner_blob: bytes, specs: list, torch_seed: int) -> list:
+def _collect_chunk(learner_blob: bytes, specs: list, torch_seed: int) -> bytes:
     """Load this iteration's learner weights once, then play the chunk's games.
-    Returns [(spec_index, RolloutBuffer), ...]. The weights arrive PRE-PICKLED:
-    the main process serializes the 14 MB state dict once per iteration instead
-    of once per chunk (the executor then only memcpys bytes per submit)."""
+    Returns [(spec_index, RolloutBuffer), ...] as a COMPRESSED pickle. The
+    weights arrive PRE-PICKLED: the main process serializes the 14 MB state
+    dict once per iteration instead of once per chunk (the executor then only
+    memcpys bytes per submit). The result is compressed HERE because the raw
+    buffers are large (~90 KB/step, dominated by mostly-zero obs vectors that
+    zlib crushes ~10x) -- shrinking both the queue traffic and the commit
+    spike whose allocation failure once killed a whole session (MemoryError
+    inside the executor's own result pickling, where no user code can catch)."""
     import torch
     torch.manual_seed(torch_seed)                      # reproducible action sampling per chunk
     learner_state = pickle.loads(learner_blob)
     _G["actor"].load_state_dict(learner_state["actor"])
     _G["guesser"].load_state_dict(learner_state["guesser"])
-    return [(spec["idx"], _collect_one(spec)) for spec in specs]
+    out = [(spec["idx"], _collect_one(spec)) for spec in specs]
+    return zlib.compress(pickle.dumps(out, protocol=pickle.HIGHEST_PROTOCOL), 1)
 
 
 # ── main-process side ─────────────────────────────────────────────────────────
@@ -183,6 +190,7 @@ class ParallelCollector:
 
     def __init__(self, cfg, workers: int):
         self.workers = workers
+        self._last_blob: bytes = b""
         scen_names: list = []
         if cfg.scenario_frac > 0 or cfg.scenarios_in_pool:
             from fishrl.train.scenarios import scenario_names
@@ -194,8 +202,18 @@ class ParallelCollector:
                 "enforce_free_attack": cfg.enforce_free_attack,
                 "scenario_names": scen_names,
                 "affinity": parse_affinity(getattr(cfg, "collect_affinity", ""))}
-        self._ex = ProcessPoolExecutor(max_workers=workers,
-                                       initializer=_winit, initargs=(lite,))
+        # Recycle each worker after this many chunks: a fresh process resets the
+        # hour-scale allocator creep of long-lived torch workers (each worker is
+        # ~1.7 GB commit at BIRTH -- torch's runtime alone is 1.55 GB -- and only
+        # grows). All workers hit the cap on the same iteration (round-robin, one
+        # chunk each), so expect one slow re-warm iteration every `recycle` iters.
+        try:
+            self._ex = ProcessPoolExecutor(max_workers=workers,
+                                           initializer=_winit, initargs=(lite,),
+                                           max_tasks_per_child=512)
+        except TypeError:                              # python < 3.11: no recycling
+            self._ex = ProcessPoolExecutor(max_workers=workers,
+                                           initializer=_winit, initargs=(lite,))
 
     @staticmethod
     def opp_state_for(member) -> tuple:
@@ -207,26 +225,46 @@ class ParallelCollector:
 
     def submit(self, m, specs: list, it: int) -> list:
         """Ship the CURRENT weights of `m` and start the specs' games on the pool;
-        returns the futures. Round-robin chunking; one weights shipment per chunk.
-        Split from `gather` so a pipelined trainer can overlap the games with the
-        GPU update -- the weights are snapshotted HERE, so what the games are
-        played with is fixed at submit time regardless of later updates to `m`."""
+        returns [(future, chunk, seed), ...] work items (gather needs the args to
+        resubmit a failed chunk). Round-robin chunking; one weights shipment per
+        chunk. Split from `gather` so a pipelined trainer can overlap the games
+        with the GPU update -- the weights are snapshotted HERE, so what the games
+        are played with is fixed at submit time regardless of later updates to `m`."""
         for i, s in enumerate(specs):
             s["idx"] = i
         learner_blob = pickle.dumps(
             {"actor": _cpu_state(m.actor), "guesser": _cpu_state(m.guesser)},
             protocol=pickle.HIGHEST_PROTOCOL)          # serialize ONCE, memcpy per chunk
-        chunks = [specs[w::self.workers] for w in range(self.workers)]
-        return [self._ex.submit(_collect_chunk, learner_blob, chunk,
-                                (it * 1009 + w) % (2**31))
-                for w, chunk in enumerate(chunks) if chunk]
+        self._last_blob = learner_blob                 # for gather's resubmit path
+        items = []
+        for w, chunk in enumerate(specs[w::self.workers] for w in range(self.workers)):
+            if chunk:
+                seed = (it * 1009 + w) % (2**31)
+                items.append((self._ex.submit(_collect_chunk, learner_blob, chunk, seed),
+                              chunk, seed))
+        return items
 
-    @staticmethod
-    def gather(futs: list, n_specs: int) -> list:
-        """Block on the futures and return the RolloutBuffers in spec order."""
+    def gather(self, items: list, n_specs: int) -> list:
+        """Block on the work items and return the RolloutBuffers in spec order.
+
+        One retry per chunk: the observed failure mode is a TRANSIENT MemoryError
+        under system commit pressure (an eval-panel burst adds ~14 GB of worker
+        processes for a couple of minutes), and losing a whole session to one
+        unlucky allocation is far worse than replaying one chunk 10s later."""
         out: dict = {}
-        for f in futs:
-            for idx, buf in f.result():
+        for fut, chunk, seed in items:
+            try:
+                blob = fut.result()
+            except Exception as e:                     # noqa: BLE001 -- retry ANY chunk failure once
+                import gc
+                import time as _t
+                print(f"[pcollect] chunk of {len(chunk)} game(s) failed ({e!r}); "
+                      f"retrying once in 10s", flush=True)
+                gc.collect()
+                _t.sleep(10)
+                blob = self._ex.submit(_collect_chunk, self._last_blob,
+                                       chunk, seed).result()
+            for idx, buf in pickle.loads(zlib.decompress(blob)):
                 out[idx] = buf
         return [out[i] for i in range(n_specs)]
 

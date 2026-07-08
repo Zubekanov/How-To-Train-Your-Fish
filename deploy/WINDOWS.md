@@ -64,18 +64,40 @@ workers at startup (one-time, parallel — expect a ~30s first iteration when
 scenarios are enabled). `0` (default) is the serial path, byte-identical:
 what the ODROID service runs.
 
-### `--collect-affinity LP,LP,…`
+### `--collect-affinity LP,LP,…` (+ the panel's `--affinity`)
 
 This box's i7-14700KF is hybrid (8 P-cores as logical processors 0–15 in
 hyperthread pairs, 12 E-cores as LPs 16–27) and **Windows 10's scheduler is
 not hybrid-aware**: unpinned collector workers drift onto E-cores, measured
 **2.3× slower per decision** (1.4 ms/dec on a P-core vs 3.3 ms on an E-core
-for this workload). `--collect-affinity 0,2,4,6,8,10,12,14` restricts every
-worker to one LP per physical P-core; with 8 workers the scheduler settles
-one on each, and the main process / eval panel / OS get the E-cores and HT
-siblings. Machine flag only — placement, never training semantics; default
-`""` (unpinned) everywhere else, including the ODROID. Give at least as many
-LPs as workers or they queue inside the mask.
+for this workload). The launchers therefore split the machine:
+
+* trainer collectors → `--collect-affinity 0,…,15` (the full P set: the
+  scheduler puts 8 workers one per physical core when free, and they can
+  shift among HT siblings when something intrudes — a strict one-LP-per-core
+  pin measured SLOWER in real sessions because a floating eval panel
+  time-sliced against workers that had nowhere to move),
+* eval panel workers → `--affinity 16,…,27` (E-cores): panels are
+  deadline-insensitive (they only must finish inside the 15-min cadence), so
+  they take the slow cores and never touch the collectors.
+
+Machine flags only — placement, never training semantics; default `""`
+(unpinned) everywhere else, including the ODROID.
+
+### Memory: why a session once died with `MemoryError`
+
+Every torch process costs **~1.6 GB of commit at birth** (the runtime alone,
+before any work). A training session runs 1 main + 8 collectors, and each
+15-min panel adds 8 more for a couple of minutes — a ~14 GB commit burst on
+top. With Windows' small default system-managed pagefile, one such burst
+exhausted total system commit and a collector died mid-result — the trainer
+crashed (the relay handed the lineage back untouched). Defenses now in the
+code: workers recycle every 512 chunks (`max_tasks_per_child` — bounds the
+hour-scale allocator creep of long-lived workers), results ship zlib-packed
+(~10× smaller pickles, so no more multi-hundred-MB spikes), and a failed
+chunk is retried once after 10 s instead of killing the session. If it ever
+recurs, set a fixed pagefile (e.g. 32 GB) in SystemPropertiesAdvanced →
+Performance → Virtual memory.
 
 ### `--pipeline-collect` (regime, off by default)
 

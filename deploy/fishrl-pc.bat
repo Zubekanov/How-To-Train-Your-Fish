@@ -24,7 +24,7 @@ set "PY=%REPO%\.venv\Scripts\python.exe"
 start "fishrl dashboard" /min powershell -NoProfile -ExecutionPolicy Bypass -File "%REPO%\deploy\fishrl-serve.ps1"
 rem Win-rate panels while the session trains (the PC's stand-in for the ODROID's
 rem hourly eval timer): waits for the trainer, evals every 15 min, exits with it.
-start "fishrl eval" /min "%PY%" -m fishrl.eval.parallel_panel --ckpt-dir "%REPO%\checkpoints" --follow 900 --reserve-cores 12
+start "fishrl eval" /min "%PY%" -m fishrl.eval.parallel_panel --ckpt-dir "%REPO%\checkpoints" --follow 900 --reserve-cores 12 --affinity 16,17,18,19,20,21,22,23,24,25,26,27
 ping -n 4 127.0.0.1 >nul
 start "" "http://%COMPUTERNAME%:8765/"
 
@@ -36,7 +36,7 @@ set /p REGIME=<"%REPO%\deploy\train.args"
     %REGIME% ^
     --report-every-seconds 900 --report-winrate-games 0 ^
     --checkpoint-every-seconds 900 ^
-    --gpu --collect-workers 8 --reserve-cores 2 --collect-affinity 0,2,4,6,8,10,12,14
+    --gpu --collect-workers 8 --reserve-cores 2 --collect-affinity 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
 
 echo.
 echo Session ended. If the handback failed above, the lineage is still on this

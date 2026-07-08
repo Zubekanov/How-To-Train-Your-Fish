@@ -77,6 +77,30 @@ siblings. Machine flag only — placement, never training semantics; default
 `""` (unpinned) everywhere else, including the ODROID. Give at least as many
 LPs as workers or they queue inside the mask.
 
+### `--pipeline-collect` (regime, off by default)
+
+Collect iteration N+1's games on the worker pool **while** the GPU updates on
+N's batch, instead of after it. The behavior policy is one update stale —
+exactly the lag PPO's importance ratio + clip absorb. Measured on this box
+(i7-14700KF, 40 iters from the it≈175k lineage checkpoint, idle machine):
+
+| variant | s/it | it/h | transitions/h |
+|---|---|---|---|
+| gpi 8, 8 workers pinned (baseline) | 2.64 | 1361 | 2.60 M |
+| gpi 16, 16 workers (8P+8E) | 5.02 | 717 | 2.74 M |
+| baseline + `--pipeline-collect` | 1.71 | 2108 | **3.93 M** |
+| gpi 16 + `--pipeline-collect` | 3.31 | 1089 | 3.97 M |
+
+**+51% transitions/hour** over the strict baseline; staleness signature mild
+(approx_kl 0.011→0.011 mean / 0.017→0.025 p90, clip_frac 0.042→0.049,
+entropy unchanged). `--games-per-iter 16` is NOT worth it here: its 16th–9th
+workers sit on E-cores whose games straggle the whole iteration (+5% for 2×
+batch size), and with pipelining it matches the gpi-8 pipeline anyway — keep
+gpi 8. Not in the launchers by default: it changes data-generation semantics
+(regime), so enable it deliberately and judge the win-rate trend. Report rows
+carry `"pipeline": true` so regimes stay separable in telemetry. Requires
+`--collect-workers > 0`; the serial ODROID trainer ignores it with a warning.
+
 ### `--reserve-cores N`
 
 Keeps N **physical** cores free of training threads so the machine stays

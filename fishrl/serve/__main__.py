@@ -356,11 +356,14 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- SSE ---------------------------------------------------------------------
     def _stream(self, since_it) -> None:
-        """Push new rows as they appear. Cursor = per-array row COUNT (rows only
-        ever append; on the rare shrink -- an offline stats merge rewrote history --
-        the cursor resets to the new end rather than replaying the whole file).
-        ``Last-Event-ID``/``since_it`` seed the cursors so a reconnecting client
-        first gets everything it missed."""
+        """Push new rows as they appear. Cursor = the IDENTITY (it, wall_time) of
+        the last row seen per array, NOT a row count: ticks.json is a RING capped
+        at a fixed length, so once full its length never changes and a count
+        cursor emits nothing forever (the bug that froze the tick-driven panels).
+        On change we scan from the end for the last-seen row and emit what
+        follows; identity not found (history rewritten by a merge, or the client
+        lagged a whole ring turnover) resyncs to the end -- the reconnect replay
+        (``Last-Event-ID``/``since_it``) is the catch-up path for lost spans."""
         replay_from = since_it
         if replay_from is None:
             hdr = self.headers.get("Last-Event-ID")
@@ -386,22 +389,28 @@ class Handler(BaseHTTPRequestHandler):
 
         kinds = ("reports", "evals", "ticks")
         event_name = {"reports": "report", "evals": "eval", "ticks": "tick"}
+
+        def ident(row: dict) -> tuple:
+            return (row.get("it"), row.get("wall_time"))
+
         # Snapshot mtimes BEFORE reading any rows: a write that lands between the
         # snapshot and the reads below then registers as a change on the first poll,
         # and the cursors (set from what was actually read) keep it duplicate-free.
         # The other order silently absorbs such a write into the baseline.
         last_mtimes = self.store.mtimes()
         best_mtime = last_mtimes[2]
+        last_id: dict = {}                               # kind -> ident of last row seen
         if replay_from is not None:                      # catch-up, then tail
-            cursor = {}
             for k in kinds:
                 rows = self.store.rows(k)
                 for row in rows:
                     if (row.get("it") or 0) > replay_from:
                         emit(event_name[k], row)
-                cursor[k] = len(rows)
+                last_id[k] = ident(rows[-1]) if rows else None
         else:
-            cursor = {k: len(self.store.rows(k)) for k in kinds}
+            for k in kinds:
+                rows = self.store.rows(k)
+                last_id[k] = ident(rows[-1]) if rows else None
         last_beat = time.time()
         self.wfile.flush()
         while True:
@@ -411,12 +420,18 @@ class Handler(BaseHTTPRequestHandler):
                 last_mtimes = mtimes
                 for k in kinds:
                     rows = self.store.rows(k)
-                    if len(rows) < cursor[k]:            # history rewritten (merge): skip ahead
-                        cursor[k] = len(rows)
-                        continue
-                    for row in rows[cursor[k]:]:
+                    start = len(rows)                    # ident missing -> resync to end
+                    if last_id[k] is None:
+                        start = 0                        # was empty: everything is new
+                    else:
+                        for i in range(len(rows) - 1, -1, -1):
+                            if ident(rows[i]) == last_id[k]:
+                                start = i + 1
+                                break
+                    for row in rows[start:]:
                         emit(event_name[k], row)
-                    cursor[k] = len(rows)
+                    if rows:
+                        last_id[k] = ident(rows[-1])
                 if mtimes[2] != best_mtime:              # best.json rolled
                     best_mtime = mtimes[2]
                     best = _read_json(os.path.join(self.store.dir, "best.json"))

@@ -79,12 +79,38 @@ def test_sse_replay_and_live_event(site):
                         if line.startswith("event:"))
         assert events == ["report", "tick", "tick", "tick"]     # it>15: r20 + t18,19,20
 
-        with open(os.path.join(d, "stats.json"), "w") as f:     # live append -> push
-            json.dump({"reports": [{"it": 10}, {"it": 20}, {"it": 30}], "evals": []}, f)
+        with open(os.path.join(d, "stats.json")) as f:          # live append -> push
+            cur = json.load(f)
+        cur["reports"].append({"it": 30, "wall_time": time.time()})
+        with open(os.path.join(d, "stats.json"), "w") as f:
+            json.dump(cur, f)
         deadline = time.time() + 10
         while time.time() < deadline and b'"it": 30' not in got:
             got += s.recv(65536)
         assert b'"it": 30' in got
+    finally:
+        s.close()
+
+
+def test_sse_keeps_emitting_from_a_full_ring(site):
+    """Regression: ticks.json is a fixed-cap RING -- once full its LENGTH stops
+    changing, and the old count-based stream cursor then never emitted another
+    tick (dashboards froze on every tick-driven panel while the append-only
+    arrays kept flowing). New rows must flow by row identity, without
+    replaying the rows that merely rotated."""
+    d, port = site
+    s = socket.create_connection(("127.0.0.1", port), timeout=15)
+    try:
+        s.sendall(b"GET /api/stream HTTP/1.1\r\nHost: x\r\n\r\n")
+        time.sleep(1.5)                                  # stream takes its baseline
+        with open(os.path.join(d, "ticks.json"), "w") as f:   # same length, window +1
+            json.dump({"schema": 1, "ticks": [{"it": i} for i in (19, 20, 21)]}, f)
+        got = b""
+        deadline = time.time() + 10
+        while time.time() < deadline and b'"it": 21' not in got:
+            got += s.recv(65536)
+        assert b'"it": 21' in got
+        assert got.count(b"event: tick") == 1            # the NEW row only, no replay
     finally:
         s.close()
 

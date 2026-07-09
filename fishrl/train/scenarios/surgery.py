@@ -96,8 +96,13 @@ def rebuild_library(g, iids, top=None, top_known_by=None) -> None:
                                      known_by={"p1": False, "p2": False}))
 
 
-def make_engine_heuristic(g, seat: str) -> None:
+def make_engine_heuristic(g, seat: str, profile: str = "heuristic") -> None:
     """Hand `seat` to the engine's heuristic AI (it then auto-draws + casts, while
-    the other seat stays controlled). Verified to take effect mid-game on a snapshot."""
+    the other seat stays controlled). Verified to take effect mid-game on a snapshot.
+    `profile` picks the vendored AI version ("heuristic" = v1.0, "heuristic_1_1",
+    "heuristic_1_2"); an unknown name would silently mean v1.0, so validate here."""
+    from fishrl.forgetful_fish.engine import _HEURISTIC_PROFILES
+    if profile not in _HEURISTIC_PROFILES:
+        raise ValueError(f"unknown heuristic profile {profile!r}; have {_HEURISTIC_PROFILES}")
     g.players[seat].is_ai = True
-    g.players[seat].ai_profile = "heuristic"
+    g.players[seat].ai_profile = profile

@@ -30,6 +30,10 @@ class Scenario:
     # Seat handed to the engine's heuristic AI after `_manufacture` (None: both
     # seats stay learner-controlled — the base self-play contract).
     engine_seat: str | None = None
+    # Which vendored heuristic drives that seat. v1.2 (the current testbench line)
+    # since 2026-07-10; earlier scenario games ran v1.0, so scenario_wr trends have
+    # a step DOWN at the upgrade (stronger opponent), not a regression in the agent.
+    engine_profile: str = "heuristic_1_2"
 
     def __init__(self):
         self._pool = None
@@ -68,5 +72,5 @@ class Scenario:
         g = copy.deepcopy(self._pool[int(rng.integers(len(self._pool)))])
         self._manufacture(g, rng)
         if self.engine_seat is not None:
-            make_engine_heuristic(g, self.engine_seat)
+            make_engine_heuristic(g, self.engine_seat, self.engine_profile)
         return g

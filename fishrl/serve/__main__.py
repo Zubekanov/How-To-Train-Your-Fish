@@ -20,9 +20,16 @@ Two channels, deliberately distinct:
     ``Last-Event-ID`` (or ``?since_it=N``) replays missed rows on reconnect.
 
 Endpoints: /api/summary (latest of everything + staleness + owner), the three
-range queries, /api/stream, and / (a minimal human status page). Responses set
-``Access-Control-Allow-Origin: *`` so a browser frontend served from another
-LAN host (the website) can fetch/stream directly.
+range queries, /api/stream, /api/archives + /archives/<file> (the permanent
+per-10k-iteration checkpoints -- see below), and / (a minimal human status
+page). Responses set ``Access-Control-Allow-Origin: *`` so a browser frontend
+served from another LAN host (the website) can fetch/stream directly.
+
+Archives: ``archive_########.pt`` files are written every 10k iterations and
+never pruned. They are PER-HOST -- the relay handoff zip does not carry them,
+so each machine holds the ones written during its own sessions -- which is why
+the archive routes serve the LOCAL set and are exempt from the peer redirect
+(redirecting would hide this host's archives, not find more).
 
 Peer redirect: after a relay handoff the lineage's live telemetry lives on the
 OTHER machine, and the relay leaves ``peer.json`` (the new owner's dashboard
@@ -42,8 +49,10 @@ primary LAN IPv4; pass an explicit address to override.
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
+import re
 import socket
 import subprocess
 import threading
@@ -62,6 +71,9 @@ STOP_FILE = "STOP"                                     # train_loop's stop-file 
 PEER = "peer.json"                                     # fishrl.train.ownership's name
 PEER_PROBE_TIMEOUT_S = 2.0
 PEER_PROBE_TTL_S = 15.0
+# The ONLY files the download route will serve: the permanent archives. Anchored
+# full-match on the basename = no traversal, no latest.pt/best.pt exposure.
+ARCHIVE_RE = re.compile(r"^archive_(\d{8})\.pt$")
 
 _peer_probe_cache: dict = {}                           # url -> (monotonic ts, alive)
 
@@ -117,6 +129,23 @@ class Store:
 
     def peer(self) -> dict | None:
         return _read_json(os.path.join(self.dir, PEER))
+
+    def archives(self) -> list:
+        """The permanent per-10k-iteration checkpoints in THIS host's ckpt dir,
+        oldest first: [{it, file, bytes, mtime}]."""
+        out = []
+        for p in sorted(glob.glob(os.path.join(self.dir, "archive_*.pt"))):
+            name = os.path.basename(p)
+            m = ARCHIVE_RE.match(name)
+            if m is None:
+                continue
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            out.append({"it": int(m.group(1)), "file": name,
+                        "bytes": st.st_size, "mtime": st.st_mtime})
+        return out
 
     def since(self, kind: str, since_it) -> list:
         rows = self.rows(kind)
@@ -299,6 +328,37 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _send_archive(self, name: str) -> None:
+        """Stream one archive checkpoint. `name` must full-match ARCHIVE_RE (the
+        route's whole safety story: no traversal, nothing but archives). Archives
+        are written atomically and never rewritten, so a plain streamed read is
+        always a complete, immutable file -- safe to cache on the client too."""
+        if ARCHIVE_RE.match(name) is None:
+            self._json({"error": f"not an archive name: {name!r} "
+                                 f"(want archive_########.pt; see /api/archives)"},
+                       code=404)
+            return
+        path = os.path.join(self.store.dir, name)
+        try:
+            size = os.path.getsize(path)
+            f = open(path, "rb")
+        except OSError:
+            self._json({"error": f"{name} not on this host (archives are per-host; "
+                                 f"see /api/archives here and on the peer)"}, code=404)
+            return
+        with f:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(size))
+            self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            while True:
+                chunk = f.read(1 << 20)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+
     # -- routes ----------------------------------------------------------------
     def do_GET(self):                                    # noqa: N802 (http.server API)
         u = urlparse(self.path)
@@ -313,6 +373,14 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"error": "actions disabled (--allow-actions)"}, code=403)
                 else:
                     self._json({"actions": self.actions.list()})
+            elif u.path == "/api/archives":
+                # LOCAL archives only, never peer-redirected: each host holds the
+                # archives written during ITS sessions (the relay zip skips them).
+                self._json({"archives": self.store.archives(),
+                            "host": socket.gethostname(),
+                            "download": "/archives/<file>"})
+            elif u.path.startswith("/archives/"):
+                self._send_archive(u.path[len("/archives/"):])
             elif u.path in ("/api/reports", "/api/evals", "/api/ticks", "/api/stream"):
                 target = self._peer_target()
                 if target is not None:                   # live data is on the peer

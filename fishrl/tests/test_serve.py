@@ -150,6 +150,52 @@ def test_wait_lan_ip_gives_up_to_loopback():
     assert calls["n"] == 1                       # expired deadline = no spin
 
 
+# ── archives (permanent per-10k checkpoints) ──────────────────────────────────
+
+def test_archives_list_and_download(site):
+    d, port = site
+    with open(os.path.join(d, "archive_00010000.pt"), "wb") as f:
+        f.write(b"ten-thousand")
+    with open(os.path.join(d, "archive_00020000.pt"), "wb") as f:
+        f.write(b"twenty-thousand")
+    with open(os.path.join(d, "archive_junk.pt"), "wb") as f:   # never listed/served
+        f.write(b"nope")
+
+    lst = _get(port, "/api/archives")["archives"]
+    assert [a["it"] for a in lst] == [10000, 20000]              # oldest first, junk excluded
+    assert lst[0]["file"] == "archive_00010000.pt" and lst[0]["bytes"] == 12
+
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/archives/archive_00020000.pt",
+                                timeout=10) as r:
+        assert r.read() == b"twenty-thousand"
+        assert "archive_00020000.pt" in r.headers["Content-Disposition"]
+
+
+def test_archive_route_serves_nothing_but_archives(site):
+    d, port = site
+    for path in ("/archives/archive_junk.pt",        # exists but not an archive name
+                 "/archives/stats.json",             # a real file the route must not expose
+                 "/archives/../stats.json",          # traversal
+                 "/archives/archive_00099999.pt"):   # valid name, absent -> per-host note
+        with pytest.raises(urllib.error.HTTPError) as e:
+            _get(port, path)
+        assert e.value.code == 404, path
+
+
+def test_archives_never_peer_redirected(site, monkeypatch):
+    """Archives are PER-HOST (the relay zip skips them): redirecting to the peer
+    would hide this host's set, so the archive routes bypass the redirect."""
+    import fishrl.serve.__main__ as sm
+    d, port = site
+    with open(os.path.join(d, "archive_00010000.pt"), "wb") as f:
+        f.write(b"x")
+    _stamp_peer(d)
+    monkeypatch.setattr(sm, "peer_alive", lambda _u: True)
+    assert _get(port, "/api/archives")["archives"][0]["it"] == 10000   # 200, local
+    status, _, body = _raw_get(port, "/archives/archive_00010000.pt")
+    assert status == 200 and body == b"x"
+
+
 # ── peer redirect (relay handoff telemetry) ───────────────────────────────────
 
 def _raw_get(port, path):

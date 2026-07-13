@@ -151,43 +151,67 @@ HARVEST_ANCHORS = ("heuristic", "heuristic11", "heuristic12", "attacker", "rando
 
 
 def plan_topup(targets: dict, harvest: dict | None) -> dict:
-    """Per-anchor top-up plan: ``{anchor: (deficit, wins_train, n_train)}``.
+    """Per-anchor plan: ``{anchor: (topup, wins_train, n_train)}``.
 
-    `targets` maps each HARVEST_ANCHORS entry to its total game target; `harvest`
-    is a report row's ``wr_train`` (None or a missing anchor -> no harvested games
-    -> the deficit is the full target, i.e. exactly the pre-harvest panel). The
-    attacker deficit is rounded UP to even -- its games alternate seats in pairs
-    -- so it may overshoot the target by one game."""
+    Harvested pool games ADD to the estimate; they do not displace top-up. The panel
+    always plays its full per-anchor target and the harvested games are EXTRA samples
+    on top, so the combined sample is ``n_train + target``. Harvest therefore buys
+    PRECISION -- a tighter win-rate curve -- at the historic panel cost.
+
+    It previously returned ``max(0, target - n_train)``, which capped the combined
+    sample at `target`: harvest bought a *cheaper* panel and the curves were no less
+    noisy for it. The heuristic anchors are the ones the pool actually plays (~1k games
+    per 5000-it dashboard window each), so uncapping them is what shrinks the noise
+    band; the starved anchors (random/attacker, ~100-200 pool games) are carried by
+    their top-up either way and stay the collapse canaries.
+
+    `harvest` is a report row's ``wr_train`` (None, or a missing anchor -> no harvested
+    games -> a plain full-target panel). The attacker top-up is rounded UP to even --
+    its games alternate seats in pairs."""
     out = {}
     for k in HARVEST_ANCHORS:
         w, n = (harvest or {}).get(k) or (0, 0)
-        w, n = int(w), int(n)
-        deficit = max(0, int(targets[k]) - n)
-        if k == "attacker" and deficit % 2:
-            deficit += 1
-        out[k] = (deficit, w, n)
+        topup = int(targets[k])
+        if k == "attacker" and topup % 2:
+            topup += 1
+        out[k] = (topup, int(w), int(n))
     return out
 
 
 def find_harvest(stats: dict, max_age_s: float, now: float) -> tuple:
-    """Pick the newest report row carrying usable harvest counts.
+    """Sum the harvest counts of EVERY report window not yet consumed by an earlier eval.
 
-    Returns ``(wr_train, report_it)`` or ``(None, None)`` when there is nothing to
-    harvest -- no row with ``wr_train`` (pre-harvest trainer), the newest one is
-    older than `max_age_s` (stalled/stopped trainer: its window no longer reflects
-    the checkpoint being evaluated), or it was already consumed by an earlier eval
-    row (``harvest_from``) -- double-counting the same window would just replay the
-    previous estimate. Every miss degrades to a FULL panel, never a thinner one."""
+    Returns ``(summed_wr_train, high_water_it)``, or ``(None, None)`` when there is
+    nothing to harvest (no row with ``wr_train`` -- a pre-harvest trainer -- or every
+    fresh row is too old).
+
+    Consumption is a HIGH-WATER MARK: an eval records the highest report ``it`` it
+    consumed as ``harvest_from``, and a later eval takes every report ABOVE that. Evals
+    run more often than reports, so the old "newest unconsumed row only" rule silently
+    DROPPED any report that landed while another eval was in flight; summing all fresh
+    rows recovers those games instead of discarding them. A window is still never
+    double-counted -- the mark only moves forward.
+
+    Rows older than `max_age_s` are skipped (a stalled/stopped trainer, or a backlog
+    after an eval outage: their window no longer reflects the checkpoint being
+    evaluated). Every miss degrades to a FULL panel, never a thinner one."""
     rows = [r for r in stats.get("reports", []) if r.get("wr_train")]
     if not rows:
         return None, None
-    row = max(rows, key=lambda r: (r.get("wall_time") or 0.0))
-    if now - (row.get("wall_time") or 0.0) > max_age_s:
+    seen = [e.get("harvest_from") for e in stats.get("evals", [])]
+    hwm = max([int(c) for c in seen if c is not None], default=-1)
+    fresh = [r for r in rows
+             if int(r.get("it", -1)) > hwm
+             and now - (r.get("wall_time") or 0.0) <= max_age_s]
+    if not fresh:
         return None, None
-    consumed = {e.get("harvest_from") for e in stats.get("evals", [])}
-    if row.get("it") in consumed:
-        return None, None
-    return row["wr_train"], row.get("it")
+    total: dict = {}
+    for r in fresh:
+        for k, wn in r["wr_train"].items():
+            e = total.setdefault(k, [0, 0])
+            e[0] += int(wn[0])
+            e[1] += int(wn[1])
+    return total, max(int(r["it"]) for r in fresh)
 
 
 def _maybe_save_best(ckpt_dir: str, payload: dict, r: dict) -> bool:
@@ -232,10 +256,11 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
 
     `n_games` is the heuristic/heuristic11/heuristic12 target; `n_random`/`n_attacker`/`n_frozen`
     default to it (tiered targets: random saturates early, frozen is the most
-    expensive anchor). With `harvest` (a report row's ``wr_train``), the panel only
-    plays each anchor's DEFICIT below target and publishes the combined
-    harvested+top-up estimate under the usual keys -- consumers see one number per
-    anchor either way. No harvest -> full-target panel, the historic behaviour.
+    expensive anchor). The panel always plays the full target per anchor; with
+    `harvest` (summed ``wr_train`` from the report windows since the last eval) those
+    pool games are ADDED, so the published estimate is over ``n_train + target`` games
+    -- more samples, not a cheaper panel. Consumers see one number per anchor either
+    way. No harvest -> plain full-target panel, the historic behaviour.
 
     When `save_best`, also roll best.pt (highest heuristic win-rate seen) next to the
     checkpoint; the returned dict carries `new_best` (bool). The gate reads the same

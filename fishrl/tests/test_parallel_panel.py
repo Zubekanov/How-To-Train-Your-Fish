@@ -70,22 +70,40 @@ TARGETS = {"heuristic": 100, "heuristic11": 100, "heuristic12": 100,
            "attacker": 50, "random": 30}
 
 
-def test_plan_topup_deficits_and_even_rounding():
-    # Deficit = target - harvested games; attacker rounds UP to even (seat pairs);
-    # over-target harvest -> 0 deficit; missing anchors -> full target.
+def test_plan_topup_adds_harvest_on_top_of_a_full_panel():
+    # Harvest ADDS samples; it never shrinks the top-up. The panel always plays the
+    # full target, so the combined estimate is over (n_train + target) games -- that
+    # is what tightens the win-rate curves. Attacker rounds UP to even (seat pairs).
     p = plan_topup(TARGETS, {"heuristic": [34, 40], "attacker": [5, 9], "random": [30, 31],
                              "heuristic12": [11, 126]})
-    assert p["heuristic"] == (60, 34, 40)
-    assert p["attacker"] == (42, 5, 9)               # 41 -> 42, even
-    assert p["random"] == (0, 30, 31)                # already past target: no games
+    assert p["heuristic"] == (100, 34, 40)           # full 100 top-up + 40 harvested
+    assert p["attacker"] == (50, 5, 9)               # target 50 already even
+    assert p["random"] == (30, 30, 31)               # still topped up: pool starves it
     assert p["heuristic11"] == (100, 0, 0)           # nothing harvested -> full panel
-    assert p["heuristic12"] == (0, 11, 126)          # v1.2 over-target: harvest only
+    assert p["heuristic12"] == (100, 11, 126)        # over-target harvest is kept, not dropped
+
+
+def test_plan_topup_attacker_rounds_odd_target_up_to_even():
+    p = plan_topup({**TARGETS, "attacker": 41}, None)
+    assert p["attacker"][0] == 42
 
 
 def test_plan_topup_no_harvest_is_the_full_panel():
     p = plan_topup(TARGETS, None)
     assert {k: v[0] for k, v in p.items()} == TARGETS
     assert all(v[1] == 0 and v[2] == 0 for v in p.values())
+
+
+def test_find_harvest_sums_every_unconsumed_window():
+    # Evals run more often than reports, so a report can land while another eval is in
+    # flight. All rows above the high-water mark are summed -- none are dropped.
+    now = 1_000_000.0
+    a = {"it": 40, "wall_time": now - 300, "wr_train": {"heuristic": [1, 2]}}
+    b = {"it": 42, "wall_time": now - 60, "wr_train": {"heuristic": [3, 5], "random": [1, 1]}}
+    wr, it = find_harvest({"reports": [a, b], "evals": []}, 7200, now)
+    assert it == 42                                   # new high-water mark
+    assert wr["heuristic"] == [4, 7]                  # 1+3 wins of 2+5 games (both windows)
+    assert wr["random"] == [1, 1]
 
 
 def test_find_harvest_guards():
@@ -95,16 +113,21 @@ def test_find_harvest_guards():
                           "attacker": [0, 1], "random": [1, 1]}}
     old = {"it": 30, "wall_time": now - 9_999, "wr_train": {"heuristic": [9, 9]}}
 
-    # newest usable row wins
+    # a stale row is skipped, the usable one is still harvested
     wr, it = find_harvest({"reports": [old, fresh], "evals": []}, 7200, now)
-    assert it == 42 and wr["heuristic"] == [1, 2]
+    assert it == 42 and wr["heuristic"] == [1, 2]     # `old` excluded by max_age
     # no wr_train rows at all (pre-harvest trainer) -> no harvest
     assert find_harvest({"reports": [{"it": 1}], "evals": []}, 7200, now) == (None, None)
-    # newest row too old (stalled trainer) -> no harvest
+    # every row too old (stalled trainer) -> no harvest
     assert find_harvest({"reports": [old], "evals": []}, 7200, now) == (None, None)
-    # already consumed by an earlier eval -> no harvest (never double-count a window)
+    # at/below the high-water mark -> no harvest (a window is never double-counted)
     stats = {"reports": [fresh], "evals": [{"it": 50, "harvest_from": 42}]}
     assert find_harvest(stats, 7200, now) == (None, None)
+    # the mark only blocks what it covers: a LATER report is still harvested
+    later = {"it": 43, "wall_time": now - 30, "wr_train": {"heuristic": [2, 3]}}
+    stats = {"reports": [fresh, later], "evals": [{"it": 50, "harvest_from": 42}]}
+    wr, it = find_harvest(stats, 7200, now)
+    assert it == 43 and wr["heuristic"] == [2, 3]
 
 
 def test_harvest_counting_convention():

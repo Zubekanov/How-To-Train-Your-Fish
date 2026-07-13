@@ -55,6 +55,7 @@ import os
 import re
 import socket
 import subprocess
+import sys
 import threading
 import time
 import urllib.request
@@ -548,6 +549,27 @@ def wait_lan_ip(timeout: float = 60.0, poll: float = 2.0,
     return ip
 
 
+class _Server(ThreadingHTTPServer):
+    """ThreadingHTTPServer that stays quiet when a client simply goes away.
+
+    We speak HTTP/1.1, so connections are keep-alive: after a response the handler
+    blocks in ``handle_one_request`` reading the NEXT request line. When the peer
+    disappears (browser tab closed, or the dashboard's SSE feed dropped as a session
+    hands back) that read raises ConnectionAbortedError / ConnectionResetError, OUTSIDE
+    any handler method -- so the per-write guards in the SSE endpoints can't catch it,
+    and socketserver's default ``handle_error`` dumps a full traceback for what is a
+    routine disconnect. It looks like a crash in the hand-back logs; it isn't.
+
+    Swallow exactly that family (all are ConnectionError subclasses); every other
+    exception still prints, so real handler bugs stay loud.
+    """
+
+    def handle_error(self, request, client_address):
+        if isinstance(sys.exc_info()[1], ConnectionError):
+            return
+        super().handle_error(request, client_address)
+
+
 def serve(ckpt_dir: str, bind: str, port: int,
           actions: Actions | None = None, redirect: bool = True) -> ThreadingHTTPServer:
     addr = wait_lan_ip() if bind == "auto" else bind
@@ -556,7 +578,7 @@ def serve(ckpt_dir: str, bind: str, port: int,
     Handler.store = Store(ckpt_dir)
     Handler.actions = actions
     Handler.redirect = redirect
-    httpd = ThreadingHTTPServer((addr, port), Handler, bind_and_activate=False)
+    httpd = _Server((addr, port), Handler, bind_and_activate=False)
     if os.name == "nt":
         # http.server's SO_REUSEADDR means something different on Windows: it
         # permits a SECOND server to bind the same port outright (not just

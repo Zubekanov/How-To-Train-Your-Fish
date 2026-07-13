@@ -7,6 +7,7 @@ a raw socket (replay on connect + a live event when stats.json is replaced)."""
 import json
 import os
 import socket
+import struct
 import threading
 import time
 import urllib.error
@@ -40,6 +41,42 @@ def _get(port, path):
     with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=10) as r:
         assert r.headers["Access-Control-Allow-Origin"] == "*"
         return json.loads(r.read())
+
+
+def test_client_abort_is_silent_but_real_errors_still_print(capfd):
+    """We speak HTTP/1.1, so after a response the handler blocks reading the NEXT request
+    line. A peer vanishing there (browser tab closed, SSE feed dropped as a session hands
+    back) raises ConnectionAbortedError OUTSIDE any handler method, and socketserver's
+    default handle_error dumps a traceback for it -- routine noise that reads like a crash
+    in the hand-back logs. It must be silent; a genuine handler bug must still be loud."""
+    from fishrl.serve.__main__ import _Server
+    srv = _Server.__new__(_Server)              # handle_error needs no instance state
+
+    try:
+        raise ConnectionAbortedError(10053, "An established connection was aborted")
+    except ConnectionAbortedError:
+        srv.handle_error(None, ("192.168.4.25", 50848))
+    noise = "".join(capfd.readouterr())
+    assert "Traceback" not in noise and "ConnectionAbortedError" not in noise
+
+    try:
+        raise ValueError("a real handler bug")
+    except ValueError:
+        srv.handle_error(None, ("192.168.4.25", 50848))
+    assert "ValueError" in "".join(capfd.readouterr())
+
+
+def test_server_survives_an_abrupt_client_abort(site):
+    """The hand-back scenario end-to-end: a client takes a keep-alive response then dies
+    without closing (RST, not FIN). The server must keep serving."""
+    _, port = site
+    s = socket.create_connection(("127.0.0.1", port), timeout=10)
+    s.sendall(b"GET /api/summary HTTP/1.1\r\nHost: x\r\n\r\n")
+    assert s.recv(64)                                    # response received; conn kept alive
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    s.close()                                            # abort mid-readline, not a clean close
+    time.sleep(0.2)
+    assert _get(port, "/api/summary")                    # still healthy
 
 
 def test_range_queries_idempotent(site):

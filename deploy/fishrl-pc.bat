@@ -5,43 +5,53 @@ rem  desktop shortcut).
 rem
 rem    1. starts the LAN dashboard in a minimized window and opens it in the
 rem       default browser (http://<this-pc>:8765/)
-rem    2. pulls the lineage off the ODROID: stops its service (graceful
-rem       checkpoint), exports, imports here
-rem    3. trains in THIS window. End the session with Ctrl-C here or the
-rem       dashboard's "End session & hand back" button -- either way the
-rem       trainer checkpoints, the result is exported back, imported on the
-rem       ODROID, and its service is restarted.
+rem    2. runs win-rate panels alongside the session, every 15 min
+rem    3. trains in THIS window, resuming checkpoints\latest.pt
 rem
-rem  Extra RELAY flags pass through, e.g.:   fishrl-pc.bat --no-return
-rem  If a handback ever fails (ODROID unreachable), the lineage stays safely
-rem  here -- re-run this script (it skips the pull) or run the handback line
-rem  printed at the end.
+rem  End with Ctrl-C here or the dashboard's "End session" button: either way
+rem  the trainer checkpoints gracefully at the next iteration boundary.
+rem
+rem  THIS IS LOCAL-ONLY, deliberately. It used to be a RELAY launcher: it pulled
+rem  the lineage off the ODROID, trained here, and handed it back. That is gone.
+rem  The PC does ~1800 it/h against the ODROID's ~205, so the relay bought ~10%%
+rem  of the throughput for 100%% of the operational risk -- and every model change
+rem  (a new observation feature, say) became a two-machine migration, because a
+rem  checkpoint is only loadable by a checkout that encodes the game the same way.
+rem  This script does not touch the ODROID.
+rem
+rem  The relay still exists (python -m fishrl.relay) and its preflight now REFUSES
+rem  to move a checkpoint between checkouts whose feature dims differ, so it can no
+rem  longer silently break the far end. It is just not the default any more.
+rem
+rem  Extra training flags pass through, e.g.:   fishrl-pc.bat --max-hours 12
 rem ============================================================================
 setlocal
 for %%i in ("%~dp0..") do set "REPO=%%~fi"
 set "PY=%REPO%\.venv\Scripts\python.exe"
+set "CKPT=%REPO%\checkpoints"
+
+if not exist "%CKPT%\latest.pt" (
+    echo [fishrl-pc] no checkpoint at %CKPT%\latest.pt -- nothing to resume.
+    echo             For a fresh run:  python -m fishrl.train --fresh --iters 0
+    pause
+    exit /b 1
+)
 
 start "fishrl dashboard" /min powershell -NoProfile -ExecutionPolicy Bypass -File "%REPO%\deploy\fishrl-serve.ps1"
-rem Win-rate panels while the session trains (the PC's stand-in for the ODROID's
-rem hourly eval timer): waits for the trainer, evals every 15 min, exits with it.
-start "fishrl eval" /min "%PY%" -m fishrl.eval.parallel_panel --ckpt-dir "%REPO%\checkpoints" --follow 900 --reserve-cores 12 --affinity 16,17,18,19,20,21,22,23,24,25,26,27
+rem Win-rate panels while the session trains: waits for the trainer (trainer.lock),
+rem evals every 15 min, exits with the session.
+start "fishrl eval" /min "%PY%" -m fishrl.eval.parallel_panel --ckpt-dir "%CKPT%" --follow 900 --reserve-cores 12 --affinity 16,17,18,19,20,21,22,23,24,25,26,27
 ping -n 4 127.0.0.1 >nul
 start "" "http://%COMPUTERNAME%:8765/"
 
-rem Training-regime flags come from deploy\train.args (single line; shared with
-rem the ODROID's fishrl-selfplay.sh) so the lineage trains identically on both
-rem hosts; only machine flags (cadences, workers) are set here.
+rem Training-regime flags come from deploy\train.args (single line) so the regime
+rem is declared in one place and cannot drift between launchers.
 set /p REGIME=<"%REPO%\deploy\train.args"
-"%PY%" -m fishrl.relay train --ckpt-dir "%REPO%\checkpoints" %* -- ^
-    %REGIME% ^
+"%PY%" -m fishrl.train --resume --iters 0 --ckpt-dir "%CKPT%" %REGIME% ^
     --report-every-seconds 900 --report-winrate-games 0 ^
     --checkpoint-every-seconds 900 ^
-    --gpu --collect-workers 8 --reserve-cores 2 --collect-affinity 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 --pipeline-collect
+    --gpu --collect-workers 8 --reserve-cores 2 --collect-affinity 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 --pipeline-collect %*
 
 echo.
-echo Session ended. If the handback failed above, the lineage is still on this
-echo PC -- when the ODROID is reachable again, re-run this script (it skips the
-echo pull leg) or run the handback alone (note the leading ^& in PowerShell):
-echo   cmd:        "%PY%" -m fishrl.relay handback --ckpt-dir "%REPO%\checkpoints"
-echo   PowerShell: ^& "%PY%" -m fishrl.relay handback --ckpt-dir "%REPO%\checkpoints"
+echo Session ended; the trainer checkpointed to %CKPT%\latest.pt.
 pause

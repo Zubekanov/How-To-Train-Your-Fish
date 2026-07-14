@@ -322,6 +322,29 @@ def test_actions_registry_per_platform(tmp_path):
     assert [a["id"] for a in px.list()] == ["stop_trainer", "start_trainer", "run_eval"]
 
 
+def test_stop_action_does_not_promise_a_handback_that_never_runs(tmp_path):
+    """Training is local-only now (deploy/fishrl-pc.bat); fishrl.relay is no longer the
+    launcher. The button used to say "End session & hand back" and the confirmation promised
+    "a relay session then hands back automatically" -- both described a step that does not
+    happen, which is why ending a session looked broken."""
+    from fishrl.serve.__main__ import Actions
+    from fishrl.train.locks import hold_lockfile, unlock
+
+    a = Actions(str(tmp_path), "u", "e", os_name="nt")
+    (label,) = [x["label"] for x in a.list() if x["id"] == "stop_session"]
+    assert "hand back" not in label.lower() and "handback" not in label.lower()
+    assert label == "End training session"
+
+    lk = hold_lockfile(os.path.join(str(tmp_path), "trainer.lock"))
+    try:
+        ok, msg = a.run("stop_session")
+    finally:
+        unlock(lk)
+    assert ok
+    assert "hand" not in msg.lower() and "relay" not in msg.lower()
+    assert "checkpoint" in msg.lower()                   # it still says what DOES happen
+
+
 def test_stop_session_validates_state_and_writes_stop_file(tmp_path):
     d = str(tmp_path)
     a = Actions(d, "u", "e", os_name="nt")

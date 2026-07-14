@@ -199,13 +199,15 @@ class Actions:
     """The opt-in control plane (--allow-actions). POST-only, server-side state
     validation, platform-specific registry:
 
-      * Windows (a relay/console session): "End session & hand back" drops the
-        STOP file -- the trainer checkpoints and exits at the iteration
-        boundary, and if fishrl.relay launched it, the handback runs itself.
+      * Windows (a console session): "End training session" drops the STOP file --
+        the trainer checkpoints and exits at the next iteration boundary. It used
+        to be "End session & hand back", because fishrl.relay launched the trainer
+        and handed the lineage back to the ODROID afterwards. Training is local-only
+        now (deploy/fishrl-pc.bat), so there is nothing to hand back and the old
+        label promised a step that never runs.
       * POSIX (the systemd box): stop/start the trainer unit and kick the eval
-        oneshot, via ``sudo -n systemctl`` (needs the NOPASSWD rule the relay
-        already relies on). A raw STOP file is wrong here: Restart=always
-        would just resurrect the trainer.
+        oneshot, via ``sudo -n systemctl`` (needs the NOPASSWD rule). A raw STOP
+        file is wrong here: Restart=always would just resurrect the trainer.
 
     Nothing destructive is exposed -- no --fresh, no claim/force."""
 
@@ -219,7 +221,7 @@ class Actions:
     def list(self) -> list:
         live = self._trainer_live()
         if self.os_name == "nt":
-            return [{"id": "stop_session", "label": "End session & hand back",
+            return [{"id": "stop_session", "label": "End training session",
                      "danger": True, "enabled": live,
                      "reason": None if live else "no trainer is running here"},
                     {"id": "run_eval_local", "label": "Run eval panel now",
@@ -257,8 +259,8 @@ class Actions:
             with open(os.path.join(self.dir, STOP_FILE), "w") as f:
                 f.write("stop requested via fishrl.serve\n")
             return True, ("STOP written -- the trainer will checkpoint and exit at the "
-                          "iteration boundary (a relay session then hands back "
-                          "automatically)")
+                          "next iteration boundary, and the eval panel exits with it. "
+                          "This dashboard stays up so you can still read the run.")
         if action_id == "run_eval_local":
             import sys
             subprocess.Popen([sys.executable, "-m", "fishrl.eval.parallel_panel",

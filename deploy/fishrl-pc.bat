@@ -62,6 +62,17 @@ set /p REGIME=<"%REPO%\deploy\train.args"
     --checkpoint-every-seconds 900 ^
     --gpu --collect-workers 8 --reserve-cores 2 --collect-affinity 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 --pipeline-collect %*
 
+rem ── the trainer has exited (Ctrl-C, or the dashboard's "End training session") ──
+rem The eval panel follows trainer.lock and DOES exit on its own -- but it only checks
+rem between panels, so an in-flight one keeps its minimized window grinding for another
+rem minute or two after the session is over. That reads as a hang. Nothing it produces
+rem now is useful (the checkpoint is final; the next session evaluates it anyway), so
+rem end it with the session.
+echo.
+echo [fishrl-pc] trainer exited; stopping the eval panel...
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*parallel_panel*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+
 echo.
 echo Session ended; the trainer checkpointed to %CKPT%\latest.pt.
+echo The dashboard is still running at http://%LANIP%:8765/ -- close its window when done.
 pause

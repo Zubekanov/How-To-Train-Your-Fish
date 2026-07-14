@@ -62,6 +62,44 @@ DEFAULT_UNIT = "fishrl-selfplay"
 REMOTE_ZIP = "/tmp/fishrl_relay.zip"                   # server-side scratch, both directions
 
 
+# ── the FEATURE CONTRACT both checkouts must agree on ────────────────────────
+# The relay moves latest.pt in BOTH directions, so if the two checkouts encode the game
+# differently the checkpoint is not portable: a pull would import an unloadable checkpoint over
+# this machine's run, and a handback would break the remote's service the moment it resumes.
+# The deckout clock (OBS_DIM 6494 -> 6497) is exactly such a change, and nothing here caught it:
+# preflight only ever checked that the remote had `fishrl.train.ownership`.
+#
+# Printed as bare ints so the expression survives the outer single-quoting of the ssh command.
+_DIMS_PY = ("from fishrl.obs.encoder import OBS_DIM;"
+            "from fishrl.data.features import GOD_DIM, PUB_DIM;"
+            "from fishrl.spaces.action_space import N;"
+            "print(OBS_DIM, GOD_DIM, PUB_DIM, N)")
+_DIM_NAMES = ("OBS_DIM", "GOD_DIM", "PUB_DIM", "action_space.N")
+
+
+def local_dims() -> tuple:
+    from fishrl.data.features import GOD_DIM, PUB_DIM
+    from fishrl.obs.encoder import OBS_DIM
+    from fishrl.spaces.action_space import N
+    return (OBS_DIM, GOD_DIM, PUB_DIM, N)
+
+
+def feature_refusal(local: tuple, remote: tuple, host: str, unit: str) -> str | None:
+    """None when the two checkouts can exchange a checkpoint; else the refusal to print."""
+    if local == remote:
+        return None
+    diff = "\n".join(f"          {n:16s} local={a:<8} {host}={b}"
+                     for n, a, b in zip(_DIM_NAMES, local, remote) if a != b)
+    return (f"[relay] FEATURE MISMATCH -- refusing to relay (nothing has been touched).\n"
+            f"{diff}\n"
+            f"        The two checkouts encode the game differently, so a checkpoint from one\n"
+            f"        cannot be loaded by the other. Pulling would import an unloadable run\n"
+            f"        over this machine's; handing back would break '{unit}' on {host} the\n"
+            f"        moment it resumes.\n"
+            f"        Fix: git pull on whichever side is behind. If the OBSERVATION changed,\n"
+            f"        the checkpoint must also be migrated (e.g. fishrl.train.migrate_clock).")
+
+
 class Ssh:
     """The training server, over ssh/scp (OpenSSH; Windows 10 ships a client).
     ``tty=True`` allocates a terminal so ``sudo`` can prompt for a password."""
@@ -75,6 +113,11 @@ class Ssh:
                 + [self.host, cmd])
         return subprocess.run(args, check=check)
 
+    def _ssh_out(self, cmd: str):
+        """Like `_ssh`, but captures stdout (preflight needs to READ from the remote)."""
+        return subprocess.run(["ssh", "-o", "ConnectTimeout=10", self.host, cmd],
+                              capture_output=True, text=True)
+
     def preflight(self) -> None:
         print(f"[relay] preflight: ssh {self.host} ...", flush=True)
         r = self._ssh("echo relay-ok", check=False)
@@ -86,6 +129,21 @@ class Ssh:
         if r.returncode != 0:
             raise SystemExit(f"[relay] the checkout on {self.host} predates the relay "
                              f"protocol -- git pull there first")
+        # Both checkouts must encode the game identically, or the checkpoint is not portable.
+        r = self._ssh_out(f"cd {self.repo} && {self.python} -c '{_DIMS_PY}'")
+        if r.returncode != 0:
+            raise SystemExit(f"[relay] cannot read the feature dims from {self.host} "
+                             f"(git pull there first?):\n{(r.stderr or '').strip()[:400]}")
+        try:
+            remote = tuple(int(x) for x in r.stdout.split())
+            assert len(remote) == len(_DIM_NAMES)
+        except (ValueError, AssertionError):
+            raise SystemExit(f"[relay] unparseable feature dims from {self.host}: "
+                             f"{r.stdout!r}")
+        refusal = feature_refusal(local_dims(), remote, self.host, self.unit)
+        if refusal:
+            raise SystemExit(refusal)
+        print(f"[relay] preflight: feature contract matches {self.host} {remote}", flush=True)
 
     def stop_service(self) -> None:
         if self.no_service:

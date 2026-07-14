@@ -42,7 +42,17 @@ rem Win-rate panels while the session trains: waits for the trainer (trainer.loc
 rem evals every 15 min, exits with the session.
 start "fishrl eval" /min "%PY%" -m fishrl.eval.parallel_panel --ckpt-dir "%CKPT%" --follow 900 --reserve-cores 12 --affinity 16,17,18,19,20,21,22,23,24,25,26,27
 ping -n 4 127.0.0.1 >nul
-start "" "http://%COMPUTERNAME%:8765/"
+
+rem Open the address the dashboard ACTUALLY binds -- lan_ip(), the same helper
+rem fishrl.serve binds with. It used to open http://%COMPUTERNAME%:8765/, but the
+rem hostname resolves to a VIRTUAL host-only adapter here (192.168.56.1, VirtualBox/
+rem Hyper-V) with nothing listening on it, while serve binds the real LAN IPv4
+rem (192.168.4.25). curl retries the other resolved addresses and succeeds; a browser
+rem stops at the first and just shows "unavailable" -- with the server running fine.
+for /f "usebackq tokens=*" %%u in (`"%PY%" -c "from fishrl.serve.__main__ import lan_ip; print(lan_ip())"`) do set "LANIP=%%u"
+if not defined LANIP set "LANIP=127.0.0.1"
+echo [fishrl-pc] dashboard: http://%LANIP%:8765/
+start "" "http://%LANIP%:8765/"
 
 rem Training-regime flags come from deploy\train.args (single line) so the regime
 rem is declared in one place and cannot drift between launchers.

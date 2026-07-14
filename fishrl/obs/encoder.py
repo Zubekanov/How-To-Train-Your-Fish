@@ -64,9 +64,43 @@ _GAME = 5                 # turn, active_is_self, priority_is_self, library_coun
 _COMBAT = 4               # am_attacking, am_defending, n_attackers, n_blockers
 _PAY = 4                  # need_U, need_total, generic, in_pay
 _BUILDER = 1              # compound-builder progress (injected by the env)
-_GLOBALS = _PER_PLAYER * 2 + _GAME + V.N_STEPS + _COMBAT + V.N_PENDING + _PAY + _BUILDER
+_CLOCK = 3                # deckout clock: parity, next_drawer_is_self, self_decks_first
+_GLOBALS = (_PER_PLAYER * 2 + _GAME + V.N_STEPS + _COMBAT + V.N_PENDING + _PAY
+            + _BUILDER + _CLOCK)
 
 OBS_DIM = _ZONE_ROWS * CARD_F + _GLOBALS
+
+# ── deckout clock ─────────────────────────────────────────────────────────────
+# The library is SHARED and both seats draw one per turn, so the seat forced to draw from an
+# empty library is decided by (library_count mod 2) XOR (whose draw is next) -- and every
+# EXTRA card drawn flips it, which makes Brainstorm/Predict/Fact-or-Fiction deckout-tempo
+# tools, not just card advantage. It decides ~81% of the deckout/board_presence games.
+#
+# The count is already encoded -- but only as `len(library)/80.0`, one smooth float. Probing
+# the 592h checkpoint (fishrl/eval/probe_deckout_clock.py): an MLP handed a DIRECT supervised
+# label cannot recover parity from that float (0.508 vs a 0.514 base rate), and the trained
+# actor had not learned it either (trunk 0.525). Same information, and the ENCODING is the
+# whole difference between 0.508 and 1.000. Parity from a smooth scalar is the textbook thing
+# ReLU nets fail at, so this is a RE-ENCODING of information already present, not new
+# information -- nothing here is hidden from the viewer.
+_PRE_DRAW = ("untap", "upkeep", "draw", "")
+
+
+def deckout_clock(g, viewer: str) -> tuple:
+    """(library_parity, next_drawer_is_viewer, viewer_decks_first), each 0/1.
+
+    Zeroed in the PREGAME, where `active_player` is "" because the play-order roll has not
+    resolved. The clock is undefined there (nobody has drawn), and any viewer-dependent
+    fallback would make the two seats DISAGREE about who draws next: this must be a function
+    of the GAME, only re-oriented per seat."""
+    active = g.active_player
+    if active not in ("p1", "p2"):
+        return 0.0, 0.0, 0.0
+    n = len(g.library)
+    opp = "p2" if active == "p1" else "p1"
+    nxt = opp if g.current_step not in _PRE_DRAW else active   # the draw step precedes main1
+    loser = nxt if n % 2 == 0 else ("p2" if nxt == "p1" else "p1")
+    return float(n % 2), float(nxt == viewer), float(loser == viewer)
 
 
 def _encode_card_into(card: dict | None, viewer: str, v: np.ndarray) -> None:
@@ -200,6 +234,8 @@ def encode_observation_ref(g, viewer: str, builder_progress: float = 0.0) -> np.
     k += _PAY
     g_vec[k] = float(builder_progress)
     k += _BUILDER
+    g_vec[k], g_vec[k + 1], g_vec[k + 2] = deckout_clock(g, viewer)   # viewer-oriented
+    k += _CLOCK
 
     parts.append(g_vec)
     return np.concatenate(parts).astype(np.float32)
@@ -358,6 +394,8 @@ def encode_observation(g, viewer: str, builder_progress: float = 0.0) -> np.ndar
     k += _PAY
     g_vec[k] = float(builder_progress)
     k += _BUILDER
+    g_vec[k], g_vec[k + 1], g_vec[k + 2] = deckout_clock(g, viewer)   # viewer-oriented
+    k += _CLOCK
 
     parts.append(g_vec)
     return np.concatenate(parts).astype(np.float32)

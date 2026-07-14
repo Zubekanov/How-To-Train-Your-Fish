@@ -18,7 +18,7 @@ from __future__ import annotations
 import numpy as np
 
 from fishrl.forgetful_fish.state import _public_object, _is_land, spectator_view
-from fishrl.obs.encoder import CARD_F, _encode_card, _zone, _zone_obj
+from fishrl.obs.encoder import CARD_F, _encode_card, _zone, _zone_obj, deckout_clock
 from fishrl.obs import vocab as V
 
 # ── god (privileged) layout ───────────────────────────────────────────────────
@@ -29,7 +29,11 @@ GOD_SLOTS = {
 _GOD_ROWS = sum(GOD_SLOTS.values())
 _GOD_PER_PLAYER = 12       # life, hand_count, lands, untapped, pool_total, pool×5, mulligans, has_lost
 _GOD_GAME = 5              # turn, active_is_p1, priority_is_p1, library_count, stack_depth
-GOD_DIM = _GOD_ROWS * CARD_F + _GOD_PER_PLAYER * 2 + _GOD_GAME
+# The critic needs the deckout clock too: it sees library size only as len/80.0, the same
+# smooth float the actor cannot extract parity from -- so without this it cannot learn the
+# value of a parity flip, and GAE cannot credit the draw that causes one. p1-oriented.
+_CLOCK = 3                 # library parity, next_drawer_is_p1, p1_decks_first
+GOD_DIM = _GOD_ROWS * CARD_F + _GOD_PER_PLAYER * 2 + _GOD_GAME + _CLOCK
 
 # ── public (mutual-knowledge) layout ──────────────────────────────────────────
 PUB_SLOTS = {
@@ -39,7 +43,7 @@ PUB_SLOTS = {
 _PUB_ROWS = sum(PUB_SLOTS.values())
 _PUB_PER_PLAYER = 12
 _PUB_GAME = 5
-PUB_DIM = _PUB_ROWS * CARD_F + _PUB_PER_PLAYER * 2 + _PUB_GAME
+PUB_DIM = _PUB_ROWS * CARD_F + _PUB_PER_PLAYER * 2 + _PUB_GAME + _CLOCK
 
 
 def opponent_hand_counts(g, viewer: str) -> np.ndarray:
@@ -89,6 +93,7 @@ def encode_god_ref(g) -> np.ndarray:
         gv += _player_scalars(p.life, len(p.hand), bf[pid], p.mana_pool, p.mulligans, p.has_lost)
     gv += [g.turn_number / 40.0, float(g.active_player == "p1"),
            float(g.priority_player == "p1"), len(g.library) / 80.0, len(g.stack) / 6.0]
+    gv += list(deckout_clock(g, "p1"))                # deckout clock (p1-oriented)
     parts.append(np.asarray(gv, dtype=np.float32))
     return np.concatenate(parts).astype(np.float32)
 
@@ -133,6 +138,7 @@ def encode_god(g) -> np.ndarray:
         gv += _player_scalars_obj(p.life, len(p.hand), bf[pid], p.mana_pool, p.mulligans, p.has_lost)
     gv += [g.turn_number / 40.0, float(g.active_player == "p1"),
            float(g.priority_player == "p1"), len(g.library) / 80.0, len(g.stack) / 6.0]
+    gv += list(deckout_clock(g, "p1"))                # deckout clock (p1-oriented)
     parts.append(np.asarray(gv, dtype=np.float32))
     return np.concatenate(parts).astype(np.float32)
 
@@ -164,6 +170,7 @@ def encode_public_ref(g) -> np.ndarray:
                               g.players[pid].mulligans, pv.get("has_lost"))
     gv += [g.turn_number / 40.0, float(g.active_player == "p1"),
            float(g.priority_player == "p1"), len(g.library) / 80.0, len(g.stack) / 6.0]
+    gv += list(deckout_clock(g, "p1"))                # deckout clock (p1-oriented)
     parts.append(np.asarray(gv, dtype=np.float32))
     return np.concatenate(parts).astype(np.float32)
 
@@ -206,5 +213,6 @@ def encode_public(g) -> np.ndarray:
                                   p.mulligans, p.has_lost)
     gv += [g.turn_number / 40.0, float(g.active_player == "p1"),
            float(g.priority_player == "p1"), len(g.library) / 80.0, len(g.stack) / 6.0]
+    gv += list(deckout_clock(g, "p1"))                # deckout clock (p1-oriented)
     parts.append(np.asarray(gv, dtype=np.float32))
     return np.concatenate(parts).astype(np.float32)

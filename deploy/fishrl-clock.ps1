@@ -1,4 +1,4 @@
-﻿# Branch the 592h run onto the deckout-clock observation.
+# Branch the 592h run onto the deckout-clock observation.
 #
 # The clock adds 3 scalars (library parity, next-drawer, who-decks-first) that the nets
 # provably could NOT compute from len(library)/80.0 -- see fishrl/eval/probe_deckout_clock.py.

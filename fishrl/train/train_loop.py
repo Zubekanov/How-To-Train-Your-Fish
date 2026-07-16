@@ -184,10 +184,9 @@ def train(cfg: Config, models: Models | None = None, log=print,
     acc = {k: 0.0 for k in KEYS}
     win_iters = win_T = 0
     # Per-window game/health telemetry (reset each report alongside the loss means):
-    # game endings (truncation/draw/free-attack), mirror seat balance, scenario vs
-    # full-game episode lengths, forced-decision dilution, and the collect/update
-    # wall-clock split.
-    GW_KEYS = ("games", "trunc", "draw", "freeatk_p1", "freeatk_p2",
+    # game endings (truncation/draw), mirror seat balance, scenario vs full-game
+    # episode lengths, forced-decision dilution, and the collect/update wall-clock split.
+    GW_KEYS = ("games", "trunc", "draw",
                "mirror_dec", "mirror_p1", "scen_games", "scen_T",
                "forced_steps", "collect_s", "update_s")
     gwin = {k: 0.0 for k in GW_KEYS}
@@ -203,10 +202,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
     # (metrics.py docstring): denominator = ALL games incl. draws/truncations, wins =
     # strictly decided for the learner -- so the eval service can pool these with its
     # own top-up games into one estimate. Distinct from league.update (EMA,
-    # decided-only) and from opp_mix (game counts, no outcomes). NOTE these games run
-    # under cfg.enforce_free_attack (eval games don't), so a forfeit counts as a real
-    # loss here -- a deliberate, conservative-only bias (it can under-rate, never
-    # inflate, the combined estimate the best.pt gate sees).
+    # decided-only) and from opp_mix (game counts, no outcomes).
     AWIN_KINDS = ("heuristic", "heuristic_1_1", "heuristic_1_2", "attacker", "random")
     awin = {k: [0, 0] for k in AWIN_KINDS}
     # Near-live per-iteration ticks (fishrl.serve's SSE feed; reports stay the hourly
@@ -355,7 +351,6 @@ def train(cfg: Config, models: Models | None = None, log=print,
         game_str = (
             f" | games={games} len={len_full:.1f} slen={len_scen:.1f} "
             f"trunc={trunc_rate:.2f} draw={draw_rate:.2f} "
-            f"fatk_p1={int(gwin['freeatk_p1'])} fatk_p2={int(gwin['freeatk_p2'])} "
             f"seat_p1={seat_p1:.2f} fdec={fdec:.2f} | wall collect={collect_frac:.2f}"
         )
         log(
@@ -402,7 +397,6 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 # window game telemetry (NaN -> null via the sanitizer below)
                 "games": games, "dec_per_game": len_full, "scen_dec_per_game": len_scen,
                 "trunc_rate": trunc_rate, "draw_rate": draw_rate,
-                "freeatk_p1": int(gwin["freeatk_p1"]), "freeatk_p2": int(gwin["freeatk_p2"]),
                 "mirror_p1_wr": seat_p1, "forced_dec_frac": fdec,
                 "collect_s": gwin["collect_s"], "update_s": gwin["update_s"],
                 "collect_frac": collect_frac,
@@ -588,8 +582,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
             log(f"[warmup] {w}")
             frozen = _snapshot(m)
 
-        benv = BeliefAugmentedEnv(m.guesser, belief=cfg.use_belief, max_decisions=cfg.max_decisions,
-                                  enforce_free_attack=cfg.enforce_free_attack)
+        benv = BeliefAugmentedEnv(m.guesser, belief=cfg.use_belief, max_decisions=cfg.max_decisions)
 
         def _split_games() -> tuple:
             """(n_self, n_pool, n_scen) for one iteration -- pure cfg, shared by the
@@ -741,8 +734,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                         senv = BeliefAugmentedEnv(
                             m.guesser, belief=cfg.use_belief,
                             env=ScenarioEnv(get_scenario(member.name),
-                                            max_decisions=cfg.max_decisions,
-                                            enforce_free_attack=cfg.enforce_free_attack))
+                                            max_decisions=cfg.max_decisions))
                         gbuf = collect_games(senv, actor_act_fn(m.actor), 1, oseed,
                                              critic=None, max_decisions=cfg.max_decisions)
                         # scenario accounting, NOT opp_mix: the [league] paren counts and
@@ -766,8 +758,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                         gbuf = collect_vs_opponent(m, member, 1, oseed, critic=None,
                                                    use_belief=cfg.use_belief,
                                                    max_decisions=cfg.max_decisions,
-                                                   learner_seat=lseat,
-                                                   enforce_free_attack=cfg.enforce_free_attack)
+                                                   learner_seat=lseat)
                     # Update the member's learner win-rate from the recorded game result —
                     # buf.games counts a game even when the learner never got a decision
                     # (losing before your first priority is still a loss; skipping those
@@ -788,8 +779,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                         sname = member.name
                         senv = BeliefAugmentedEnv(
                             m.guesser, belief=cfg.use_belief,
-                            env=ScenarioEnv(get_scenario(sname), max_decisions=cfg.max_decisions,
-                                            enforce_free_attack=cfg.enforce_free_attack))
+                            env=ScenarioEnv(get_scenario(sname), max_decisions=cfg.max_decisions))
                         sseed = cfg.seed + 300_000 + done * cfg.games_per_iter + sidx * 31
                         sbuf = collect_games(senv, actor_act_fn(m.actor), 1, sseed,
                                              critic=None, max_decisions=cfg.max_decisions)
@@ -810,8 +800,6 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     gwin["trunc"] += 1
                 elif w is None:
                     gwin["draw"] += 1
-                if gm["forced"] in ("p1", "p2"):
-                    gwin[f"freeatk_{gm['forced']}"] += 1
             gwin["forced_steps"] += sum(1 for s in buf.steps if int(s.mask.sum()) == 1)
             iter_collect_s = time.perf_counter() - t_collect
             gwin["collect_s"] += iter_collect_s

@@ -15,10 +15,8 @@ from fishrl.forgetful_fish import engine as E
 
 
 class ScenarioEnv(FishAEC):
-    def __init__(self, scenario, stops_mode: str = "default", max_decisions: int = 2000,
-                 enforce_free_attack: bool = False):
-        super().__init__(stops_mode=stops_mode, max_decisions=max_decisions,
-                         enforce_free_attack=enforce_free_attack)
+    def __init__(self, scenario, stops_mode: str = "default", max_decisions: int = 2000):
+        super().__init__(stops_mode=stops_mode, max_decisions=max_decisions)
         self.scenario = scenario
         self.scn_ctx: dict = {}
 
@@ -37,7 +35,6 @@ class ScenarioEnv(FishAEC):
         self._builder = None
         self._decisions = 0
         self._scenario_result = None
-        self._forced_result = None
         self.scn_ctx = {}
         self.scenario.on_reset(self)                 # capture start references
         self.agent_selection = self.possible_agents[0]

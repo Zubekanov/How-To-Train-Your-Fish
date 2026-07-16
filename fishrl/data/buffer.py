@@ -34,7 +34,7 @@ class Step:
 class RolloutBuffer:
     steps: list = field(default_factory=list)
     games: list = field(default_factory=list)   # per-game winner, indexed by game_id
-    meta: list = field(default_factory=list)    # per-game {"truncated", "forced"} — how it ended
+    meta: list = field(default_factory=list)    # per-game {"truncated"} — how it ended
 
     def add(self, step: Step):
         self.steps.append(step)

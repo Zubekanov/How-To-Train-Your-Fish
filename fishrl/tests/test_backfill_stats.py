@@ -122,7 +122,6 @@ def test_parse_status_v3_game_telemetry_and_old_lines_still_parse():
     assert r["clip_frac"] == 0.08 and r["brier_gap"] == 0.07
     assert r["games"] == 128 and r["dec_per_game"] == 38.2 and r["scen_dec_per_game"] == 14.1
     assert r["trunc_rate"] == 0.05 and r["draw_rate"] == 0.01
-    assert r["freeatk_p1"] == 1 and r["freeatk_p2"] == 0
     assert r["mirror_p1_wr"] == 0.52 and r["forced_dec_frac"] == 0.24
     assert r["collect_frac"] == 0.91
     # ...and both older formats still parse, with the new fields absent/None.

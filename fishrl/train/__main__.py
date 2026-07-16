@@ -74,10 +74,6 @@ def main():
                     help="fraction of each iteration's games seeded from a curriculum "
                          "scenario start-state (0 = off). Mixed INTO self-play; reward stays "
                          "terminal. Judge progress on vs-heuristic WR, NOT scenario win-rate.")
-    ap.add_argument("--enforce-free-attack", default=Config.enforce_free_attack,
-                    action=argparse.BooleanOptionalAction,
-                    help="hard rule across all training: declaring fewer than all eligible "
-                         "attackers into an empty opposing board is an instant loss")
     ap.add_argument("--p1-adv-weight", type=float, default=Config.p1_adv_weight,
                     help="policy-gradient weight on p1-seat advantages (>1 steers the shared "
                          "net toward p1, the seat the vs-heuristic metric always measures; "
@@ -206,7 +202,6 @@ def main():
                   pool_frac=args.pool_frac, pfsp_mode=args.pfsp_mode,
                   league_size=args.league_size, scenario_frac=args.scenario_frac,
                   scenarios_in_pool=args.scenario_pool, scenario_weights=scen_w,
-                  enforce_free_attack=args.enforce_free_attack,
                   p1_adv_weight=args.p1_adv_weight,
                   ent_end=args.ent_end, ent_anneal_iters=args.ent_anneal_iters,
                   ent_reheat_period=args.ent_reheat_period, ent_reheat_peak=args.ent_reheat_peak,

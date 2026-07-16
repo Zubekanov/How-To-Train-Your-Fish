@@ -20,15 +20,6 @@ from fishrl.obs import vocab as V
 from fishrl.train.belief_env import BeliefAugmentedEnv
 from fishrl.train.collector import actor_act_fn, collect_games
 
-# Deliberate policy: evaluation runs WITHOUT enforce_free_attack. That flag is a
-# TRAIN-TIME shaping rule (Config.enforce_free_attack, threaded into the collector's
-# envs); eval measures the policy under the plain game rules. The FishAEC /
-# BeliefAugmentedEnv instances built here rely on the constructor default
-# enforce_free_attack=False (HeuristicMatch has no such knob — it is always plain
-# rules). If that default ever flips, eval must start passing
-# enforce_free_attack=False explicitly — do not let train-time shaping leak into the
-# gate metric.
-
 
 def collect_eval_batch(models, n_games=8, seed=10_000, max_decisions=2000):
     benv = BeliefAugmentedEnv(models.guesser, max_decisions=max_decisions)

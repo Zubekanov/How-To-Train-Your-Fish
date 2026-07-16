@@ -75,64 +75,6 @@ def _accounted(g) -> int:
                   for p in ("p1", "p2")))
 
 
-# ── free-attack hard rule (env-level, all training): short declare -> loss ────
-def _install(g, enforce):
-    import copy
-    from fishrl.env.driver import STOPS_MODES
-    from fishrl.forgetful_fish import engine as E
-    env = FishAEC(max_decisions=600, enforce_free_attack=enforce)
-    g = copy.deepcopy(g)
-    for pid in env.possible_agents:
-        E.set_player_stops(g, pid, STOPS_MODES["default"])
-    env.g = g
-    env.agents = list(env.possible_agents)
-    env.rewards = {a: 0.0 for a in env.agents}
-    env._cumulative_rewards = {a: 0.0 for a in env.agents}
-    env.terminations = {a: False for a in env.agents}
-    env.truncations = {a: False for a in env.agents}
-    env.infos = {a: {} for a in env.agents}
-    env._builder = None
-    env._decisions = 0
-    env._scenario_result = None
-    env._forced_result = None
-    env.agent_selection = env.possible_agents[0]
-    env._refresh()
-    return env
-
-
-def test_free_attack_rule_short_declare_loses():
-    from fishrl.forgetful_fish import engine as E
-    from fishrl.train.scenarios.pool import build_snapshots
-
-    def pred(env):
-        g = env.g
-        p = g.pending
-        return (p is not None and p.type == "declare_attackers" and p.player == "p1"
-                and len(p.context.get("eligible", [])) >= 1
-                and not any(E._is_creature(g.objects[i]) for i in g.players["p2"].battlefield
-                            if i in g.objects))
-    states, _ = build_snapshots(pred, 3, seed=101, max_games=2500)
-    assert states, "expected a free-attack state in the budget"
-    g = states[0]
-    # declaring ZERO with the rule ON -> the seat loses; rule OFF -> no forced loss
-    env = _install(g, True)
-    env.step(A.aid("COMMIT"))
-    assert env.winner == "p2"
-    env = _install(g, False)
-    env.step(A.aid("COMMIT"))
-    assert env.winner != "p2" or terminal_winner(env.g) == "p2"
-    # declaring ALL eligible -> no forced loss
-    env = _install(g, True)
-    while True:
-        ls = _legal(env)
-        picks = [a for a in ls if A.decode(int(a))[0] == "PICK_A"]
-        if not picks:
-            break
-        env.step(int(picks[0]))
-    env.step(A.aid("COMMIT"))
-    assert env._forced_result is None
-
-
 # ── scenario winner flows through belief wrapper + collector into the buffer ──
 def test_scenario_winner_propagates_to_buffer():
     from fishrl.train.belief_env import BeliefAugmentedEnv

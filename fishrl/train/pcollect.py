@@ -128,8 +128,7 @@ def _collect_one(spec: dict):
     kind = spec["kind"]
     if kind == "self":
         benv = BeliefAugmentedEnv(guesser, belief=lite["use_belief"],
-                                  max_decisions=lite["max_decisions"],
-                                  enforce_free_attack=lite["enforce_free_attack"])
+                                  max_decisions=lite["max_decisions"])
         return collect_games(benv, actor_act_fn(actor), 1, spec["seed"],
                              critic=None, max_decisions=lite["max_decisions"])
     if kind == "scenario":
@@ -137,8 +136,7 @@ def _collect_one(spec: dict):
         senv = BeliefAugmentedEnv(
             guesser, belief=lite["use_belief"],
             env=ScenarioEnv(get_scenario(spec["name"]),
-                            max_decisions=lite["max_decisions"],
-                            enforce_free_attack=lite["enforce_free_attack"]))
+                            max_decisions=lite["max_decisions"]))
         return collect_games(senv, actor_act_fn(actor), 1, spec["seed"],
                              critic=None, max_decisions=lite["max_decisions"])
     if kind == "heuristic":
@@ -159,8 +157,7 @@ def _collect_one(spec: dict):
     return collect_vs_opponent(learner, member, 1, spec["seed"], critic=None,
                                use_belief=lite["use_belief"],
                                max_decisions=lite["max_decisions"],
-                               learner_seat=spec["lseat"],
-                               enforce_free_attack=lite["enforce_free_attack"])
+                               learner_seat=spec["lseat"])
 
 
 def _collect_chunk(learner_blob: bytes, specs: list, torch_seed: int) -> bytes:
@@ -207,7 +204,6 @@ class ParallelCollector:
                 "actor_hidden": tuple(cfg.head_hidden("actor")), "card_dim": cfg.card_dim,
                 "enc_actor": cfg.enc_for("actor"), "enc_guesser": cfg.enc_for("guesser"),
                 "use_belief": cfg.use_belief, "max_decisions": cfg.max_decisions,
-                "enforce_free_attack": cfg.enforce_free_attack,
                 "train_public": cfg.train_public,
                 "scenario_names": scen_names,
                 "affinity": parse_affinity(getattr(cfg, "collect_affinity", ""))}

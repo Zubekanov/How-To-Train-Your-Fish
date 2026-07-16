@@ -47,8 +47,7 @@ def actor_act_fn(actor):
     return act
 
 
-def _stamp_game(buf: RolloutBuffer, start: int, winner, truncated: bool = False,
-                forced=None) -> None:
+def _stamp_game(buf: RolloutBuffer, start: int, winner, truncated: bool = False) -> None:
     """Back-fill one finished game's outcome onto its steps and register the game.
 
     Every step gets the winner label plus a buffer-local game_id so GAE segments
@@ -57,16 +56,14 @@ def _stamp_game(buf: RolloutBuffer, start: int, winner, truncated: bool = False,
     bootstraps from the critic instead of scoring the cut as a draw. The winner is
     ALSO recorded in `buf.games` even when the game produced zero learner steps —
     league win-rate updates must count games the learner lost before its first
-    decision. `forced` is the winning seat when the free-attack hard rule (or any
-    forced result) ended the game, else None — kept in `buf.meta` for the window
-    telemetry."""
+    decision."""
     gid = len(buf.games)
     for i in range(start, len(buf.steps)):
         buf.steps[i].winner = winner
         buf.steps[i].game_id = gid
         buf.steps[i].truncated = truncated
     buf.games.append(winner)
-    buf.meta.append({"truncated": truncated, "forced": forced})
+    buf.meta.append({"truncated": truncated})
 
 
 def fill_critic_values(buf: RolloutBuffer, critic, batch: int = 8192) -> None:
@@ -173,7 +170,7 @@ def _belief_guess(guesser, persp, prev, dev):
 
 def collect_vs_opponent(learner, opponent, n_games, base_seed, critic=None,
                         use_belief=True, max_decisions=2000,
-                        learner_seat=None, enforce_free_attack=False) -> RolloutBuffer:
+                        learner_seat=None) -> RolloutBuffer:
     """Collect rollouts where the LEARNER plays a fixed pool ``opponent`` through the
     two-seat AEC env, recording ONLY the learner's transitions (the opponent is
     off-policy and must never enter the PPO buffer). Seat-balanced: the learner plays
@@ -212,7 +209,7 @@ def collect_vs_opponent(learner, opponent, n_games, base_seed, critic=None,
         # Seat-balance across games unless the caller pins a seat (single-game pool calls
         # alternate the seat themselves so the parity isn't always p1).
         lseat = learner_seat or ("p1" if gi % 2 == 0 else "p2")
-        env = FishAEC(max_decisions=max_decisions, enforce_free_attack=enforce_free_attack)
+        env = FishAEC(max_decisions=max_decisions)
         env.reset(seed=base_seed + gi)
         prev = {"p1": zeros.copy(), "p2": zeros.copy()}   # per-seat belief carry
         start = len(buf)
@@ -265,13 +262,12 @@ def collect_vs_opponent(learner, opponent, n_games, base_seed, critic=None,
                 with torch.no_grad():
                     action = int(torch.multinomial(opp_actor.log_probs(ox, om)[0].exp(), 1))
             env.step(action)
-        # env.winner, NOT g.result: a game ended by the free-attack hard rule (or any
-        # terminal override) records its verdict only on the env — g.result stays
-        # "ongoing" and would mislabel a decided game as winner=None.
+        # env.winner, NOT g.result: a game ended by a terminal override (scenario)
+        # records its verdict only on the env — g.result stays "ongoing" and would
+        # mislabel a decided game as winner=None.
         winner = env.winner
         _stamp_game(buf, start, winner,
-                    truncated=winner is None and env.g.result.get("status") == "ongoing",
-                    forced=env._forced_result)
+                    truncated=winner is None and env.g.result.get("status") == "ongoing")
     if critic is not None:
         fill_critic_values(buf, critic)
     return buf
@@ -314,8 +310,7 @@ def collect_games(belief_env, act_fn, n_games, base_seed, critic=None,
             belief_env.step(action)
         winner = belief_env.winner            # scenario terminator result, or engine winner
         _stamp_game(buf, start, winner,
-                    truncated=winner is None and belief_env.g.result.get("status") == "ongoing",
-                    forced=belief_env.forced_result)
+                    truncated=winner is None and belief_env.g.result.get("status") == "ongoing")
     if critic is not None:
         fill_critic_values(buf, critic)            # batched, off the per-decision path
     return buf

@@ -25,19 +25,13 @@ from fishrl.spaces.masking import atomic_mask
 class FishAEC(AECEnv):
     metadata = {"render_modes": [], "name": "forgetful_fish_v0", "is_parallelizable": False}
 
-    def __init__(self, stops_mode: str = "default", max_decisions: int = 4000,
-                 enforce_free_attack: bool = False):
+    def __init__(self, stops_mode: str = "default", max_decisions: int = 4000):
         super().__init__()
         if stops_mode not in STOPS_MODES:
             raise ValueError(f"stops_mode must be one of {tuple(STOPS_MODES)}")
         self.possible_agents = ["p1", "p2"]
         self.stops_mode = stops_mode
         self.max_decisions = max_decisions
-        # Degenerate-correct hard rule (opt-in): at a declare-attackers decision where the
-        # seat has eligible attackers and the opponent has NO creatures, the seat must
-        # declare ALL of them; declaring fewer is an instant loss. Attacking into an empty
-        # board is 100% correct in this format, so this teaches it densely across all games.
-        self.enforce_free_attack = enforce_free_attack
         self.action_spaces = {a: spaces.Discrete(A.N) for a in self.possible_agents}
         self.observation_spaces = {
             a: spaces.Dict({
@@ -76,7 +70,6 @@ class FishAEC(AECEnv):
         self._builder: CompoundBuilder | None = None
         self._decisions = 0
         self._scenario_result: str | None = None   # set by a scenario terminator (subclass)
-        self._forced_result: str | None = None      # set by the free-attack hard rule
         self.agent_selection = self.possible_agents[0]
         self._refresh()
 
@@ -88,13 +81,6 @@ class FishAEC(AECEnv):
         self._cumulative_rewards[agent] = 0.0
         action = int(action)
         if self._builder is not None:
-            # Free-attack hard rule: catch a short declaration at its COMMIT, before the
-            # builder finalizes and the engine resolves combat.
-            if (self.enforce_free_attack and self.g.pending is not None
-                    and self.g.pending.type == "declare_attackers"
-                    and A.decode(action)[0] == "COMMIT"
-                    and self._free_attack_shortfall(agent)):
-                self._forced_result = self._other(agent)
             if self._builder.feed(self.g, action):     # finalized -> engine advanced
                 self._builder = None
                 self._decisions += 1
@@ -120,22 +106,6 @@ class FishAEC(AECEnv):
             return self._builder.mask()
         return atomic_mask(self.g, self.agent_selection)
 
-    # ── free-attack hard rule ────────────────────────────────────────────────
-    @staticmethod
-    def _other(seat):
-        return "p2" if seat == "p1" else "p1"
-
-    def _free_attack_shortfall(self, seat) -> bool:
-        """True iff `seat` is committing FEWER than all eligible attackers while the
-        opponent controls no creatures (a 100%-correct free attack left on the table)."""
-        ctx = self.g.pending.context or {}
-        eligible = ctx.get("eligible", [])
-        if not eligible or len(self._builder.attacking) >= len(eligible):
-            return False
-        opp = self._other(seat)
-        return not any(E._is_creature(self.g.objects[iid])
-                       for iid in self.g.players[opp].battlefield if iid in self.g.objects)
-
     # ── scenario hook ────────────────────────────────────────────────────────
     def _terminal_override(self):
         """Scenario subclasses return 'p1' / 'p2' / 'draw' to end the episode early
@@ -156,8 +126,7 @@ class FishAEC(AECEnv):
     def _refresh(self):
         g = self.g
         while True:
-            # The free-attack hard rule (if any) wins over a scenario terminator.
-            ov = self._forced_result if self._forced_result is not None else self._terminal_override()
+            ov = self._terminal_override()
             if ov is not None:
                 self._scenario_result = ov                # cache so `winner` is stable
             if ov is not None or is_terminal(g) or self._decisions >= self.max_decisions:

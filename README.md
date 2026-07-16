@@ -113,11 +113,6 @@ terminal ±1. Six are registered (`fishrl/train/scenarios/`):
 Scenario win-rates are logged per scenario but are a **curriculum signal only** —
 judge progress on the full-game vs-heuristic eval.
 
-`--enforce-free-attack` (default on; `--no-enforce-free-attack` to disable) wires a
-degenerate-correct hard rule into ALL training games: declaring fewer than all
-eligible attackers into an empty opposing board is an instant loss (attacking an
-empty board is 100% correct in this format).
-
 ### Long offline runs: checkpointing, resume, and the systemd service
 
 `python -m fishrl.train` checkpoints to `<ckpt-dir>/latest.pt` (atomically) every

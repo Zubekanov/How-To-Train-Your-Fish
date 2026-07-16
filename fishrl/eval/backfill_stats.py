@@ -41,14 +41,16 @@ _STATUS = re.compile(
     r"gmae=(?P<gmae>[-\d.naif]+)")
 
 # Window game-telemetry tail of a newer `[status ...]` line:
-#   `| games=128 len=38.2 slen=14.1 trunc=0.05 draw=0.01 fatk_p1=1 fatk_p2=0
+#   `| games=128 len=38.2 slen=14.1 trunc=0.05 draw=0.01
 #    seat_p1=0.52 fdec=0.24 | wall collect=0.91`
+# The retired free-attack rule once emitted `fatk_p1=.. fatk_p2=..` between `draw=`
+# and `seat_p1=`; those tokens are tolerated-but-ignored so historical logs still parse.
 # Searched only within a line that already matched _STATUS, so its `games=` token
 # can't be confused with a [league]/[scenario] line's.
 _GAME_TELEM = re.compile(
     r"games=(?P<games>\d+)\s+len=(?P<len>[-\d.naif]+)\s+slen=(?P<slen>[-\d.naif]+)\s+"
     r"trunc=(?P<trunc>[-\d.naif]+)\s+draw=(?P<draw>[-\d.naif]+)\s+"
-    r"fatk_p1=(?P<fa1>\d+)\s+fatk_p2=(?P<fa2>\d+)\s+"
+    r"(?:fatk_p1=\d+\s+fatk_p2=\d+\s+)?"
     r"seat_p1=(?P<seat>[-\d.naif]+)\s+fdec=(?P<fdec>[-\d.naif]+)\s+\|\s+"
     r"wall\s+collect=(?P<wcol>[-\d.naif]+)")
 
@@ -209,7 +211,6 @@ def parse_status(lines, league=None) -> tuple:
                 "dec_per_game": _f(gt.group("len")),
                 "scen_dec_per_game": _f(gt.group("slen")),
                 "trunc_rate": _f(gt.group("trunc")), "draw_rate": _f(gt.group("draw")),
-                "freeatk_p1": int(gt.group("fa1")), "freeatk_p2": int(gt.group("fa2")),
                 "mirror_p1_wr": _f(gt.group("seat")), "forced_dec_frac": _f(gt.group("fdec")),
                 "collect_frac": _f(gt.group("wcol")),
             })

@@ -393,7 +393,14 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     kind = u.path.rsplit("/", 1)[1]
                     rows = self.store.since(kind, self._since_it(q))
-                    self._json({kind: rows, "count": len(rows)})
+                    # The run id (ckpt dir basename) rides on every range
+                    # response: downstream collectors segment rows by run --
+                    # iteration counters reset on a fresh run (checkpoints ->
+                    # checkpoints-v2), so host/it can't distinguish them, and
+                    # the relay redirect means the client can't know which
+                    # directory actually served the rows.
+                    self._json({kind: rows, "count": len(rows),
+                                "run": os.path.basename(os.path.abspath(self.store.dir))})
             else:
                 self._json({"error": f"unknown path {u.path}"}, code=404)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):

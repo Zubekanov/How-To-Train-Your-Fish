@@ -89,6 +89,10 @@ def test_range_queries_idempotent(site):
     assert lo + hi == full                           # union of a split == the whole
     assert [t["it"] for t in _get(port, "/api/ticks?since_it=18")["ticks"]] == [19, 20]
     assert _get(port, "/api/evals")["count"] == 1
+    # Every range response names its run (ckpt dir basename) so collectors
+    # can segment rows across fresh-start runs whose iteration counters reset.
+    for path in ("/api/reports", "/api/evals", "/api/ticks?since_it=18"):
+        assert _get(port, path)["run"]
     with pytest.raises(urllib.error.HTTPError) as e:
         _get(port, "/api/nope")
     assert e.value.code == 404

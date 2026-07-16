@@ -54,21 +54,28 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0) -> d
             "approx_kl": vals[3], "clip_frac": vals[4], "n": n}
 
 
-def aux_update(batch, guesser, public_est, opt_g, opt_p, steps: int) -> dict:
+def aux_update(batch, guesser, public_est, opt_g, opt_p, steps: int,
+               train_public: bool = True) -> dict:
     """A few SGD steps on the guesser (Poisson) and public estimator (BCE).
 
     These are the only places the guesser and public estimator are trained — both
     purely supervised on the rollout's targets, never through the policy gradient.
     The guesser is thus an honest posterior; the public estimator is diagnostic
-    (it is not the critic — only the privileged critic computes advantages)."""
+    (it is not the critic — only the privileged critic computes advantages). When
+    `train_public` is False the public head is skipped entirely (its buffered features
+    are zeros; see features.set_public_encoding) and public_loss is NaN."""
+    import math
     dev = device_of(guesser)
     persp, prev, cnt = batch["persp"].to(dev), batch["prev_guess"].to(dev), batch["cnt"].to(dev)
-    pub, y_p1, valid = batch["pub"].to(dev), batch["y_p1"].to(dev), batch["valid"].to(dev)
-    g_loss = p_loss = 0.0
+    g_loss, p_loss = 0.0, float("nan")
+    if train_public:
+        pub, y_p1, valid = batch["pub"].to(dev), batch["y_p1"].to(dev), batch["valid"].to(dev)
     for _ in range(max(steps, 1)):
         gl = guesser_poisson(guesser(persp, prev), cnt)
         opt_g.zero_grad(); gl.backward(); opt_g.step()
-        pl = outcome_bce(public_est(pub), y_p1, valid)
-        opt_p.zero_grad(); pl.backward(); opt_p.step()
-        g_loss, p_loss = gl.detach().item(), pl.detach().item()
+        g_loss = gl.detach().item()
+        if train_public:
+            pl = outcome_bce(public_est(pub), y_p1, valid)
+            opt_p.zero_grad(); pl.backward(); opt_p.step()
+            p_loss = pl.detach().item()
     return {"guesser_loss": g_loss, "public_loss": p_loss}

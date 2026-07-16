@@ -113,6 +113,11 @@ def main():
     ap.add_argument("--card-dim", type=int, default=Config.card_dim,
                     help="entity/attention per-card embedding width d (default 64); "
                          "sets enc_dim, so the head adapts. Ignored by flat nets.")
+    ap.add_argument("--train-public", default=Config.train_public,
+                    action=argparse.BooleanOptionalAction,
+                    help="train the DIAGNOSTIC public estimator (default on). --no-train-public "
+                         "skips its per-decision encode + aux training for a small collection "
+                         "speedup, dropping the pub calibration telemetry.")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--ckpt-dir", default="checkpoints")
     ap.add_argument("--resume", action="store_true",
@@ -144,6 +149,13 @@ def main():
     if _N_THREADS is not None:
         import torch
         torch.set_num_threads(_N_THREADS)             # env caps BLAS; this caps torch's own pool
+
+    if args.gpu:
+        import torch
+        # TF32 tensor-core matmul path on Ampere+ (the 3060): ~free for RL and faster for
+        # the head GEMMs. Harmless on CPU / older GPUs (the flags are simply ignored).
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
 
     # Relay guards, both before any state is touched:
     #  * ownership stamp -- is it this host's turn to train this lineage?
@@ -192,6 +204,7 @@ def main():
                   p1_adv_weight=args.p1_adv_weight,
                   ent_end=args.ent_end, ent_anneal_iters=args.ent_anneal_iters,
                   ent_reheat_period=args.ent_reheat_period, ent_reheat_peak=args.ent_reheat_peak,
+                  train_public=args.train_public,
                   ckpt_dir=args.ckpt_dir, report_every_seconds=args.report_every_seconds,
                   report_winrate_games=args.report_winrate_games,
                   checkpoint_every_seconds=args.checkpoint_every_seconds,

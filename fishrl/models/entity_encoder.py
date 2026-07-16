@@ -85,6 +85,12 @@ class _EntityBase(nn.Module):
             pos_ids += list(range(n))
         self.register_buffer("zone_ids", torch.tensor(zone_ids, dtype=torch.long))
         self.register_buffer("pos_ids", torch.tensor(pos_ids, dtype=torch.long))
+        # Row -> output-zone index (0..len(zone_slots)-1, in layout order). Lets the
+        # per-zone pool run as ONE scatter-reduce over all R rows instead of an 8-iteration
+        # Python loop of ~6 tiny ops each -- the loop was ~70% of the batch-1 encoder cost
+        # (pure op-dispatch overhead on the collection hot path).
+        seg_ids = [i for i, n in enumerate(self.zone_slots) for _ in range(n)]
+        self.register_buffer("seg_ids", torch.tensor(seg_ids, dtype=torch.long))
 
     def _tokens(self, x: torch.Tensor):
         """flat obs -> (tokens (B,R,d), occupancy (B,R), globals (B,G))."""
@@ -119,6 +125,27 @@ class EntityEncoder(_EntityBase):
     @property
     def enc_dim(self) -> int:
         return len(self.zone_slots) * 2 * self.d + self.globals_dim
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Vectorized equivalent of _EntityBase.forward's per-zone loop: one segment
+        # mean + one segment max over ALL rows, keyed on seg_ids, then interleaved
+        # [mean_z, max_z] per zone in layout order (matching the loop's cat order).
+        # Numerically identical to the loop up to float sum-order (<1e-6).
+        h, occ, glob = self._tokens(x)
+        h = self._contextualize(h, occ)                    # identity for this encoder
+        B, Z, d = h.shape[0], len(self.zone_slots), self.d
+        occ1 = occ.unsqueeze(-1)                            # (B, R, 1)
+        idx_d = self.seg_ids.view(1, -1, 1).expand(B, -1, d)
+        zsum = h.new_zeros(B, Z, d).scatter_add(1, idx_d, h * occ1)
+        zcnt = occ1.new_zeros(B, Z, 1).scatter_add(
+            1, self.seg_ids.view(1, -1, 1).expand(B, -1, 1), occ1)
+        zmean = zsum / zcnt.clamp(min=1.0)                  # empty zone -> 0/1 = 0
+        hmask = h.masked_fill(occ1 == 0, float("-inf"))
+        zmax = h.new_full((B, Z, d), float("-inf")).scatter_reduce(
+            1, idx_d, hmask, reduce="amax", include_self=True)
+        zmax = torch.where(torch.isinf(zmax), torch.zeros_like(zmax), zmax)  # empty -> 0
+        zc = torch.cat([zmean, zmax], dim=-1).reshape(B, Z * 2 * d)
+        return torch.cat([zc, glob], dim=-1)
 
     def _pool(self, seg: torch.Tensor, m: torch.Tensor) -> list[torch.Tensor]:
         m = m.unsqueeze(-1)                                            # (B, n, 1)

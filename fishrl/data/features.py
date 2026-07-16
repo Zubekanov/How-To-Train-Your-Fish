@@ -175,6 +175,19 @@ def encode_public_ref(g) -> np.ndarray:
     return np.concatenate(parts).astype(np.float32)
 
 
+# The public estimator is DIAGNOSTIC-ONLY (never feeds the policy/advantages). When a run
+# disables it (Config.train_public=False) we skip the per-decision encode entirely and buffer
+# a shared zero vector instead -- ~40us/decision saved on the collection hot path, at the cost
+# of the pub calibration telemetry. Toggled once per process (main + each pcollect worker).
+_PUBLIC_ENCODING = True
+_ZERO_PUB = np.zeros(PUB_DIM, dtype=np.float32)
+
+
+def set_public_encoding(enabled: bool) -> None:
+    global _PUBLIC_ENCODING
+    _PUBLIC_ENCODING = bool(enabled)
+
+
 def encode_public(g) -> np.ndarray:
     """Mutual-knowledge, p1-oriented feature vector (PUB_DIM). Fast object-native
     path re-deriving spectator_view's filters (engine objects read-only):
@@ -184,6 +197,8 @@ def encode_public(g) -> np.ndarray:
       * a LIBRARY slot shows iff BOTH players know it.
 
     Bit-identical to `encode_public_ref` -- guarded by test_encoder_equivalence."""
+    if not _PUBLIC_ENCODING:
+        return _ZERO_PUB                                   # public head disabled -> skip the encode
     obj = g.objects
 
     def hand_objs(pid, other):

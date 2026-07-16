@@ -124,6 +124,11 @@ class Config:
     lr_guesser: float = 1e-3
     lr_public: float = 1e-3
     aux_steps: int = 2          # SGD steps on guesser/public per iteration (between PPO updates)
+    # The public estimator is DIAGNOSTIC-ONLY (calibration telemetry; never feeds the policy).
+    # False skips its per-decision encode (encode_public -> zeros) AND its aux training -- a
+    # small collection speedup that costs the pub_acc/pub_brier/brier_gap telemetry. Default
+    # True = unchanged behaviour.
+    train_public: bool = True
 
     # schedule
     warmup_games: int = 64

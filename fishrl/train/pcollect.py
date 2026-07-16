@@ -99,6 +99,8 @@ def _winit(lite: dict) -> None:
 
     torch.set_num_threads(1)
     _apply_affinity(lite.get("affinity") or [])
+    from fishrl.data import features
+    features.set_public_encoding(lite.get("train_public", True))   # match the trainer's public gate
     hidden = tuple(lite["hidden"])                        # guesser head width
     ah = tuple(lite.get("actor_hidden", hidden))          # actor head width (may differ)
     cd = int(lite.get("card_dim", 64))                    # entity card-embedding width
@@ -206,6 +208,7 @@ class ParallelCollector:
                 "enc_actor": cfg.enc_for("actor"), "enc_guesser": cfg.enc_for("guesser"),
                 "use_belief": cfg.use_belief, "max_decisions": cfg.max_decisions,
                 "enforce_free_attack": cfg.enforce_free_attack,
+                "train_public": cfg.train_public,
                 "scenario_names": scen_names,
                 "affinity": parse_affinity(getattr(cfg, "collect_affinity", ""))}
         # Recycle each worker after this many chunks: a fresh process resets the

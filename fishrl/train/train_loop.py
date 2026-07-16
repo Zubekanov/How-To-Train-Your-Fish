@@ -164,6 +164,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
     (plus a final line) -- see module docstring."""
     from fishrl.eval.metrics import estimator_metrics, guesser_mae, panel_winrates
     from fishrl.train.warmup import warmup
+    from fishrl.data import features
+    features.set_public_encoding(cfg.train_public)   # off -> skip per-decision encode_public
     m = models or build_models(cfg)
 
     opt_ppo = torch.optim.Adam(list(m.actor.parameters()) + list(m.critic.parameters()), lr=cfg.lr_ppo)
@@ -312,6 +314,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
                              max_decisions=cfg.max_decisions, use_belief=cfg.use_belief)
               if cfg.report_winrate_games > 0 else None)
         est = estimator_metrics(m, last_batch) if last_batch is not None else {}
+        if not cfg.train_public:                         # pub head disabled -> its calib is meaningless
+            est = {k: v for k, v in est.items() if not k.startswith("pub_")}
         gmae = guesser_mae(m, last_batch) if last_batch is not None else float("nan")
         eval_s = time.perf_counter() - t0
         dt_h = max(now - last_report, 1e-9) / 3600.0
@@ -819,7 +823,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 ent = cfg.ent_coef(done)
             t_update = time.perf_counter()
             ppo_stats = ppo_update(batch, m.actor, m.critic, opt_ppo, cfg, ent, rng_seed=done)
-            aux_stats = aux_update(batch, m.guesser, m.public, opt_g, opt_p, cfg.aux_steps)
+            aux_stats = aux_update(batch, m.guesser, m.public, opt_g, opt_p, cfg.aux_steps,
+                                   train_public=cfg.train_public)
             iter_update_s = time.perf_counter() - t_update
             gwin["update_s"] += iter_update_s
             for k in ("policy_loss", "critic_loss", "entropy", "approx_kl", "clip_frac"):

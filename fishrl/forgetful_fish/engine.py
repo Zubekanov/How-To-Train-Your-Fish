@@ -1531,9 +1531,15 @@ def complete_text_change(g: GameState, player: str, frm, to) -> bool:
 # turn, then draw a card. (On a spell that resolves into a permanent the change
 # carries over, keeping its end-of-turn duration — see _sweep_text_changes.)
 register_targets("Crystal Spray", count=1,
+                 # Caster-first, NOT p1-first: choose_targets is masked as PICK_SINGLE k, an
+                 # index into THIS list, so a p1-first order makes the same index target a
+                 # different permanent under seat-swap (seat-dependent action semantics). The
+                 # mask BITS match either way -- only the meaning of the index differs -- so
+                 # this hid from the mask-equivariance check. Caster-relative is seat-neutral.
                  legal=lambda g, caster: (
                      [s.source_instance_id for s in g.stack if s.kind == "spell"]
-                     + [iid for pl in g.players.values() for iid in pl.battlefield]),
+                     + list(g.players[caster].battlefield)
+                     + list(g.players[_OTHER[caster]].battlefield)),
                  prompt="Change the text of target spell or permanent.")
 
 
@@ -1557,7 +1563,11 @@ def _after_crystal_spray(g: GameState, player: str, frm: str, to: str, ctx: dict
 
 # Mind Bend {U}: change the text of target permanent indefinitely.
 register_targets("Mind Bend", count=1,
-                 legal=lambda g, caster: [iid for pl in g.players.values() for iid in pl.battlefield],
+                 # caster-first (see Crystal Spray): PICK_SINGLE indexes this list, so the
+                 # order must be seat-relative or the same index targets a different permanent
+                 # in the seat-swapped game.
+                 legal=lambda g, caster: (list(g.players[caster].battlefield)
+                                          + list(g.players[_OTHER[caster]].battlefield)),
                  prompt="Change the text of target permanent.")
 
 

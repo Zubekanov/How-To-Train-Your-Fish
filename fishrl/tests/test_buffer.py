@@ -96,6 +96,39 @@ def test_truncated_game_bootstraps_instead_of_drawing():
     assert cut_draw.mean() < 0.4 * loss_b < 0        # dragged toward the loss cluster
 
 
+# ── per-seat advantage weighting ──────────────────────────────────────────────
+def _seat_weight_buffer():
+    """Balanced 1-step games so pre-normalization advantages are mean-zero: p1
+    seg [0.8, -0.8], p2 seg [0.7, -0.7]. Mean-zero makes joint normalization a pure
+    rescale, so the p1:p2 magnitude ratio is preserved exactly and p1_adv_weight
+    scales it cleanly."""
+    buf = RolloutBuffer()
+    buf.steps = [_step("p1", 0, "p1", value=0.2),    # adv +0.8
+                 _step("p1", 1, "p2", value=-0.2),   # adv -0.8
+                 _step("p2", 2, "p2", value=0.3),    # adv +0.7
+                 _step("p2", 3, "p1", value=-0.3)]   # adv -0.7
+    buf.games = ["p1", "p2", "p2", "p1"]
+    return buf
+
+
+def test_p1_adv_weight_default_is_identity():
+    a0 = _seat_weight_buffer().compute(gamma=1.0, lam=1.0)["adv"].numpy()
+    a1 = _seat_weight_buffer().compute(gamma=1.0, lam=1.0, p1_adv_weight=1.0)["adv"].numpy()
+    assert np.allclose(a0, a1), "p1_adv_weight=1.0 must reproduce the historic update"
+
+
+def test_p1_adv_weight_scales_p1_relative_to_p2():
+    def ratio(w):
+        a = _seat_weight_buffer().compute(gamma=1.0, lam=1.0, p1_adv_weight=w)["adv"].numpy()
+        return np.linalg.norm(a[:2]) / np.linalg.norm(a[2:])   # ||p1|| / ||p2||
+    r1, r2 = ratio(1.0), ratio(2.0)
+    assert r2 > r1                                    # p1 gets more gradient weight
+    assert np.isclose(r2 / r1, 2.0, atol=1e-4)        # exactly 2x on mean-zero data
+    # p2's own sign structure is untouched (still one win, one loss)
+    a = _seat_weight_buffer().compute(gamma=1.0, lam=1.0, p1_adv_weight=2.0)["adv"].numpy()
+    assert a[2] > 0 > a[3]
+
+
 # ── guesser input contract ────────────────────────────────────────────────────
 class _CountingGuesser(torch.nn.Module):
     """Stub guesser: output = prev + 1 elementwise. Makes the carried-previous-guess

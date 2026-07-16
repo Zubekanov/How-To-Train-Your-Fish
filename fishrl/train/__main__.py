@@ -66,6 +66,19 @@ def main():
                     action=argparse.BooleanOptionalAction,
                     help="hard rule across all training: declaring fewer than all eligible "
                          "attackers into an empty opposing board is an instant loss")
+    ap.add_argument("--p1-adv-weight", type=float, default=Config.p1_adv_weight,
+                    help="policy-gradient weight on p1-seat advantages (>1 steers the shared "
+                         "net toward p1, the seat the vs-heuristic metric always measures; "
+                         "1.0 = symmetric). The game is seat-symmetric but self-play drifts "
+                         "p2-favouring -- see fishrl.eval.seat_report")
+    ap.add_argument("--ent-end", type=float, default=Config.ent_end,
+                    help="entropy-coefficient FLOOR held after the anneal horizon (the "
+                         "sustained exploration level for an unbounded run)")
+    ap.add_argument("--ent-anneal-iters", type=int, default=Config.ent_anneal_iters,
+                    help="iters over which entropy anneals ent_start->ent_end when --iters<=0")
+    ap.add_argument("--scenario-weight", action="append", default=[], metavar="NAME=W",
+                    help="override a scenario's PFSP prior weight (repeatable); e.g. "
+                         "deckout=0.5 to stop a floored scenario from soaking the pool")
     ENC = ["flat", "entity", "attention"]
     ap.add_argument("--encoder", choices=ENC, default="flat",
                     help="base encoder for any net without a per-net override")
@@ -135,6 +148,14 @@ def main():
     if args.resume and not have_ckpt:
         print(f"[resume] no checkpoint at {latest}; starting fresh", flush=True)
 
+    # --scenario-weight NAME=W overrides, merged over the Config default weights.
+    scen_w = dict(Config.__dataclass_fields__["scenario_weights"].default_factory())
+    for spec in args.scenario_weight:
+        name, _, val = spec.partition("=")
+        if not _:
+            ap.error(f"--scenario-weight expects NAME=W, got {spec!r}")
+        scen_w[name.strip()] = float(val)
+
     common = dict(device=resolve_device(args.gpu), iters=args.iters,
                   games_per_iter=args.games_per_iter, collect_workers=args.collect_workers,
                   collect_affinity=args.collect_affinity,
@@ -142,8 +163,10 @@ def main():
                   warmup_games=args.warmup_games,
                   pool_frac=args.pool_frac, pfsp_mode=args.pfsp_mode,
                   league_size=args.league_size, scenario_frac=args.scenario_frac,
-                  scenarios_in_pool=args.scenario_pool,
+                  scenarios_in_pool=args.scenario_pool, scenario_weights=scen_w,
                   enforce_free_attack=args.enforce_free_attack,
+                  p1_adv_weight=args.p1_adv_weight,
+                  ent_end=args.ent_end, ent_anneal_iters=args.ent_anneal_iters,
                   ckpt_dir=args.ckpt_dir, report_every_seconds=args.report_every_seconds,
                   report_winrate_games=args.report_winrate_games,
                   checkpoint_every_seconds=args.checkpoint_every_seconds,
@@ -166,6 +189,7 @@ def main():
     cap = "unbounded" if cfg.iters <= 0 else cfg.iters
     print(f"device: {cfg.device} | encoders: {encs} | iters: {cap} | "
           f"pool: {cfg.pool_frac:.2f} (pfsp={cfg.pfsp_mode}, league={cfg.league_size}) | "
+          f"p1_adv={cfg.p1_adv_weight:.2f} ent_end={cfg.ent_end:.3f} | "
           f"resume: {resume} | ckpt: {latest}", flush=True)
 
     from fishrl.train.keepawake import keep_awake

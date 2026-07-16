@@ -11,6 +11,7 @@ import os
 
 import pytest
 
+from fishrl.eval.metrics import seat_diag_rates
 from fishrl.eval.parallel_panel import (BEST, BEST_META, _even_chunks, _maybe_save_best,
                                         find_harvest, parallel_panel, plan_topup)
 from fishrl.train import checkpoint as ckpt
@@ -43,6 +44,33 @@ def test_even_chunks_partition_and_parity():
         assert sum(c for _, c in ch) == n
         assert [s for s, _ in ch] == [sum(c for _, c in ch[:i]) for i in range(len(ch))]
         assert all(c % 2 == 0 for _, c in ch)            # each chunk internally seat-balanced
+
+
+def test_seat_diag_rates_sums_chunks_into_correct_rates():
+    # Two worker chunks' counters sum, then convert to rates. Decided is the seat/
+    # play-draw denominator; games is first_player's; choose_total is the choice's.
+    chunks = [
+        {"p1_wins": 3, "p2_wins": 7, "play_wins": 6, "draw_wins": 4,
+         "choose_first": 1, "choose_total": 5, "fp_p1": 6, "decided": 10, "games": 12},
+        {"p1_wins": 2, "p2_wins": 8, "play_wins": 5, "draw_wins": 5,
+         "choose_first": 0, "choose_total": 5, "fp_p1": 6, "decided": 10, "games": 12},
+    ]
+    agg = {k: sum(c[k] for c in chunks) for k in chunks[0]}
+    r = seat_diag_rates(agg)
+    assert r["seat_p1_wr"] == 5 / 20 and r["seat_p2_wr"] == 15 / 20   # learned p2 skew
+    assert r["seat_p1_wr"] + r["seat_p2_wr"] == 1.0                   # decided games split
+    assert r["play_wr"] == 11 / 20 and r["draw_wr"] == 9 / 20
+    assert r["choose_first_frac"] == 1 / 10                           # over choose_total
+    assert r["first_player_p1_frac"] == 12 / 24                       # ~0.5 sanity (over games)
+    assert r["decided"] == 20 and r["n_games"] == 24
+
+
+def test_seat_diag_rates_tolerates_no_choice_decisions():
+    # A window with no choose_play_order decisions must not divide by zero.
+    r = seat_diag_rates({"p1_wins": 1, "p2_wins": 1, "play_wins": 1, "draw_wins": 1,
+                         "choose_first": 0, "choose_total": 0, "fp_p1": 1,
+                         "decided": 2, "games": 2})
+    assert r["choose_first_frac"] != r["choose_first_frac"]           # NaN, not a crash
 
 
 def test_maybe_save_best_keeps_the_highest_heuristic(tmp_path):

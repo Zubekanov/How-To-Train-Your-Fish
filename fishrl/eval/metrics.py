@@ -227,6 +227,87 @@ def panel_winrates(models, frozen=None, n_games=30, max_decisions=2000,
     return out
 
 
+def seat_diag_counts(models, n_games=100, seed=100, max_decisions=2000,
+                     use_belief=True) -> dict:
+    """Raw integer counters for the seat / play-draw decomposition over `n_games`
+    mirror self-play games (both seats the SAME policy). Split-friendly: sum the
+    counters across chunks, then call `seat_diag_rates`. See
+    `selfplay_seat_diagnostics` for what the axes mean."""
+    from fishrl.env.aec_env import FishAEC
+    z = np.zeros(V.N_NAMES, dtype=np.float32)
+    c = {"p1_wins": 0, "p2_wins": 0, "play_wins": 0, "draw_wins": 0,
+         "choose_first": 0, "choose_total": 0, "fp_p1": 0, "decided": 0, "games": 0}
+    for gi in range(n_games):
+        env = FishAEC(max_decisions=max_decisions)
+        env.reset(seed=seed + gi)
+        prev = {"p1": z.copy(), "p2": z.copy()}
+        guard = 0
+        while env.agents and guard < max_decisions * 6:
+            guard += 1
+            seat = env.agent_selection
+            if env.terminations[seat] or env.truncations[seat]:
+                env.step(None)
+                continue
+            base = env.observe(seat)
+            pend = env.g.pending
+            aug, guess = _aug_obs(models, use_belief, base, prev[seat], z)
+            prev[seat] = guess
+            a = act_from_actor(models.actor, aug)
+            if pend is not None and pend.type == "choose_play_order":
+                c["choose_total"] += 1
+                c["choose_first"] += int(a == 0)      # i==0 -> play first (apply.py:52)
+            env.step(a)
+        winner = env.winner
+        c["games"] += 1
+        c["fp_p1"] += int(env.g.first_player == "p1")
+        if winner in ("p1", "p2"):
+            c["decided"] += 1
+            c[f"{winner}_wins"] += 1
+            if winner == env.g.first_player:
+                c["play_wins"] += 1
+            else:
+                c["draw_wins"] += 1
+    return c
+
+
+def seat_diag_rates(c: dict) -> dict:
+    """Turn summed `seat_diag_counts` counters into interpretable rates."""
+    d = max(c.get("decided", 0), 1)
+    ct = c.get("choose_total", 0)
+    return {
+        "seat_p1_wr": c["p1_wins"] / d,
+        "seat_p2_wr": c["p2_wins"] / d,
+        "play_wr": c["play_wins"] / d,
+        "draw_wr": c["draw_wins"] / d,
+        "choose_first_frac": (c["choose_first"] / ct) if ct else float("nan"),
+        "first_player_p1_frac": c["fp_p1"] / max(c.get("games", 0), 1),
+        "decided": c.get("decided", 0), "n_games": c.get("games", 0),
+    }
+
+
+def selfplay_seat_diagnostics(models, n_games=200, seed=100, max_decisions=2000,
+                              use_belief=True) -> dict:
+    """Decompose the mirror-self-play win-rate into SEAT (p1/p2) and PLAY/DRAW.
+
+    Both seats are driven by the SAME policy, so a seat-symmetric game + seat-symmetric
+    policy would sit at p1==p2==0.50. A gap is a LEARNED asymmetry: the shared net plays
+    one seat better than the other (measured 0.375/0.625 at it~484k). This matters because
+    the objective — beating the engine heuristic — is only ever measured from p1 (the engine
+    resolves the heuristic on p2), so a weak-p1 policy is capped on the metric regardless of
+    its true skill. Reports, per decided game:
+      * seat_p1_wr / seat_p2_wr  — win-rate of the shared policy in each seat
+      * play_wr / draw_wr        — win-rate on the play vs on the draw (a SEPARATE axis;
+                                   first_player is decided by a fair d20 roll + the winner's
+                                   choose_play_order choice, so it is seat-independent)
+      * choose_first_frac        — how often the roll winner chooses to play FIRST (i==0);
+                                   the current policy pathologically picks 'draw' ~always
+                                   even though on-the-play wins more
+      * first_player_p1_frac     — sanity check: should be ~0.5 (the roll is seat-neutral)
+    """
+    return seat_diag_rates(seat_diag_counts(
+        models, n_games=n_games, seed=seed, max_decisions=max_decisions, use_belief=use_belief))
+
+
 def winrate_vs_heuristic(models, n_games=20, seed=0, max_decisions=2000,
                          use_belief=True, profile="heuristic") -> float:
     """The trained actor (p1, belief-augmented) vs the engine heuristic AI (p2).

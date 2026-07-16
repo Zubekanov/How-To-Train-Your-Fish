@@ -772,7 +772,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
             gwin["forced_steps"] += sum(1 for s in buf.steps if int(s.mask.sum()) == 1)
             iter_collect_s = time.perf_counter() - t_collect
             gwin["collect_s"] += iter_collect_s
-            batch = buf.compute(cfg.gamma, cfg.lam)
+            batch = buf.compute(cfg.gamma, cfg.lam, p1_adv_weight=cfg.p1_adv_weight)
             if max_seconds is not None:                  # anneal entropy over the budget
                 frac = min(total_elapsed() / max_seconds, 1.0)
                 ent = cfg.ent_start + frac * (cfg.ent_end - cfg.ent_start)

@@ -23,6 +23,16 @@ class Config:
     lam: float = 0.95
     max_decisions: int = 2000
     games_per_iter: int = 8
+    # Per-seat policy-gradient weight. The game is seat-SYMMETRIC (random & attacker
+    # mirror both sit at ~0.50), but long self-play drifts into a seat-asymmetric
+    # equilibrium -- at it~484k the shared policy won 0.625 as p2 but only 0.375 as p1.
+    # That matters because the objective (beat the engine heuristic) is only ever measured
+    # from p1: the engine resolves the heuristic on p2, so both training-vs-heuristic and
+    # the vs-heuristic eval put the learner in p1. `p1_adv_weight` > 1 scales p1-seat
+    # advantages up before normalization, steering the shared net's capacity toward the
+    # seat that the metric actually reads (and counteracting the p2 drift). 1.0 = the
+    # historic symmetric behaviour. See fishrl.eval.seat_report / selfplay_seat_diagnostics.
+    p1_adv_weight: float = 1.0
     # Parallel local collection: fan each iteration's games across this many
     # persistent collector worker processes (fishrl.train.pcollect), shipping the
     # CURRENT weights every iteration -- wall-clock only, training semantics

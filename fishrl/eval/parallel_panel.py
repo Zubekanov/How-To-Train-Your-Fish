@@ -92,6 +92,14 @@ def _task_heuristic(start: int, count: int, seed: int, profile: str = "heuristic
     return round(v * count)
 
 
+def _task_seat_diag(start: int, count: int, seed: int) -> dict:
+    """One chunk of the seat / play-draw diagnostic: mirror self-play counters."""
+    from fishrl.eval.metrics import seat_diag_counts
+    _seed_torch(seed + start)
+    return seat_diag_counts(_G["m"], n_games=count, seed=seed + start,
+                            max_decisions=_G["md"], use_belief=_G["ub"])
+
+
 def _task_match(trained_is_p1: bool, count: int, base_seed: int) -> tuple:
     """One orientation of the frozen match: returns (trained_wins, decided_games)."""
     from fishrl.eval.metrics import _match_models
@@ -142,6 +150,7 @@ SEED_RANDOM, SEED_ATTACKER, SEED_HEURISTIC = 800_000, 700_000, 900_000
 SEED_HEURISTIC11 = 950_000
 SEED_HEURISTIC12 = 960_000
 SEED_FROZEN_A, SEED_FROZEN_B = 500_000, 510_000
+SEED_SEAT_DIAG = 100  # matches metrics.selfplay_seat_diagnostics default seed band
 
 # Anchors whose outcomes the trainer harvests from its own PFSP pool games (the
 # report rows' "wr_train": anchor -> [wins, games], eval convention). Frozen-self
@@ -250,7 +259,7 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
                    reserve_cores: int = 0, n_random: int | None = None,
                    n_attacker: int | None = None, n_frozen: int | None = None,
                    harvest: dict | None = None, harvest_from: int | None = None,
-                   affinity: str = "") -> dict:
+                   affinity: str = "", seat_diag_games: int = 0) -> dict:
     """Compute win-rates vs random / attacker / heuristic / frozen-self from a checkpoint,
     fanning the games across a process pool. Returns the rates plus eval metadata.
 
@@ -308,9 +317,14 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
             "frozen_a": [ex.submit(_task_match, True, c, SEED_FROZEN_A + s) for s, c in fch],
             "frozen_b": [ex.submit(_task_match, False, c, SEED_FROZEN_B + s) for s, c in fch],
         }
+        # Seat / play-draw diagnostic (self-play, both seats the shared policy). Off by
+        # default (seat_diag_games=0) so the ODROID timer's worker/seed layout is unchanged.
+        seat_futs = [ex.submit(_task_seat_diag, s, c, SEED_SEAT_DIAG)
+                     for s, c in _chunks(seat_diag_games, workers)] if seat_diag_games > 0 else []
         topup_wins = {k: sum(f.result() for f in futs[k]) for k in HARVEST_ANCHORS}
         fa = [f.result() for f in futs["frozen_a"]]
         fb = [f.result() for f in futs["frozen_b"]]
+        seat_counts = [f.result() for f in seat_futs]
     finally:
         ex.shutdown(wait=True)
 
@@ -336,6 +350,10 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
         "elapsed_h": float(pl.get("elapsed", 0.0)) / 3600.0,
         "took_s": time.perf_counter() - t0,
     }
+    if seat_counts:
+        from fishrl.eval.metrics import seat_diag_rates
+        agg = {k: sum(c.get(k, 0) for c in seat_counts) for k in seat_counts[0]}
+        r["seat"] = seat_diag_rates(agg)
     if save_best:
         r["new_best"] = _maybe_save_best(os.path.dirname(os.path.abspath(ckpt_path)), pl, r)
     return r
@@ -385,8 +403,8 @@ def run_once(args, ckpt_path: str, allow_harvest: bool) -> None:
                        reserve_cores=args.reserve_cores, n_random=args.n_random,
                        n_attacker=args.n_attacker, n_frozen=args.n_frozen,
                        harvest=harvest, harvest_from=harvest_from,
-                       affinity=args.affinity)
-    stats_io.append_eval(args.ckpt_dir, {                # dump this panel to stats.json["evals"]
+                       affinity=args.affinity, seat_diag_games=args.seat_diag_games)
+    row = {                                              # dump this panel to stats.json["evals"]
         "it": r["it"], "frozen_at": r["frozen_it"], "elapsed_h": r["elapsed_h"],
         "wall_time": time.time(), "n": r["n"], "workers": r["workers"], "took_s": r["took_s"],
         "frozen": r["frozen"], "random": r["random"], "attacker": r["attacker"],
@@ -394,14 +412,27 @@ def run_once(args, ckpt_path: str, allow_harvest: bool) -> None:
         "heuristic12": r["heuristic12"],
         "anchor_n": r["anchor_n"], "harvest_from": r["harvest_from"],
         "new_best": bool(r.get("new_best")), "source": "eval",
-    })
+    }
+    if "seat" in r:                                      # learned seat / play-draw split
+        sd = r["seat"]
+        row["seat_p1_wr"] = sd["seat_p1_wr"]
+        row["seat_p2_wr"] = sd["seat_p2_wr"]
+        row["play_wr"] = sd["play_wr"]
+        row["draw_wr"] = sd["draw_wr"]
+        row["choose_first_frac"] = (None if sd["choose_first_frac"] != sd["choose_first_frac"]
+                                    else sd["choose_first_frac"])   # NaN -> null
+        row["seat_diag_n"] = sd["decided"]
+    stats_io.append_eval(args.ckpt_dir, row)
     best = "  *** NEW BEST (heuristic) -> best.pt ***" if r.get("new_best") else ""
+    seat = (f" | seat p1={r['seat']['seat_p1_wr']:.3f} p2={r['seat']['seat_p2_wr']:.3f} "
+            f"play={r['seat']['play_wr']:.3f} draw={r['seat']['draw_wr']:.3f}"
+            if "seat" in r else "")
     print(
         f"[eval it={r['it']} @{r['elapsed_h']:.2f}h n={r['n']} w={r['workers']} "
         f"took={r['took_s']:.1f}s] WR frozen@{r['frozen_it']}={r['frozen']:.3f} "
         f"random={r['random']:.3f} attacker={r['attacker']:.3f} heuristic={r['heuristic']:.3f} "
         f"heuristic11={r['heuristic11']:.3f} heuristic12={r['heuristic12']:.3f}"
-        f"{best}",
+        f"{seat}{best}",
         flush=True,
     )
 
@@ -427,6 +458,11 @@ def main() -> None:
     ap.add_argument("--n-attacker", type=int, default=50, help="attacker-anchor target")
     ap.add_argument("--n-frozen", type=int, default=50,
                     help="frozen-self match games (panel-only: not harvestable)")
+    ap.add_argument("--seat-diag-games", type=int, default=0,
+                    help="self-play games for the SEAT / play-draw diagnostic (0 = off). "
+                         "Reports the learned p1-vs-p2 win split -- the game is seat-"
+                         "symmetric, so a gap is pure policy specialization, and the "
+                         "vs-heuristic metric only ever sees the learner as p1.")
     ap.add_argument("--max-workers", type=int, default=None)
     ap.add_argument("--max-decisions", type=int, default=2000)
     ap.add_argument("--affinity", default="",

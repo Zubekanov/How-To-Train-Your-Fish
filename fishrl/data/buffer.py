@@ -53,8 +53,14 @@ class RolloutBuffer:
         self.games.extend(other.games)
         self.meta.extend(other.meta)
 
-    def compute(self, gamma: float, lam: float) -> dict:
-        """Assign per-(game, seat) GAE advantages and return stacked torch tensors."""
+    def compute(self, gamma: float, lam: float, p1_adv_weight: float = 1.0) -> dict:
+        """Assign per-(game, seat) GAE advantages and return stacked torch tensors.
+
+        `p1_adv_weight` (>1) scales the p1-seat advantages before the joint normalization,
+        weighting p1 decisions more heavily in the policy gradient. The game is seat-
+        symmetric but self-play drifts asymmetric, and the objective (vs-heuristic) only
+        ever measures p1 -- so steering capacity toward p1 targets the seat that counts.
+        1.0 leaves the advantages untouched (the historic symmetric update)."""
         # Advantages over each seat's ordered subsequence WITHIN one game: each game's
         # terminal ±1 lands on its own last decision and never bootstraps into the next
         # game's opening state. A truncated game (decision cap, no verdict) bootstraps
@@ -70,9 +76,12 @@ class RolloutBuffer:
             rewards[-1] = seat_outcome(last.winner, seat)
             bootstrap = values[-1] if last.truncated else 0.0
             a, _ = gae(values, rewards, gamma, lam, bootstrap=bootstrap)
+            if seat == "p1" and p1_adv_weight != 1.0:
+                a = a * p1_adv_weight
             for j, i in enumerate(idxs):
                 adv[i] = a[j]
-        # normalize advantages jointly (both seats share the ±1 frame)
+        # normalize advantages jointly (both seats share the ±1 frame); the p1 up-weight
+        # rides through as a preserved p1:p2 magnitude ratio (normalization is a global affine)
         if adv.std() > 1e-6:
             adv = (adv - adv.mean()) / (adv.std() + 1e-8)
 

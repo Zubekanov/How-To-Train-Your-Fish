@@ -40,7 +40,7 @@ if not exist "%CKPT%\latest.pt" (
 start "fishrl dashboard" /min powershell -NoProfile -ExecutionPolicy Bypass -File "%REPO%\deploy\fishrl-serve.ps1"
 rem Win-rate panels while the session trains: waits for the trainer (trainer.lock),
 rem evals every 15 min, exits with the session.
-start "fishrl eval" /min "%PY%" -m fishrl.eval.parallel_panel --ckpt-dir "%CKPT%" --follow 900 --reserve-cores 12 --affinity 16,17,18,19,20,21,22,23,24,25,26,27
+start "fishrl eval" /min "%PY%" -m fishrl.eval.parallel_panel --ckpt-dir "%CKPT%" --follow 900 --reserve-cores 12 --affinity 16,17,18,19,20,21,22,23,24,25,26,27 --seat-diag-games 48
 ping -n 4 127.0.0.1 >nul
 
 rem Open the address the dashboard ACTUALLY binds -- lan_ip(), the same helper

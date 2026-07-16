@@ -130,6 +130,17 @@ class Config:
     warmup_epochs: int = 3
     iters: int = 100            # <= 0 means UNBOUNDED (run until signal / max_seconds)
     ent_anneal_iters: int = 3000  # entropy-anneal horizon used when iters <= 0 (unbounded)
+    # Cyclical entropy RE-HEATING for very long unbounded runs. The plain anneal collapses
+    # to ent_end and holds there forever, which on a multi-100k-iter run means exploration
+    # is pinned at the floor for ~the whole run -- fine for sharpening, bad for escaping a
+    # self-play local optimum (the plateau failure mode). When ent_reheat_period > 0, AFTER
+    # the initial anneal the coefficient follows a cosine sawtooth: it jumps to
+    # ent_reheat_peak at the start of each period and decays back to ent_end over the period,
+    # re-injecting exploration periodically (LR-warm-restarts, for entropy). 0 = disabled
+    # (a flat ent_end floor, the historic behaviour). Cost: a mild win-rate wobble each
+    # re-heat, so enable it when a run stalls, not preemptively-aggressively.
+    ent_reheat_period: int = 0
+    ent_reheat_peak: float = 0.02
     # Head-MLP widths. `hidden` is the default for the actor / guesser / public heads;
     # `actor_hidden` (when set) overrides it for the ACTOR only, so the policy can be
     # deepened/widened without also growing the guesser (which runs per-decision on the
@@ -223,4 +234,11 @@ class Config:
 
     def ent_coef(self, it: int) -> float:
         horizon = self.iters if self.iters > 0 else self.ent_anneal_iters
+        if self.ent_reheat_period > 0 and it >= horizon:
+            # past the initial anneal: cosine sawtooth from ent_reheat_peak down to ent_end,
+            # restarting every ent_reheat_period iters. phase 0 -> peak, phase 1 -> floor.
+            import math
+            phase = ((it - horizon) % self.ent_reheat_period) / self.ent_reheat_period
+            decay = 0.5 * (1.0 + math.cos(math.pi * phase))          # 1 -> 0 across a period
+            return self.ent_end + decay * (self.ent_reheat_peak - self.ent_end)
         return self.ent_at(it, horizon)

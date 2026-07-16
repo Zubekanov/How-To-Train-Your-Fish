@@ -1,1 +1,1 @@
---encoder flat --critic-encoder entity --actor-encoder entity --actor-hidden 768,768,384 --card-dim 128 --scenario-pool --pool-frac 0.6 --warmup-games 16 --ent-end 0.008 --scenario-weight board_presence=0.5 --scenario-weight deckout=0.5
+--encoder flat --critic-encoder entity --actor-encoder entity --actor-hidden 768,768,384 --card-dim 128 --scenario-pool --pool-frac 0.6 --warmup-games 16 --ent-end 0.008 --ent-anneal-iters 250000 --scenario-weight board_presence=0.5 --scenario-weight deckout=0.5

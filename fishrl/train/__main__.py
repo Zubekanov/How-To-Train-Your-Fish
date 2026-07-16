@@ -82,7 +82,15 @@ def main():
                     help="entropy-coefficient FLOOR held after the anneal horizon (the "
                          "sustained exploration level for an unbounded run)")
     ap.add_argument("--ent-anneal-iters", type=int, default=Config.ent_anneal_iters,
-                    help="iters over which entropy anneals ent_start->ent_end when --iters<=0")
+                    help="iters over which entropy anneals ent_start->ent_end when --iters<=0. "
+                         "Scale to the run: 3000 (~2h) collapses exploration almost immediately "
+                         "on a multi-100k-iter run.")
+    ap.add_argument("--ent-reheat-period", type=int, default=Config.ent_reheat_period,
+                    help="cyclical entropy RE-HEAT period in iters (0 = off). After the anneal, "
+                         "the coefficient sawtooths ent_reheat_peak->ent_end every period, to "
+                         "escape self-play local optima on a very long run.")
+    ap.add_argument("--ent-reheat-peak", type=float, default=Config.ent_reheat_peak,
+                    help="peak entropy coefficient at the start of each re-heat cycle")
     ap.add_argument("--scenario-weight", action="append", default=[], metavar="NAME=W",
                     help="override a scenario's PFSP prior weight (repeatable); e.g. "
                          "deckout=0.5 to stop a floored scenario from soaking the pool")
@@ -183,6 +191,7 @@ def main():
                   enforce_free_attack=args.enforce_free_attack,
                   p1_adv_weight=args.p1_adv_weight,
                   ent_end=args.ent_end, ent_anneal_iters=args.ent_anneal_iters,
+                  ent_reheat_period=args.ent_reheat_period, ent_reheat_peak=args.ent_reheat_peak,
                   ckpt_dir=args.ckpt_dir, report_every_seconds=args.report_every_seconds,
                   report_winrate_games=args.report_winrate_games,
                   checkpoint_every_seconds=args.checkpoint_every_seconds,

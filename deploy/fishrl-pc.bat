@@ -28,16 +28,23 @@ rem ============================================================================
 setlocal
 for %%i in ("%~dp0..") do set "REPO=%%~fi"
 set "PY=%REPO%\.venv\Scripts\python.exe"
-set "CKPT=%REPO%\checkpoints"
+rem The ACTIVE run lives here. checkpoints-v2 is the entity/bigger-actor lineage; the
+rem original 622h flat run is preserved untouched in %REPO%\checkpoints. To go back to
+rem it, point CKPT there. (--resume auto-starts fresh when the dir has no checkpoint, so
+rem the first launch of a new dir bootstraps the architecture from deploy\train.args.)
+set "CKPT=%REPO%\checkpoints-v2"
+
+rem Create the lineage dir up front: the dashboard (started below, before the trainer)
+rem refuses a non-existent --ckpt-dir, and on a fresh run the trainer hasn't made it yet.
+if not exist "%CKPT%" mkdir "%CKPT%"
 
 if not exist "%CKPT%\latest.pt" (
-    echo [fishrl-pc] no checkpoint at %CKPT%\latest.pt -- nothing to resume.
-    echo             For a fresh run:  python -m fishrl.train --fresh --iters 0
-    pause
-    exit /b 1
+    echo [fishrl-pc] no checkpoint in %CKPT% -- FRESH start with the deploy\train.args
+    echo             architecture ^(entity actor, 768/768/384, card_dim 128^).
+    echo             The original flat run is untouched in %REPO%\checkpoints.
 )
 
-start "fishrl dashboard" /min powershell -NoProfile -ExecutionPolicy Bypass -File "%REPO%\deploy\fishrl-serve.ps1"
+start "fishrl dashboard" /min powershell -NoProfile -ExecutionPolicy Bypass -File "%REPO%\deploy\fishrl-serve.ps1" -CkptDir "%CKPT%"
 rem Win-rate panels while the session trains: waits for the trainer (trainer.lock),
 rem evals every 15 min, exits with the session.
 start "fishrl eval" /min "%PY%" -m fishrl.eval.parallel_panel --ckpt-dir "%CKPT%" --follow 900 --reserve-cores 12 --affinity 16,17,18,19,20,21,22,23,24,25,26,27 --seat-diag-games 48

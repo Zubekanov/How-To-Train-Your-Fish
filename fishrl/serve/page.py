@@ -67,7 +67,10 @@ svg text{font-family:inherit;font-size:11px;fill:var(--dim)}
 <script>
 "use strict";
 const WR = {heuristic:"#4fc3f7", heuristic11:"#b39ddb", heuristic12:"#f8bbd0",
-            random:"#9ccc65", attacker:"#ffb74d", frozen:"#e57373"};
+            random:"#9ccc65", attacker:"#ffb74d", frozen:"#e57373",
+            // self-play seat balance (from --seat-diag-games): a LEARNED asymmetry if
+            // it strays from 0.5. Same 0-1 / 0.5-reference axis as the win-rates.
+            seat_p1_wr:"#80cbc4"};
 const SYS = {cpu:"#4fc3f7", gpu:"#9ccc65", ram:"#b39ddb"};   // utilization % per tick
 const SYS_SMOOTH = 250;   // system-panel running-mean window (ticks span ~2000 it)
 const MIX = {opp_self:"#4fc3f7", opp_past:"#b39ddb", opp_heuristic:"#e57373",
@@ -262,9 +265,17 @@ function header(s){
   $("iph1kwrap").title = rk ?
     `${rk.rate.toFixed(1)} it/h over the last ${rk.span} it on ${rk.host} (${rk.src})` : "";
   $("best").textContent = s.best?`${s.best.heuristic.toFixed(2)}@${s.best.it}`:"—";
-  const o = s.owner;
-  set("turn", o?`turn: ${o.state==="active"?o.host:"released g"+o.generation}`:"turn: unclaimed",
-      o&&o.state==="active"?"ok":"warn");
+  // Ownership chip is relay-era: on a local-only PC run it's always "this host, active"
+  // -- redundant with the header host. Show it ONLY when noteworthy (released, or owned by
+  // another host), so the normal case stays uncluttered.
+  const o = s.owner, turnEl = $("turn");
+  if (o && o.state === "active" && o.host === s.host) {
+    turnEl.style.display = "none";
+  } else {
+    turnEl.style.display = "";
+    set("turn", o?`turn: ${o.state==="active"?o.host:"released g"+o.generation}`:"turn: unclaimed",
+        o&&o.state==="active"?"ok":"warn");
+  }
   set("live", s.trainer_live?"trainer: RUNNING":"trainer: stopped",
       s.trainer_live?"ok":"idle");
   // Relay peer: the lineage's telemetry lives elsewhere (peer.json). The chip

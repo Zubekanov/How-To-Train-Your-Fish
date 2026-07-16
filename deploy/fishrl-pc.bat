@@ -6,7 +6,11 @@ rem
 rem    1. starts the LAN dashboard in a minimized window and opens it in the
 rem       default browser (http://<this-pc>:8765/)
 rem    2. runs win-rate panels alongside the session, every 15 min
-rem    3. trains in THIS window, resuming checkpoints\latest.pt
+rem    3. trains in THIS window: resumes %CKPT%\latest.pt, or FRESH-starts (with the
+rem       architecture in deploy\train.args) when the dir is empty
+rem
+rem  The active lineage is checkpoints-v2 (the entity / bigger-actor run, ~1700 it/h on
+rem  this box). The original 622h flat run is preserved untouched in checkpoints\.
 rem
 rem  End with Ctrl-C here or the dashboard's "End session" button: either way
 rem  the trainer checkpoints gracefully at the next iteration boundary.

@@ -1,1 +1,1 @@
---encoder flat --critic-encoder entity --scenario-pool --pool-frac 0.6 --warmup-games 16 --p1-adv-weight 1.5 --ent-end 0.008 --scenario-weight board_presence=0.5 --scenario-weight deckout=0.5
+--encoder flat --critic-encoder entity --scenario-pool --pool-frac 0.6 --warmup-games 16 --ent-end 0.008 --scenario-weight board_presence=0.5 --scenario-weight deckout=0.5

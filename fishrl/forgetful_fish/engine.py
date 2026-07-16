@@ -1723,7 +1723,15 @@ def _effect_mystical_tutor(g: GameState, controller: str, iid: str, obj=None) ->
 # (CR 720) — so the caster can't use the fresh hand until their next turn.
 @register_effect("Day's Undoing")
 def _effect_days_undoing(g: GameState, controller: str, iid: str, obj=None) -> bool:
-    for pl in g.players.values():                     # hands + the shared graveyard...
+    # APNAP order (active player first), NOT the p1/p2 dict order: with a SHARED
+    # library both the shuffle-in and the deal-off consume the same RNG stream, so a
+    # fixed p1-first order makes the refilled hands depend on absolute seat rather than
+    # on the game -- the two seats' games stop being mirror images and one seat gets a
+    # systematically better refill. Active-player-first is seat-symmetric (active
+    # alternates by turn) and is the CR 101.4 order for a one-spell "each player" effect.
+    order = (g.active_player, _OTHER[g.active_player])
+    for pid in order:                                 # hands + the shared graveyard...
+        pl = g.players[pid]
         for cid in pl.hand:
             g.library.append(LibrarySlot(instance_id=cid))
         pl.hand = []
@@ -1731,7 +1739,8 @@ def _effect_days_undoing(g: GameState, controller: str, iid: str, obj=None) -> b
         g.library.append(LibrarySlot(instance_id=cid))
     g.graveyard = []
     shuffle_library(g)                                # ...shuffled into the library (knowledge cleared)
-    for pl in g.players.values():                     # then each player draws seven
+    for pid in order:                                 # then each player draws seven, active first
+        pl = g.players[pid]
         for _ in range(7):
             if not g.library:
                 break
@@ -2242,15 +2251,30 @@ def _sweep_text_changes(g: GameState) -> None:
             revert_text_changes(o)
 
 
+def _apnap(g: GameState) -> tuple:
+    """Player ids in APNAP order (active player, then non-active) — the CR 101.4
+    order for simultaneous actions. Using this instead of the p1/p2 dict order keeps
+    resolutions that touch a SHARED zone (the graveyard, the library) seat-SYMMETRIC:
+    a fixed p1-first order makes zone contents/ordering depend on absolute seat, so
+    the two seats' games stop being mirror images and one seat is systematically
+    favoured (the graveyard is encoded in order into the observation, and it feeds
+    Day's Undoing's shuffle). Active alternates by turn, so APNAP is seat-neutral."""
+    a = g.active_player
+    return (a, _OTHER[a]) if a in ("p1", "p2") else ("p1", "p2")
+
+
 def _check_sba(g: GameState) -> None:
-    # Creatures with lethal marked damage are destroyed (CR 704.5g).
-    for pl in g.players.values():
+    # Creatures with lethal marked damage are destroyed (CR 704.5g). APNAP order so
+    # simultaneous deaths enter the SHARED graveyard seat-symmetrically (not p1-first).
+    for pid in _apnap(g):
+        pl = g.players[pid]
         for iid in list(pl.battlefield):
             o = g.objects.get(iid)
             if o and _is_creature(o) and o.toughness > 0 and o.damage_marked >= o.toughness:
                 _remove_from_battlefield(g, pl, iid, o, f"{o.name} dies.")
     _sweep_text_changes(g)
-    for pid, p in g.players.items():
+    for pid in _apnap(g):
+        p = g.players[pid]
         if p.has_lost:
             continue
         if p.life <= 0:
@@ -2272,7 +2296,8 @@ def _check_state_triggers(g: GameState) -> None:
     resolution (no intervening 'if'). It won't pile up while an instance is pending,
     and re-triggers if that instance leaves the stack with the condition still true.
     Reads the effective (possibly text-changed) type words."""
-    for pid, pl in g.players.items():
+    for pid in _apnap(g):                                 # APNAP: seat-symmetric trigger order
+        pl = g.players[pid]
         for iid in list(pl.battlefield):
             o = g.objects.get(iid)
             if not o:

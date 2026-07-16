@@ -175,10 +175,12 @@ def layout_from_slots(slots: dict) -> tuple[list[str], list[int]]:
 
 
 def build_entity_encoder(encoder: str, zone_names: list[str], zone_slots: list[int],
-                         total_in: int) -> _EntityBase | None:
-    """Encoder factory: ``"entity"`` / ``"attention"`` -> module, ``"flat"`` -> None."""
+                         total_in: int, d: int = 64) -> _EntityBase | None:
+    """Encoder factory: ``"entity"`` / ``"attention"`` -> module, ``"flat"`` -> None.
+    `d` is the per-card embedding width (Config.card_dim); it sets enc_dim, so the
+    head MLP that consumes this encoder adapts automatically."""
     if encoder == "entity":
-        return EntityEncoder(zone_names, zone_slots, total_in)
+        return EntityEncoder(zone_names, zone_slots, total_in, d=d)
     if encoder == "attention":
-        return AttentionEntityEncoder(zone_names, zone_slots, total_in)
+        return AttentionEntityEncoder(zone_names, zone_slots, total_in, d=d)
     return None

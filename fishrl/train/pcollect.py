@@ -99,13 +99,15 @@ def _winit(lite: dict) -> None:
 
     torch.set_num_threads(1)
     _apply_affinity(lite.get("affinity") or [])
-    hidden = tuple(lite["hidden"])
+    hidden = tuple(lite["hidden"])                        # guesser head width
+    ah = tuple(lite.get("actor_hidden", hidden))          # actor head width (may differ)
+    cd = int(lite.get("card_dim", 64))                    # entity card-embedding width
     _G.update(
         lite=lite,
-        actor=MaskedActor(hidden, lite["enc_actor"]),
-        guesser=HandGuesser(hidden, lite["enc_guesser"]),
-        opp_actor=MaskedActor(hidden, lite["enc_actor"]),
-        opp_guesser=HandGuesser(hidden, lite["enc_guesser"]),
+        actor=MaskedActor(ah, lite["enc_actor"], cd),
+        guesser=HandGuesser(hidden, lite["enc_guesser"], cd),
+        opp_actor=MaskedActor(ah, lite["enc_actor"], cd),
+        opp_guesser=HandGuesser(hidden, lite["enc_guesser"], cd),
     )
     if lite["scenario_names"]:
         from fishrl.train.scenarios import get_scenario
@@ -197,6 +199,10 @@ class ParallelCollector:
             scen_names = [n for n in scenario_names()
                           if cfg.scenario_weights.get(n, 1.0) > 0]
         lite = {"hidden": tuple(cfg.hidden),
+                # actor may be sized differently from the guesser (actor_hidden), and
+                # both entity nets need card_dim -- workers must build the SAME shapes
+                # or the shipped weights won't load into them.
+                "actor_hidden": tuple(cfg.head_hidden("actor")), "card_dim": cfg.card_dim,
                 "enc_actor": cfg.enc_for("actor"), "enc_guesser": cfg.enc_for("guesser"),
                 "use_belief": cfg.use_belief, "max_decisions": cfg.max_decisions,
                 "enforce_free_attack": cfg.enforce_free_attack,

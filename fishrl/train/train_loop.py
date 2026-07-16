@@ -52,14 +52,42 @@ class Models:
     public: PublicEstimator
 
 
+NETS = ("actor", "critic", "guesser", "public")
+
+
 def build_models(cfg: Config) -> Models:
     torch.manual_seed(cfg.seed)
     dev = cfg.device
     return Models(
-        MaskedActor(cfg.hidden, cfg.enc_for("actor")).to(dev),
-        PrivilegedCritic(cfg.critic_hidden, cfg.enc_for("critic")).to(dev),
-        HandGuesser(cfg.hidden, cfg.enc_for("guesser")).to(dev),
-        PublicEstimator(cfg.hidden, cfg.enc_for("public")).to(dev),
+        MaskedActor(cfg.head_hidden("actor"), cfg.enc_for("actor"), cfg.card_dim).to(dev),
+        PrivilegedCritic(cfg.head_hidden("critic"), cfg.enc_for("critic"), cfg.card_dim).to(dev),
+        HandGuesser(cfg.head_hidden("guesser"), cfg.enc_for("guesser"), cfg.card_dim).to(dev),
+        PublicEstimator(cfg.head_hidden("public"), cfg.enc_for("public"), cfg.card_dim).to(dev),
+    )
+
+
+def config_from_checkpoint(cd: dict, **overrides) -> Config:
+    """Rebuild a Config from a checkpoint's saved `config` dict, reading EVERY
+    architecture key the model shapes depend on (encoders, head widths, card_dim)
+    so a reloaded model matches the saved state_dict. This is the ONE place that
+    knows the checkpoint->architecture mapping -- all loaders (train resume, eval
+    panels, probes, migrations) go through it, so adding a new architecture knob
+    can never silently break a subset of loaders again. Missing keys fall back to
+    the historic defaults, so pre-existing checkpoints (no hidden/card_dim keys)
+    reconstruct the old flat/(256,256)/d64 architecture unchanged.
+
+    `overrides` win over the saved values -- for the RUNTIME knobs (device, iters,
+    pool_frac, ...) that are not part of the saved architecture."""
+    per_net = {f"{n}_encoder": cd["encoders"][n] for n in NETS}
+    ah = cd.get("actor_hidden")
+    return Config(
+        seed=cd.get("seed", 0),
+        use_belief=cd.get("use_belief", True),
+        hidden=tuple(cd.get("hidden", (256, 256))),
+        actor_hidden=tuple(ah) if ah is not None else None,
+        critic_hidden=tuple(cd.get("critic_hidden", (512, 512, 256))),
+        card_dim=int(cd.get("card_dim", 64)),
+        **per_net, **overrides,
     )
 
 
@@ -240,8 +268,15 @@ def train(cfg: Config, models: Models | None = None, log=print,
     def _payload() -> dict:
         return {
             "format": ckpt.FORMAT,
+            # Full architecture record so every loader (config_from_checkpoint) rebuilds
+            # the EXACT model shapes -- hidden/actor_hidden/card_dim were previously implicit
+            # (always the defaults), which would silently mismatch a resized model.
             "config": {"seed": cfg.seed, "encoders": _encoders(cfg),
-                       "use_belief": cfg.use_belief, "critic_hidden": cfg.critic_hidden},
+                       "use_belief": cfg.use_belief, "critic_hidden": list(cfg.critic_hidden),
+                       "hidden": list(cfg.hidden),
+                       "actor_hidden": (list(cfg.actor_hidden)
+                                        if cfg.actor_hidden is not None else None),
+                       "card_dim": cfg.card_dim},
             "done": done, "elapsed": total_elapsed(), "frozen_it": frozen_it,
             "warmup_done": True,
             "models": _model_state(m), "frozen": _model_state(frozen),
@@ -525,8 +560,12 @@ def train(cfg: Config, models: Models | None = None, log=print,
             # Restore league continuity (EMA win-rates + past-self ring). Older
             # checkpoints carry no league keys -> fresh leagues, the old behaviour.
             def _opponent_nets():
-                actor = MaskedActor(cfg.hidden, cfg.enc_for("actor")).to(cfg.device)
-                guesser = HandGuesser(cfg.hidden, cfg.enc_for("guesser")).to(cfg.device)
+                # Past-self opponents must match the LEARNER's actor/guesser shapes
+                # (head widths + card_dim), or their saved weights won't load.
+                actor = MaskedActor(cfg.head_hidden("actor"), cfg.enc_for("actor"),
+                                    cfg.card_dim).to(cfg.device)
+                guesser = HandGuesser(cfg.head_hidden("guesser"), cfg.enc_for("guesser"),
+                                      cfg.card_dim).to(cfg.device)
                 return actor, guesser
             if payload.get("league"):
                 league.load_state_dict(payload["league"], make_nets=_opponent_nets)

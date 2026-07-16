@@ -43,15 +43,12 @@ def _init(cfg_dict: dict, models_state: dict, frozen_state: dict, max_decisions:
     against the trainer's P-core-pinned collectors (see Config.collect_affinity)."""
     import torch
 
-    from fishrl.train.config import Config
     from fishrl.train.pcollect import _apply_affinity
-    from fishrl.train.train_loop import build_models, _load_model_state
+    from fishrl.train.train_loop import build_models, config_from_checkpoint, _load_model_state
 
     torch.set_num_threads(1)
     _apply_affinity(affinity or [])
-    per_net = {f"{n}_encoder": cfg_dict["encoders"][n] for n in NETS}
-    cfg = Config(seed=cfg_dict["seed"], use_belief=cfg_dict.get("use_belief", True),
-                 critic_hidden=tuple(cfg_dict.get("critic_hidden", (512, 512, 256))), **per_net)
+    cfg = config_from_checkpoint(cfg_dict)      # full architecture: encoders + head widths + card_dim
     m = build_models(cfg)
     _load_model_state(m, models_state)
     frozen = build_models(cfg)

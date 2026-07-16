@@ -48,14 +48,11 @@ def _timed(acc: dict, key: str):
 def _build_from_ckpt(ckpt_path: str):
     """Rebuild models + config from a checkpoint (matching parallel_panel's loader)."""
     from fishrl.train.checkpoint import load_checkpoint
-    from fishrl.train.config import Config
-    from fishrl.train.train_loop import _load_model_state, build_models
+    from fishrl.train.train_loop import _load_model_state, build_models, config_from_checkpoint
 
     pl = load_checkpoint(ckpt_path, map_location="cpu")
     cfg_dict = pl["config"]
-    per_net = {f"{n}_encoder": cfg_dict["encoders"][n] for n in NETS}
-    cfg = Config(seed=cfg_dict["seed"], use_belief=cfg_dict.get("use_belief", True),
-                 critic_hidden=tuple(cfg_dict.get("critic_hidden", (512, 512, 256))), **per_net)
+    cfg = config_from_checkpoint(cfg_dict)
     m = build_models(cfg)
     _load_model_state(m, pl["models"])
     return cfg, m, int(pl.get("done", 0))

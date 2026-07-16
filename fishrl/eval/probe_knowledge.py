@@ -48,7 +48,7 @@ from fishrl.train.config import Config, resolve_device
 from fishrl.train.checkpoint import load_checkpoint
 from fishrl.train.belief_env import BeliefAugmentedEnv
 from fishrl.train.collector import actor_act_fn
-from fishrl.train.train_loop import build_models, _load_model_state
+from fishrl.train.train_loop import build_models, config_from_checkpoint, _load_model_state
 
 NETS = ("actor", "critic", "guesser", "public")
 TOP_K = 10                      # library depth the knowledge channel resolves positionally
@@ -227,9 +227,7 @@ def main():
 
     pl = load_checkpoint(args.ckpt, map_location="cpu")
     cd = pl["config"]
-    per_net = {f"{n}_encoder": cd["encoders"][n] for n in NETS}
-    cfg = Config(seed=cd["seed"], use_belief=cd.get("use_belief", True),
-                 critic_hidden=tuple(cd.get("critic_hidden", (512, 512, 256))), **per_net)
+    cfg = config_from_checkpoint(cd)
     m = build_models(cfg)
     _load_model_state(m, pl["models"])
     for net in (m.actor, m.guesser):

@@ -21,19 +21,16 @@ import shutil
 from fishrl.eval.metrics import winrate_vs_heuristic
 from fishrl.train import checkpoint as ckpt
 from fishrl.train.config import Config, resolve_device
-from fishrl.train.train_loop import Models, build_models, train
+from fishrl.train.train_loop import Models, build_models, config_from_checkpoint, train
 
 NETS = ("actor", "critic", "guesser", "public")
 
 
 def _cfg_from_base(base: str, device: str, **over) -> Config:
-    """Build a Config matching the base checkpoint's architecture (encoders/seed),
-    overriding the experiment knobs. Mirrors `python -m fishrl.train`'s resume path."""
+    """Build a Config matching the base checkpoint's FULL architecture (encoders/seed/
+    head widths/card_dim), overriding the experiment knobs. Mirrors the resume path."""
     saved = ckpt.load_checkpoint(base, map_location="cpu")["config"]
-    per_net = {f"{n}_encoder": saved["encoders"][n] for n in NETS}
-    return Config(seed=saved["seed"], use_belief=saved.get("use_belief", True),
-                  critic_hidden=tuple(saved.get("critic_hidden", (512, 512, 256))),
-                  device=device, **per_net, **over)
+    return config_from_checkpoint(saved, device=device, **over)
 
 
 def _run_branch(name, base, out_dir, device, iters, scenario_frac,

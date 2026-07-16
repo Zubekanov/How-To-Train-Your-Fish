@@ -23,9 +23,9 @@ from fishrl.models.mlp import make_mlp
 
 
 class _OutcomeHead(nn.Module):
-    def __init__(self, total_in: int, slots: dict, hidden, encoder: str):
+    def __init__(self, total_in: int, slots: dict, hidden, encoder: str, card_dim: int = 64):
         super().__init__()
-        self.enc = build_entity_encoder(encoder, *layout_from_slots(slots), total_in)
+        self.enc = build_entity_encoder(encoder, *layout_from_slots(slots), total_in, d=card_dim)
         in_dim = self.enc.enc_dim if self.enc is not None else total_in
         self.net = make_mlp(in_dim, 1, hidden)
 
@@ -39,10 +39,10 @@ class _OutcomeHead(nn.Module):
 
 
 class PrivilegedCritic(_OutcomeHead):
-    def __init__(self, hidden=(512, 512, 256), encoder: str = "flat"):
-        super().__init__(GOD_DIM, GOD_SLOTS, hidden, encoder)
+    def __init__(self, hidden=(512, 512, 256), encoder: str = "flat", card_dim: int = 64):
+        super().__init__(GOD_DIM, GOD_SLOTS, hidden, encoder, card_dim)
 
 
 class PublicEstimator(_OutcomeHead):
-    def __init__(self, hidden=(256, 256), encoder: str = "flat"):
-        super().__init__(PUB_DIM, PUB_SLOTS, hidden, encoder)
+    def __init__(self, hidden=(256, 256), encoder: str = "flat", card_dim: int = 64):
+        super().__init__(PUB_DIM, PUB_SLOTS, hidden, encoder, card_dim)

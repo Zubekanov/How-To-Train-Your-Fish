@@ -36,7 +36,7 @@ from fishrl.train.checkpoint import load_checkpoint
 from fishrl.train.collector import actor_act_fn
 from fishrl.train.config import Config, resolve_device
 from fishrl.train.scenarios import ScenarioEnv, get_scenario
-from fishrl.train.train_loop import build_models, _load_model_state
+from fishrl.train.train_loop import build_models, config_from_checkpoint, _load_model_state
 
 NETS = ("actor", "critic", "guesser", "public")
 _PRE_DRAW = ("untap", "upkeep", "draw", "")
@@ -136,9 +136,7 @@ def main():
 
     pl = load_checkpoint(args.ckpt, map_location="cpu")
     cd = pl["config"]
-    cfg = Config(seed=cd["seed"], use_belief=cd.get("use_belief", True),
-                 critic_hidden=tuple(cd.get("critic_hidden", (512, 512, 256))),
-                 **{f"{n}_encoder": cd["encoders"][n] for n in NETS})
+    cfg = config_from_checkpoint(cd)
     m = build_models(cfg)
     _load_model_state(m, pl["models"])
     for net in (m.actor, m.guesser):

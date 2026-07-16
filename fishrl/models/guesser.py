@@ -27,9 +27,9 @@ GUESSER_IN = OBS_DIM + GUESS_DIM
 
 
 class HandGuesser(nn.Module):
-    def __init__(self, hidden=(256, 256), encoder: str = "flat"):
+    def __init__(self, hidden=(256, 256), encoder: str = "flat", card_dim: int = 64):
         super().__init__()
-        self.enc = build_entity_encoder(encoder, *layout_from_slots(SLOTS), GUESSER_IN)
+        self.enc = build_entity_encoder(encoder, *layout_from_slots(SLOTS), GUESSER_IN, d=card_dim)
         in_dim = self.enc.enc_dim if self.enc is not None else GUESSER_IN
         self.net = make_mlp(in_dim, GUESS_DIM, hidden)
 

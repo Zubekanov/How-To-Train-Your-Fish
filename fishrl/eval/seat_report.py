@@ -18,17 +18,12 @@ import torch
 
 from fishrl.eval.metrics import seat_diag_counts, seat_diag_rates
 from fishrl.train import checkpoint as ckpt
-from fishrl.train.config import Config
-from fishrl.train.train_loop import build_models, _load_model_state
+from fishrl.train.train_loop import build_models, config_from_checkpoint, _load_model_state
 
 
 def load_models(ckpt_path: str):
     pl = ckpt.load_checkpoint(ckpt_path, map_location="cpu")
-    enc = pl["config"]["encoders"]
-    cfg = Config(device="cpu", seed=pl["config"].get("seed", 0),
-                 use_belief=pl["config"].get("use_belief", True),
-                 critic_hidden=tuple(pl["config"].get("critic_hidden", (512, 512, 256))),
-                 **{f"{n}_encoder": enc[n] for n in ("actor", "critic", "guesser", "public")})
+    cfg = config_from_checkpoint(pl["config"], device="cpu")
     m = build_models(cfg)
     _load_model_state(m, pl["models"])
     for net in (m.actor, m.critic, m.guesser, m.public):

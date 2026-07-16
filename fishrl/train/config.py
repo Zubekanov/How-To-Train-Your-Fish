@@ -130,7 +130,25 @@ class Config:
     warmup_epochs: int = 3
     iters: int = 100            # <= 0 means UNBOUNDED (run until signal / max_seconds)
     ent_anneal_iters: int = 3000  # entropy-anneal horizon used when iters <= 0 (unbounded)
+    # Head-MLP widths. `hidden` is the default for the actor / guesser / public heads;
+    # `actor_hidden` (when set) overrides it for the ACTOR only, so the policy can be
+    # deepened/widened without also growing the guesser (which runs per-decision on the
+    # collection hot path). `critic_hidden` is separate (critic is off the deploy path).
     hidden: tuple = (256, 256)
+    actor_hidden: tuple | None = None            # None -> fall back to `hidden`
+    # Entity/attention card-embedding width `d` (shared by every entity encoder built
+    # for this run — actor and critic if they use one). Bigger d = more per-card capacity
+    # and a wider pooled block feeding the head. Ignored by flat nets.
+    card_dim: int = 64
+
+    def head_hidden(self, net: str) -> tuple:
+        """Resolve a net's head-MLP widths: the actor honours `actor_hidden`; the
+        critic uses `critic_hidden`; everything else uses `hidden`."""
+        if net == "actor" and self.actor_hidden is not None:
+            return tuple(self.actor_hidden)
+        if net == "critic":
+            return tuple(self.critic_hidden)
+        return tuple(self.hidden)
 
     # status reporting: train() consolidates per-iter logs into ONE status line emitted
     # every `report_every_seconds` of wall-clock (default hourly), plus a final line.

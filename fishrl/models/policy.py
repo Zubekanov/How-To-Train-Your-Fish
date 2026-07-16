@@ -30,9 +30,9 @@ def masked_log_softmax(logits: torch.Tensor, mask: torch.Tensor) -> torch.Tensor
 
 
 class MaskedActor(nn.Module):
-    def __init__(self, hidden=(256, 256), encoder: str = "flat"):
+    def __init__(self, hidden=(256, 256), encoder: str = "flat", card_dim: int = 64):
         super().__init__()
-        self.enc = build_entity_encoder(encoder, *layout_from_slots(SLOTS), ACTOR_IN)
+        self.enc = build_entity_encoder(encoder, *layout_from_slots(SLOTS), ACTOR_IN, d=card_dim)
         in_dim = self.enc.enc_dim if self.enc is not None else ACTOR_IN
         self.net = make_mlp(in_dim, A.N, hidden)
 

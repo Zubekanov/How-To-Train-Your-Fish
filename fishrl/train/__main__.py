@@ -22,9 +22,16 @@ _N_THREADS = preconfigure()
 from fishrl.eval.metrics import collect_eval_batch, estimator_metrics, panel_winrates  # noqa: E402
 from fishrl.train import checkpoint as ckpt                                            # noqa: E402
 from fishrl.train.config import Config, resolve_device                                 # noqa: E402
-from fishrl.train.train_loop import build_models, train                                # noqa: E402
+from fishrl.train.train_loop import build_models, config_from_checkpoint, train         # noqa: E402
 
 NETS = ("actor", "critic", "guesser", "public")
+
+
+def _parse_hidden(spec: str | None) -> tuple | None:
+    """'768,768,384' -> (768, 768, 384); None/'' -> None (fall back to Config.hidden)."""
+    if not spec:
+        return None
+    return tuple(int(x) for x in spec.split(","))
 
 
 def main():
@@ -89,6 +96,15 @@ def main():
     ap.add_argument("--critic-encoder", choices=ENC, default=None)
     ap.add_argument("--guesser-encoder", choices=ENC, default=None)
     ap.add_argument("--public-encoder", choices=ENC, default=None)
+    # Model-size knobs. FRESH-only: on --resume the architecture is read from the
+    # checkpoint (a resized model can't load old weights), so these are ignored there.
+    ap.add_argument("--actor-hidden", default=None, metavar="A,B,C",
+                    help="actor head widths, comma-separated (e.g. 768,768,384); "
+                         "default = the shared `hidden` (256,256). Actor-only, so the "
+                         "guesser stays small on the collection hot path.")
+    ap.add_argument("--card-dim", type=int, default=Config.card_dim,
+                    help="entity/attention per-card embedding width d (default 64); "
+                         "sets enc_dim, so the head adapts. Ignored by flat nets.")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--ckpt-dir", default="checkpoints")
     ap.add_argument("--resume", action="store_true",
@@ -174,20 +190,20 @@ def main():
                   archive_every_iters=args.archive_every_iters)
     if resume:
         # architecture + seed MUST match the saved weights -> take them from the checkpoint
-        # (the --encoder* flags are ignored on resume).
+        # (the --encoder* / --actor-hidden / --card-dim flags are FRESH-only, ignored here).
         saved = ckpt.load_checkpoint(latest, map_location="cpu")["config"]
-        per_net = {f"{n}_encoder": saved["encoders"][n] for n in NETS}
-        cfg = Config(seed=saved["seed"], use_belief=saved.get("use_belief", True),
-                     critic_hidden=tuple(saved.get("critic_hidden", (512, 512, 256))),
-                     **per_net, **common)
+        cfg = config_from_checkpoint(saved, **common)
     else:
         per_net = {f"{n}_encoder": getattr(args, f"{n}_encoder")
                    for n in NETS if getattr(args, f"{n}_encoder") is not None}
-        cfg = Config(encoder=args.encoder, seed=args.seed, **per_net, **common)
+        cfg = Config(encoder=args.encoder, seed=args.seed,
+                     actor_hidden=_parse_hidden(args.actor_hidden),
+                     card_dim=args.card_dim, **per_net, **common)
 
     encs = {n: cfg.enc_for(n) for n in NETS}
     cap = "unbounded" if cfg.iters <= 0 else cfg.iters
     print(f"device: {cfg.device} | encoders: {encs} | iters: {cap} | "
+          f"actor_hidden={cfg.head_hidden('actor')} card_dim={cfg.card_dim} | "
           f"pool: {cfg.pool_frac:.2f} (pfsp={cfg.pfsp_mode}, league={cfg.league_size}) | "
           f"p1_adv={cfg.p1_adv_weight:.2f} ent_end={cfg.ent_end:.3f} | "
           f"resume: {resume} | ckpt: {latest}", flush=True)

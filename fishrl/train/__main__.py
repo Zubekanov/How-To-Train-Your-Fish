@@ -39,6 +39,11 @@ def main():
     ap.add_argument("--gpu", action="store_true", help="train on CUDA if available")
     ap.add_argument("--iters", type=int, default=100, help="iteration cap; <=0 runs unbounded")
     ap.add_argument("--games-per-iter", type=int, default=8)
+    ap.add_argument("--minibatch", type=int, default=Config.minibatch,
+                    help="PPO minibatch size (default 256). On a small GPU the update is "
+                         "launch-bound, so a larger minibatch cuts kernel-launch overhead -- "
+                         "pair it with a larger --games-per-iter so the step count stays sane. "
+                         "Changes gradient noise: a training-dynamics knob, not free.")
     ap.add_argument("--collect-workers", type=int, default=Config.collect_workers,
                     help="collector worker processes per iteration (0 = serial, the "
                          "historic path; parallelism is across processes, torch pinned "
@@ -193,7 +198,8 @@ def main():
         scen_w[name.strip()] = float(val)
 
     common = dict(device=resolve_device(args.gpu), iters=args.iters,
-                  games_per_iter=args.games_per_iter, collect_workers=args.collect_workers,
+                  games_per_iter=args.games_per_iter, minibatch=args.minibatch,
+                  collect_workers=args.collect_workers,
                   collect_affinity=args.collect_affinity,
                   pipeline_collect=args.pipeline_collect,
                   warmup_games=args.warmup_games,

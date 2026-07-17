@@ -7,6 +7,11 @@ project under `fishrl/forgetful_fish/`, logic unmodified) as a **PettingZoo AEC*
 two-agent, imperfect-information self-play environment with a flat masked action
 space and a fixed-size tensor observation.
 
+This README covers **how to run** the stack. For **why it is built this way** — the RL
+theory and techniques, the design decisions and the measurements behind them, and the
+full telemetry field reference (plus the traps that bite anyone plotting the history) —
+see [`docs/DESIGN.md`](docs/DESIGN.md).
+
 ## Install
 
 ```bash

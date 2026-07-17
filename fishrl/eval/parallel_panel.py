@@ -393,7 +393,7 @@ def run_once(args, ckpt_path: str, allow_harvest: bool) -> None:
         counts = " ".join(f"{k}={harvest.get(k, [0, 0])[0]}/{harvest.get(k, [0, 0])[1]}"
                           for k in HARVEST_ANCHORS)
         print(f"[eval] harvesting report it={harvest_from}: {counts} "
-              f"(top-up only plays each anchor's deficit)", flush=True)
+              f"(added on top of the full per-anchor target)", flush=True)
 
     r = parallel_panel(ckpt_path, n_games=args.n_games, max_workers=args.max_workers,
                        max_decisions=args.max_decisions, save_best=not args.no_best,

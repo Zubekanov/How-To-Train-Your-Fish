@@ -9,7 +9,7 @@ import re
 import pytest
 
 from fishrl.train.config import Config
-from fishrl.train.pcollect import parse_affinity
+from fishrl.train.pcollect import ParallelCollector, parse_affinity
 from fishrl.train.train_loop import build_models, train
 
 
@@ -70,6 +70,38 @@ def test_pipelined_run_completes_with_full_game_accounting():
     status = next(line for line in reversed(lines) if line.startswith("[status"))
     assert int(re.search(r"games=(\d+)", status).group(1)) == 12   # 3 iters x 4 games
     assert int(re.search(r"T=(\d+)", status).group(1)) > 100
+
+
+def test_gather_rebuilds_a_poisoned_pool(monkeypatch):
+    """A worker death (e.g. Windows WinError 1450 mid-send) poisons the whole
+    ProcessPoolExecutor: every later submit/result raises BrokenProcessPool. The
+    old retry resubmitted to the DEAD pool and re-raised, ending a 150h+ run.
+    _retry_chunk must rebuild the pool and replay the chunk instead."""
+    import pickle
+    import time
+    import zlib
+
+    from concurrent.futures.process import BrokenProcessPool
+
+    monkeypatch.setattr(time, "sleep", lambda *a, **k: None)   # skip the 10s backoff
+
+    cfg = Config(device="cpu", collect_workers=2, max_decisions=200,
+                 pool_frac=0.0, seed=0)
+    m = build_models(cfg)
+    pc = ParallelCollector(cfg, 2)
+    try:
+        specs = [{"kind": "self", "seed": 7, "idx": 0}]
+        pc.gather(pc.submit(m, specs, it=1), 1)        # happy path primes _last_blob
+
+        poisoned = pc._ex                              # simulate the worker-death poisoning
+        poisoned.shutdown(wait=False, cancel_futures=True)
+        blob = pc._retry_chunk(specs, seed=7,
+                               err=BrokenProcessPool("simulated worker death"))
+        got = pickle.loads(zlib.decompress(blob))
+        assert pc._ex is not poisoned                  # the pool was rebuilt, not reused
+        assert got and got[0][0] == 0 and got[0][1].steps   # (idx, buffer) with real steps
+    finally:
+        pc.close()
 
 
 def test_parallel_matches_serial_game_accounting():

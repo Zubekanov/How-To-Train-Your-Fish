@@ -27,6 +27,7 @@ from __future__ import annotations
 import pickle
 import zlib
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from types import SimpleNamespace
 
 # ── worker side ───────────────────────────────────────────────────────────────
@@ -207,18 +208,22 @@ class ParallelCollector:
                 "train_public": cfg.train_public,
                 "scenario_names": scen_names,
                 "affinity": parse_affinity(getattr(cfg, "collect_affinity", ""))}
+        self._lite = lite                              # kept so a poisoned pool can be rebuilt
+        self._ex = self._new_executor()
+
+    def _new_executor(self) -> ProcessPoolExecutor:
         # Recycle each worker after this many chunks: a fresh process resets the
         # hour-scale allocator creep of long-lived torch workers (each worker is
         # ~1.7 GB commit at BIRTH -- torch's runtime alone is 1.55 GB -- and only
         # grows). All workers hit the cap on the same iteration (round-robin, one
         # chunk each), so expect one slow re-warm iteration every `recycle` iters.
         try:
-            self._ex = ProcessPoolExecutor(max_workers=workers,
-                                           initializer=_winit, initargs=(lite,),
-                                           max_tasks_per_child=512)
+            return ProcessPoolExecutor(max_workers=self.workers,
+                                       initializer=_winit, initargs=(self._lite,),
+                                       max_tasks_per_child=512)
         except TypeError:                              # python < 3.11: no recycling
-            self._ex = ProcessPoolExecutor(max_workers=workers,
-                                           initializer=_winit, initargs=(lite,))
+            return ProcessPoolExecutor(max_workers=self.workers,
+                                       initializer=_winit, initargs=(self._lite,))
 
     @staticmethod
     def opp_state_for(member) -> tuple:
@@ -251,27 +256,51 @@ class ParallelCollector:
 
     def gather(self, items: list, n_specs: int) -> list:
         """Block on the work items and return the RolloutBuffers in spec order.
-
-        One retry per chunk: the observed failure mode is a TRANSIENT MemoryError
-        under system commit pressure (an eval-panel burst adds ~14 GB of worker
-        processes for a couple of minutes), and losing a whole session to one
-        unlucky allocation is far worse than replaying one chunk 10s later."""
+        Any chunk failure is retried (see `_retry_chunk`) rather than propagated,
+        so a transient Windows resource spike doesn't end a multi-day run."""
         out: dict = {}
         for fut, chunk, seed in items:
             try:
                 blob = fut.result()
-            except Exception as e:                     # noqa: BLE001 -- retry ANY chunk failure once
-                import gc
-                import time as _t
-                print(f"[pcollect] chunk of {len(chunk)} game(s) failed ({e!r}); "
-                      f"retrying once in 10s", flush=True)
-                gc.collect()
-                _t.sleep(10)
-                blob = self._ex.submit(_collect_chunk, self._last_blob,
-                                       chunk, seed).result()
+            except Exception as e:                     # noqa: BLE001 -- retry ANY chunk failure
+                blob = self._retry_chunk(chunk, seed, e)
             for idx, buf in pickle.loads(zlib.decompress(blob)):
                 out[idx] = buf
         return [out[i] for i in range(n_specs)]
+
+    def _retry_chunk(self, chunk: list, seed: int, err: Exception) -> bytes:
+        """Replay one failed chunk instead of losing the run to it. Two Windows
+        failure modes seen under system pressure (an eval-panel burst adds ~14 GB
+        of worker processes for a couple of minutes):
+          * a TRANSIENT allocation/pipe failure (MemoryError, or WinError 1450
+            'insufficient system resources' mid-send) -- a gc + short sleep clears it;
+          * that same mid-write failure KILLING a worker, which poisons the whole
+            ProcessPoolExecutor (BrokenProcessPool) so every later submit/result on
+            it raises 'pool not usable' -- the pool must be REBUILT before the retry
+            can land. The old code resubmitted to the dead pool and re-raised, which
+            is exactly what turned a blip into a crash after 150h.
+        A rebuild costs one re-warm of the workers (initializer re-runs), and the
+        recovery iteration replays its chunks serially, but the run survives."""
+        import gc
+        import time as _t
+        for attempt in (1, 2):
+            broken = isinstance(err, BrokenProcessPool) or bool(getattr(self._ex, "_broken", None))
+            print(f"[pcollect] chunk of {len(chunk)} game(s) failed ({err!r}); "
+                  f"{'rebuilding pool + ' if broken else ''}retry {attempt}/2 in 10s",
+                  flush=True)
+            gc.collect()
+            _t.sleep(10)
+            if broken:
+                try:
+                    self._ex.shutdown(wait=False, cancel_futures=True)
+                except Exception:                      # noqa: BLE001 -- a dead pool may refuse
+                    pass
+                self._ex = self._new_executor()
+            try:
+                return self._ex.submit(_collect_chunk, self._last_blob, chunk, seed).result()
+            except Exception as e:                     # noqa: BLE001
+                err = e
+        raise err                                      # both attempts failed -> let the run restart
 
     def collect(self, m, specs: list, it: int) -> list:
         """Synchronous submit+gather: play every spec with the CURRENT weights of

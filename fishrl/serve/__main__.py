@@ -379,8 +379,14 @@ class Handler(BaseHTTPRequestHandler):
             elif u.path == "/api/archives":
                 # LOCAL archives only, never peer-redirected: each host holds the
                 # archives written during ITS sessions (the relay zip skips them).
+                # `run` (ckpt dir basename, as on the range responses) is what
+                # lets an archive collector file these under the right lineage:
+                # fresh-start runs reset the iteration counter, so the same
+                # archive_########.pt name recurs across runs with different
+                # contents.
                 self._json({"archives": self.store.archives(),
                             "host": socket.gethostname(),
+                            "run": os.path.basename(os.path.abspath(self.store.dir)),
                             "download": "/archives/<file>"})
             elif u.path.startswith("/archives/"):
                 self._send_archive(u.path[len("/archives/"):])

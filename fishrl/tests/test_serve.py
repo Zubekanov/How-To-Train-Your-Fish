@@ -202,9 +202,14 @@ def test_archives_list_and_download(site):
     with open(os.path.join(d, "archive_junk.pt"), "wb") as f:   # never listed/served
         f.write(b"nope")
 
-    lst = _get(port, "/api/archives")["archives"]
+    payload = _get(port, "/api/archives")
+    lst = payload["archives"]
     assert [a["it"] for a in lst] == [10000, 20000]              # oldest first, junk excluded
     assert lst[0]["file"] == "archive_00010000.pt" and lst[0]["bytes"] == 12
+    # The run id (ckpt dir basename) rides on the listing so an archive
+    # collector can file these under the right lineage: fresh-start runs reset
+    # the iteration counter, so the same name recurs with different contents.
+    assert payload["run"] == os.path.basename(d)
 
     with urllib.request.urlopen(f"http://127.0.0.1:{port}/archives/archive_00020000.pt",
                                 timeout=10) as r:

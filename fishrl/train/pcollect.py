@@ -186,12 +186,21 @@ def _cpu_state(net) -> dict:
     return {k: v.detach().cpu() for k, v in net.state_dict().items()}
 
 
+class CollectorStopped(Exception):
+    """Raised out of gather/collect when a stop is requested DURING recovery, so a
+    resource storm's backoff doesn't swallow the End-session button: the trainer
+    only polls STOP at the iteration boundary, and a multi-minute pool-recovery
+    would otherwise hold the loop there for minutes. The trainer catches this and
+    checkpoints-and-exits like any other stop."""
+
+
 class ParallelCollector:
     """Persistent collector pool. `collect(m, specs, it)` plays every spec with
     the CURRENT weights of `m` and returns the RolloutBuffers in spec order."""
 
-    def __init__(self, cfg, workers: int):
+    def __init__(self, cfg, workers: int, should_stop=None):
         self.workers = workers
+        self._should_stop = should_stop           # () -> bool: honored during recovery backoff
         self._last_blob: bytes = b""
         scen_names: list = []
         if cfg.scenario_frac > 0 or cfg.scenarios_in_pool:
@@ -268,28 +277,49 @@ class ParallelCollector:
                 out[idx] = buf
         return [out[i] for i in range(n_specs)]
 
+    # Escalating backoff (~3.9 min total) so recovery OUTLASTS a resource storm:
+    # the eval-panel burst that triggers WinError 1450 lasts "a couple of minutes",
+    # and the old 2x10s retry gave up inside it and crashed the run.
+    _RETRY_BACKOFFS = (10, 20, 40, 60, 60, 60)
+
+    def _sleep_or_stop(self, seconds: float) -> bool:
+        """Sleep up to `seconds`, but wake early (returning True) the moment a stop
+        is requested -- so the End-session button is honored during a recovery storm,
+        not only at the loop boundary the trainer polls."""
+        import time as _t
+        if self._should_stop is None:
+            _t.sleep(seconds)
+            return False
+        for _ in range(int(seconds * 10)):
+            if self._should_stop():
+                return True
+            _t.sleep(0.1)
+        return self._should_stop()
+
     def _retry_chunk(self, chunk: list, seed: int, err: Exception) -> bytes:
         """Replay one failed chunk instead of losing the run to it. Two Windows
         failure modes seen under system pressure (an eval-panel burst adds ~14 GB
         of worker processes for a couple of minutes):
           * a TRANSIENT allocation/pipe failure (MemoryError, or WinError 1450
-            'insufficient system resources' mid-send) -- a gc + short sleep clears it;
+            'insufficient system resources' mid-send) -- a gc + backoff clears it;
           * that same mid-write failure KILLING a worker, which poisons the whole
             ProcessPoolExecutor (BrokenProcessPool) so every later submit/result on
             it raises 'pool not usable' -- the pool must be REBUILT before the retry
             can land. The old code resubmitted to the dead pool and re-raised, which
             is exactly what turned a blip into a crash after 150h.
-        A rebuild costs one re-warm of the workers (initializer re-runs), and the
-        recovery iteration replays its chunks serially, but the run survives."""
+        Backoff escalates to outlast the storm; a rebuild costs one worker re-warm
+        and the recovery iteration replays its chunks serially, but the run survives.
+        A stop requested mid-backoff raises CollectorStopped so the trainer can exit
+        gracefully rather than wait out the whole schedule."""
         import gc
-        import time as _t
-        for attempt in (1, 2):
+        for attempt, wait in enumerate(self._RETRY_BACKOFFS, 1):
             broken = isinstance(err, BrokenProcessPool) or bool(getattr(self._ex, "_broken", None))
             print(f"[pcollect] chunk of {len(chunk)} game(s) failed ({err!r}); "
-                  f"{'rebuilding pool + ' if broken else ''}retry {attempt}/2 in 10s",
-                  flush=True)
+                  f"{'rebuilding pool + ' if broken else ''}"
+                  f"retry {attempt}/{len(self._RETRY_BACKOFFS)} after {wait}s", flush=True)
             gc.collect()
-            _t.sleep(10)
+            if self._sleep_or_stop(wait):
+                raise CollectorStopped()
             if broken:
                 try:
                     self._ex.shutdown(wait=False, cancel_futures=True)
@@ -300,7 +330,7 @@ class ParallelCollector:
                 return self._ex.submit(_collect_chunk, self._last_blob, chunk, seed).result()
             except Exception as e:                     # noqa: BLE001
                 err = e
-        raise err                                      # both attempts failed -> let the run restart
+        raise err                                      # exhausted the backoff -> let the run restart
 
     def collect(self, m, specs: list, it: int) -> list:
         """Synchronous submit+gather: play every spec with the CURRENT weights of

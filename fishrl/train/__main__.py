@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import time
 
 from fishrl.train.threads import DEFAULT_RESERVE, preconfigure
 
@@ -234,8 +235,15 @@ def main():
     from fishrl.train.keepawake import keep_awake
     keep_awake("training")                            # Windows: no idle-sleep mid-run
 
+    # Stamp each console line with the local time to the minute, so a long console
+    # (or a scrollback after a resource-storm hiccup) can be read against the clock.
+    # journald adds its own timestamp on the Linux service, so this is redundant-but-
+    # harmless there and the [status]/[league] parsers match anywhere in the line.
+    def _log(s):
+        print(f"[{time.strftime('%m-%d %H:%M')}] {s}", flush=True)
+
     max_seconds = args.max_hours * 3600.0 if args.max_hours else None
-    models = train(cfg, build_models(cfg), log=lambda s: print(s, flush=True),
+    models = train(cfg, build_models(cfg), log=_log,
                    max_seconds=max_seconds,
                    resume_path=latest if resume else None, checkpoint_path=latest)
     print(f"saved checkpoint -> {latest}", flush=True)

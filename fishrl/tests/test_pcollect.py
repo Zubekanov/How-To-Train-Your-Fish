@@ -104,6 +104,28 @@ def test_gather_rebuilds_a_poisoned_pool(monkeypatch):
         pc.close()
 
 
+def test_retry_chunk_honors_stop_during_backoff(monkeypatch):
+    """A stop requested while a resource storm holds the collector in recovery must
+    break out promptly (CollectorStopped), not wait out the whole backoff -- that is
+    what makes the End-session button work during a WinError 1450 storm."""
+    import time
+
+    from concurrent.futures.process import BrokenProcessPool
+
+    from fishrl.train.pcollect import CollectorStopped
+
+    monkeypatch.setattr(time, "sleep", lambda *a, **k: None)   # backoff must not gate the test
+
+    cfg = Config(device="cpu", collect_workers=2, max_decisions=100, pool_frac=0.0, seed=0)
+    pc = ParallelCollector(cfg, 2, should_stop=lambda: True)    # stop is already requested
+    try:
+        with pytest.raises(CollectorStopped):
+            pc._retry_chunk([{"kind": "self", "seed": 0, "idx": 0}], seed=0,
+                            err=BrokenProcessPool("storm"))
+    finally:
+        pc.close()
+
+
 def test_parallel_matches_serial_game_accounting():
     serial = _run(0)
     # affinity "0,1": LPs that exist on any machine -- exercises the pin path in

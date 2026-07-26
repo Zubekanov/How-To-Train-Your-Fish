@@ -508,6 +508,12 @@ def train(cfg: Config, models: Models | None = None, log=print,
     # also why the ODROID dashboard stops via systemctl, not this file.
     stop_file = (os.path.join(os.path.dirname(os.path.abspath(checkpoint_path)), "STOP")
                  if checkpoint_path is not None else None)
+    if stop_file is not None and os.path.exists(stop_file):
+        try:                                             # a STOP predating this process is not
+            os.remove(stop_file)                         # ours to honor -- clearing it stops a
+            log("[stop] cleared a stale STOP from a previous session")  # leftover from killing a
+        except OSError:                                  # fresh --resume start dead on arrival
+            pass
     if checkpoint_path is not None:
         def _on_signal(signum, frame):
             stop["v"] = True
@@ -519,8 +525,11 @@ def train(cfg: Config, models: Models | None = None, log=print,
     # 0 = the serial path below, unchanged (the ODROID service default).
     pcol = None
     if getattr(cfg, "collect_workers", 0) > 0:
-        from fishrl.train.pcollect import ParallelCollector
-        pcol = ParallelCollector(cfg, int(cfg.collect_workers))
+        from fishrl.train.pcollect import CollectorStopped, ParallelCollector
+        # A stop requested mid-collection (STOP file or a signal) must be seen even
+        # while a recovery storm holds the collector -- not only at the loop boundary.
+        _stop_now = (lambda: stop["v"] or (stop_file is not None and os.path.exists(stop_file)))
+        pcol = ParallelCollector(cfg, int(cfg.collect_workers), should_stop=_stop_now)
         log(f"[pcollect] {cfg.collect_workers} collector worker processes")
     pipeline = bool(getattr(cfg, "pipeline_collect", False))
     if pipeline and pcol is None:
@@ -670,23 +679,36 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 # ── Parallel path. Specs come from _pspecs (kept in lockstep with the
                 # serial branch in the else:); buffers come back in spec order and every
                 # piece of bookkeeping is applied here on the main thread.
-                if pipeline:
-                    # This iteration's games were submitted during the previous one
-                    # (first pass: submit now). Then start N+1's games BEFORE the
-                    # update below, with the current -- pre-update -- weights: that is
-                    # exactly the one-update staleness the flag buys throughput with.
-                    # collect_s under pipeline therefore measures the STALL waiting
-                    # for workers, not the games' wall-clock.
-                    if pipe_pending is None:
+                try:
+                    if pipeline:
+                        # This iteration's games were submitted during the previous one
+                        # (first pass: submit now). Then start N+1's games BEFORE the
+                        # update below, with the current -- pre-update -- weights: that is
+                        # exactly the one-update staleness the flag buys throughput with.
+                        # collect_s under pipeline therefore measures the STALL waiting
+                        # for workers, not the games' wall-clock.
+                        if pipe_pending is None:
+                            specs, metas = _pspecs(done)
+                            pipe_pending = (specs, metas, pcol.submit(m, specs, done))
+                        specs, metas, futs = pipe_pending
+                        bufs = pcol.gather(futs, len(specs))
+                        nspecs, nmetas = _pspecs(done + 1)
+                        pipe_pending = (nspecs, nmetas, pcol.submit(m, nspecs, done + 1))
+                    else:
                         specs, metas = _pspecs(done)
-                        pipe_pending = (specs, metas, pcol.submit(m, specs, done))
-                    specs, metas, futs = pipe_pending
-                    bufs = pcol.gather(futs, len(specs))
-                    nspecs, nmetas = _pspecs(done + 1)
-                    pipe_pending = (nspecs, nmetas, pcol.submit(m, nspecs, done + 1))
-                else:
-                    specs, metas = _pspecs(done)
-                    bufs = pcol.collect(m, specs, done)   # strictly on-policy
+                        bufs = pcol.collect(m, specs, done)   # strictly on-policy
+                except CollectorStopped:
+                    # A stop landed while a resource storm held the collector in
+                    # recovery. Consume the STOP (the loop-top poll won't run now) and
+                    # exit gracefully -- the checkpoint below the loop still fires.
+                    if stop_file is not None and os.path.exists(stop_file):
+                        try:
+                            os.remove(stop_file)
+                        except OSError:
+                            pass
+                    stop["v"] = True
+                    log(f"[stop] stop requested during collection at it={done}")
+                    break
                 buf = RolloutBuffer()
                 for (tag, member, lseat), gbuf in zip(metas, bufs):
                     won = gbuf.games[-1] if gbuf.games else None

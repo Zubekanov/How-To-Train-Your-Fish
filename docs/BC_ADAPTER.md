@@ -110,3 +110,36 @@ unit tests against handcrafted states.
 Roughly: adapter + parity 2-3 focused sessions, BC pipeline 1, handoff experimentation
 GPU-bound. Sequencing per the plan: validate with **h1.2 now** (exists today); the
 payoff compounds at the **next architecture restart**, and h2.0 slots in later for free.
+
+## Status: IMPLEMENTED (adapter + datagen + BC trainer)
+
+* `fishrl/imitate/adapter.py` — `HeuristicAdapter` per the design above, any
+  heuristic profile. Extra findings over the scope:
+  * `_choose_action` / `_best_land_to_tap` are pure decision halves, so priority
+    and pay need no shim at all; the cast TARGET rides along in the ("cast", ...)
+    tuple and is cached for the following `choose_targets` pending.
+  * `take_priority`'s per-turn action budget (`g._ai_actions`, 30/turn, counted
+    per priority grant, SHARED across AI seats via a game attribute) is part of
+    observable teacher behaviour — replicated verbatim.
+* `fishrl/imitate/datagen.py` — `TeacherEnv` (p1 env-driven, p2 engine-internal,
+  built on `new_sandbox_game`) + mirror games (both seats adapter-driven, both
+  labelled); worker-pool chunked generation; obs stored f16 WITHOUT the belief
+  channel (zeros appended at train time).
+* `fishrl/imitate/bc.py` — masked cross-entropy BC trainer; split-by-game holdout
+  accuracy (overall + non-forced); writes a RESUME-COMPATIBLE checkpoint
+  (architecture record + fresh optimizers + frozen snapshot + RNG), verified to
+  load through `config_from_checkpoint` + the trainer's resume path.
+* `fishrl/tests/test_imitate.py` — pure translation units, a vs-internal datagen
+  smoke, and GOLDEN PARITY: adapter-mirror (full stops) vs both-seats-internal
+  engine games, 8 seeds: **zero mask-forced deviations on 8/8, strict transcript
+  equality on 7/8**. The exempted seed is a driving-flow property, not a
+  translation gap: the engine-internal hold-priority flow grants fewer
+  post-resolution windows than the env flow; the env re-offers the window to the
+  adapter AND to the RL agent in deployment, so the adapter's answer is the
+  deployment-correct one. (One cosmetic normalization: the env path logs
+  "X's ability targets Y." at trigger placement; the internal path sets the same
+  target silently.)
+
+Not yet implemented: the PPO handoff protocol (critic/guesser warmup before
+trusting advantages, KL-to-teacher anneal, entropy floor) — deliberately a
+separate, babysat experiment.

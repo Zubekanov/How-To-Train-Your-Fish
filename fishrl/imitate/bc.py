@@ -173,7 +173,7 @@ def main():
             opt.zero_grad()
             loss.backward()
             opt.step()
-            tot += float(loss) * len(bi); nb += len(bi)
+            tot += float(loss.detach()) * len(bi); nb += len(bi)
         acc, acc_nf = _accuracy(actor, obs[ho_idx], mask[ho_idx], acts[ho_idx], device)
         _log(f"[bc] epoch {epoch}/{args.epochs}  loss={tot / max(nb, 1):.4f}  "
              f"holdout acc={acc:.3f} (non-forced {acc_nf:.3f})")

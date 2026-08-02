@@ -591,6 +591,21 @@ def train(cfg: Config, models: Models | None = None, log=print,
             log(f"[warmup] {w}")
             frozen = _snapshot(m)
 
+        # BC-handoff KL anchor: snapshot the actor AS LOADED (on a resume from a
+        # fishrl.imitate.bc checkpoint this is the teacher clone) before any PPO
+        # update moves it. Frozen for the whole run; the coefficient anneals to zero.
+        teacher_ref = None
+        if cfg.kl_teacher_coef > 0.0 and cfg.kl_teacher_iters > 0:
+            teacher_ref = copy.deepcopy(m.actor)
+            teacher_ref.eval()
+            for p in teacher_ref.parameters():
+                p.requires_grad_(False)
+            log(f"[handoff] KL-to-teacher anchor snapshotted at it={done} "
+                f"(coef={cfg.kl_teacher_coef}, anneal={cfg.kl_teacher_iters} iters)")
+        if cfg.freeze_actor_iters > done:
+            log(f"[handoff] actor FROZEN until it={cfg.freeze_actor_iters} "
+                f"(critic-only warmup)")
+
         benv = BeliefAugmentedEnv(m.guesser, belief=cfg.use_belief, max_decisions=cfg.max_decisions)
 
         def _split_games() -> tuple:
@@ -832,7 +847,15 @@ def train(cfg: Config, models: Models | None = None, log=print,
             else:
                 ent = cfg.ent_coef(done)
             t_update = time.perf_counter()
-            ppo_stats = ppo_update(batch, m.actor, m.critic, opt_ppo, cfg, ent, rng_seed=done)
+            freeze = done < cfg.freeze_actor_iters
+            if cfg.freeze_actor_iters > 0 and done == cfg.freeze_actor_iters:
+                log(f"[handoff] actor unfrozen at it={done}")
+            kl_now = 0.0
+            if teacher_ref is not None and done < cfg.kl_teacher_iters:
+                kl_now = cfg.kl_teacher_coef * (1.0 - done / cfg.kl_teacher_iters)
+            ppo_stats = ppo_update(batch, m.actor, m.critic, opt_ppo, cfg, ent, rng_seed=done,
+                                   ref_actor=teacher_ref, kl_ref_coef=kl_now,
+                                   train_actor=not freeze)
             aux_stats = aux_update(batch, m.guesser, m.public, opt_g, opt_p, cfg.aux_steps,
                                    train_public=cfg.train_public)
             iter_update_s = time.perf_counter() - t_update
@@ -853,6 +876,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     "policy_loss": ppo_stats["policy_loss"],
                     "critic_loss": ppo_stats["critic_loss"],
                     "entropy": ppo_stats["entropy"], "approx_kl": ppo_stats["approx_kl"],
+                    **({"kl_teacher": ppo_stats["kl_teacher"]} if kl_now > 0 else {}),
                     "guesser_loss": aux_stats["guesser_loss"],
                     "public_loss": aux_stats["public_loss"],
                     "collect_s": round(iter_collect_s, 3), "update_s": round(iter_update_s, 3),

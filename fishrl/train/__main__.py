@@ -93,6 +93,16 @@ def main():
                          "escape self-play local optima on a very long run.")
     ap.add_argument("--ent-reheat-peak", type=float, default=Config.ent_reheat_peak,
                     help="peak entropy coefficient at the start of each re-heat cycle")
+    ap.add_argument("--freeze-actor-iters", type=int, default=Config.freeze_actor_iters,
+                    help="BC handoff: while it < N the PPO update trains the CRITIC only, "
+                         "calibrating advantages on-policy before the cloned actor moves "
+                         "(0 = off; compared against the absolute iteration counter)")
+    ap.add_argument("--kl-teacher-coef", type=float, default=Config.kl_teacher_coef,
+                    help="BC handoff: KL(teacher||pi) penalty at it=0, teacher = the actor "
+                         "as loaded at run start (the BC clone on a resume); 0 = off")
+    ap.add_argument("--kl-teacher-iters", type=int, default=Config.kl_teacher_iters,
+                    help="BC handoff: anneal the KL-to-teacher coefficient linearly to zero "
+                         "over this many iterations")
     ap.add_argument("--scenario-weight", action="append", default=[], metavar="NAME=W",
                     help="override a scenario's PFSP prior weight (repeatable); e.g. "
                          "deckout=0.5 to stop a floored scenario from soaking the pool")
@@ -204,6 +214,9 @@ def main():
                   league_size=args.league_size, scenario_frac=args.scenario_frac,
                   scenarios_in_pool=args.scenario_pool, scenario_weights=scen_w,
                   p1_adv_weight=args.p1_adv_weight,
+                  freeze_actor_iters=args.freeze_actor_iters,
+                  kl_teacher_coef=args.kl_teacher_coef,
+                  kl_teacher_iters=args.kl_teacher_iters,
                   ent_end=args.ent_end, ent_anneal_iters=args.ent_anneal_iters,
                   ent_reheat_period=args.ent_reheat_period, ent_reheat_peak=args.ent_reheat_peak,
                   train_public=args.train_public,

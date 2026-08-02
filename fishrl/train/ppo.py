@@ -8,7 +8,8 @@ from fishrl.models import device_of
 from fishrl.train.losses import guesser_poisson, outcome_bce, ppo_actor_loss
 
 
-def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0) -> dict:
+def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0,
+               ref_actor=None, kl_ref_coef: float = 0.0, train_actor: bool = True) -> dict:
     """K-epoch minibatched PPO over the actor and the privileged critic.
 
     The rollout batch lives on CPU (collection is CPU-bound); the fields the
@@ -20,15 +21,24 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0) -> d
 
     `rng_seed` varies the minibatch shuffle per call (the trainer passes the
     iteration counter) — a fixed stream would replay the identical permutation
-    every update."""
+    every update.
+
+    BC-handoff extensions (defaults = historic behaviour exactly):
+      * ``train_actor=False`` — critic-only gradient (the actor's telemetry is
+        still computed, but no actor term enters the loss), used while the
+        critic warms up against a freshly-cloned policy.
+      * ``ref_actor`` + ``kl_ref_coef`` — adds ``kl_ref_coef * KL(ref || pi)``
+        to the loss, anchoring early fine-tuning to the frozen teacher clone;
+        the trainer anneals the coefficient to zero."""
     dev = device_of(actor)
     keys = ("x_act", "mask", "action", "old_logp", "adv", "god", "y_p1", "valid")
     b = {k: batch[k].to(dev, non_blocking=True) for k in keys}
     M = b["x_act"].shape[0]
     idx = np.arange(M)
     rng = np.random.default_rng(rng_seed)
-    acc = None                         # device-side [ploss, closs, ent, kl, cf] running sum
+    acc = None                 # device-side [ploss, closs, ent, kl, cf, kl_ref] running sum
     n = 0
+    zero = torch.zeros((), device=dev)
     for _ in range(cfg.ppo_epochs):
         rng.shuffle(idx)
         for s in range(0, M, cfg.minibatch):
@@ -38,7 +48,19 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0) -> d
                 logp_all, b["action"][mb], b["old_logp"][mb], b["adv"][mb], cfg.clip)
             critic_logit = critic(b["god"][mb])
             closs = outcome_bce(critic_logit, b["y_p1"][mb], b["valid"][mb])
-            loss = ploss - ent_coef * ent + cfg.critic_coef * closs
+            if train_actor:
+                loss = ploss - ent_coef * ent + cfg.critic_coef * closs
+            else:                                  # handoff warmup: critic-only gradient
+                loss = cfg.critic_coef * closs
+            kl_ref = zero
+            if train_actor and ref_actor is not None and kl_ref_coef > 0.0:
+                with torch.no_grad():
+                    ref_logp = ref_actor.log_probs(b["x_act"][mb], b["mask"][mb])
+                ref_p = ref_logp.exp()             # illegal entries underflow to exactly 0
+                diff = torch.where(ref_p > 0, ref_logp - logp_all,
+                                   torch.zeros_like(logp_all))
+                kl_ref = (ref_p * diff).sum(-1).mean()
+                loss = loss + kl_ref_coef * kl_ref
             opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(
@@ -46,12 +68,13 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0) -> d
             opt.step()
             # kl/cf come back as detached device tensors (losses.py) -- stack
             # everything device-side; the ONLY host sync is the .tolist() below.
-            step_stats = torch.stack([ploss.detach(), closs.detach(), ent.detach(), kl, cf])
+            step_stats = torch.stack([ploss.detach(), closs.detach(), ent.detach(), kl, cf,
+                                      kl_ref.detach()])
             acc = step_stats if acc is None else acc + step_stats
             n += 1
-    vals = (acc / max(n, 1)).tolist() if acc is not None else [0.0] * 5
+    vals = (acc / max(n, 1)).tolist() if acc is not None else [0.0] * 6
     return {"policy_loss": vals[0], "critic_loss": vals[1], "entropy": vals[2],
-            "approx_kl": vals[3], "clip_frac": vals[4], "n": n}
+            "approx_kl": vals[3], "clip_frac": vals[4], "kl_teacher": vals[5], "n": n}
 
 
 def aux_update(batch, guesser, public_est, opt_g, opt_p, steps: int,

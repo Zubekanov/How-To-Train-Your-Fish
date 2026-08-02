@@ -141,6 +141,18 @@ class Config:
     # re-heat, so enable it when a run stalls, not preemptively-aggressively.
     ent_reheat_period: int = 0
     ent_reheat_peak: float = 0.02
+    # ── PPO handoff after a behaviour-cloning bootstrap (fishrl.imitate) ─────────
+    # Both default OFF: the normal trainer is bit-identical with them at 0. Compared
+    # against the ABSOLUTE iteration counter (a BC checkpoint starts at done=0), so a
+    # crash-restart of the fine-tune re-enters the same phase it left.
+    freeze_actor_iters: int = 0    # while done < N, the PPO update trains the CRITIC only
+                                   # (the actor takes no gradient at all), so advantages
+                                   # are calibrated on-policy before the clone moves
+    kl_teacher_coef: float = 0.0   # KL(teacher || pi) penalty coefficient at it=0; the
+                                   # teacher is the actor snapshotted at run start (the BC
+                                   # clone on a resume). Keeps early PPO from destroying
+                                   # the cloned prior on garbage advantages ...
+    kl_teacher_iters: int = 0      # ... annealed linearly to zero over this many iters
     # Head-MLP widths. `hidden` is the default for the actor / guesser / public heads;
     # `actor_hidden` (when set) overrides it for the ACTOR only, so the policy can be
     # deepened/widened without also growing the guesser (which runs per-decision on the

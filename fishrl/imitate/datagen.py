@@ -57,11 +57,45 @@ class TeacherEnv(FishAEC):
         self._refresh()
 
 
+def _student_act(actor, obs: np.ndarray, mask: np.ndarray, rng) -> int:
+    """Sample a legal action from the student policy (belief dims zeroed, exactly
+    as the clone was trained). Torch imported here so teacher-only workers stay
+    torch-free."""
+    import torch
+    from fishrl.obs import vocab as V
+    x = torch.from_numpy(np.concatenate([obs, np.zeros(V.N_NAMES, np.float32)])).unsqueeze(0)
+    m = torch.from_numpy(mask.astype(np.float32)).unsqueeze(0)
+    with torch.no_grad():
+        p = actor.log_probs(x, m)[0].exp()
+    return int(torch.multinomial(p, 1, generator=rng))
+
+
+def load_student(ckpt_path: str):
+    """CPU actor from a checkpoint (architecture rides in its config record)."""
+    import torch
+    from fishrl.train.checkpoint import load_checkpoint
+    from fishrl.train.train_loop import build_models, config_from_checkpoint
+    torch.set_num_threads(1)                      # workers must not oversubscribe
+    pl = load_checkpoint(ckpt_path)
+    m = build_models(config_from_checkpoint(pl["config"], device="cpu"))
+    m.actor.load_state_dict(pl["models"]["actor"])
+    m.actor.eval()
+    return m.actor
+
+
 def play_teacher_game(seed: int, teacher: str = "heuristic_1_2",
                       opponent: str | None = "heuristic_1_2",
-                      stops_mode: str = "default", max_decisions: int = 2000) -> dict:
-    """One adapter-driven game. ``opponent=None`` -> mirror (both seats labelled);
+                      stops_mode: str = "default", max_decisions: int = 2000,
+                      student=None) -> dict:
+    """One labelled game. ``opponent=None`` -> mirror (both seats labelled);
     else p2 is that engine-internal profile and only p1 is labelled.
+
+    ``student=None`` (BC mode): the teacher adapter both CHOOSES the actions and
+    provides the labels. ``student=<actor>`` (DAgger mode): the STUDENT chooses
+    every action (sampled, belief zeroed) so the game visits the student's own
+    state distribution, while the teacher labels each visited state fresh (the
+    adapter re-plans per decision -- its multi-step plan would be invalidated by
+    the student taking a different action).
 
     Returns {"obs": (N, OBS_DIM) f16, "mask": (N, A.N) i8, "act": (N,) i32,
     "seat": (N,) i8 (0=p1), "winner": "p1"/"p2"/None, "fallbacks": int,
@@ -73,6 +107,9 @@ def play_teacher_game(seed: int, teacher: str = "heuristic_1_2",
         env = TeacherEnv(opponent, stops_mode=stops_mode, max_decisions=max_decisions)
         seats = ("p1",)
     adapters = {s: HeuristicAdapter(teacher) for s in seats}
+    if student is not None:
+        import torch
+        srng = torch.Generator().manual_seed(seed * 2 + 1)
     env.reset(seed=seed)
     obs_l, mask_l, act_l, seat_l = [], [], [], []
     guard = max_decisions * 8
@@ -85,10 +122,16 @@ def play_teacher_game(seed: int, teacher: str = "heuristic_1_2",
         if agent not in adapters:
             raise RuntimeError(f"engine surfaced a decision for the internal seat {agent}")
         o = env.observe(agent)
-        a = adapters[agent].act(env, o["action_mask"])
+        mask = o["action_mask"]
+        if student is None:
+            a = label = adapters[agent].act(env, mask)
+        else:
+            adapters[agent].reset()                       # fresh plan for THIS state
+            label = adapters[agent].act(env, mask)
+            a = _student_act(student, o["observation"], mask, srng)
         obs_l.append(o["observation"].astype(np.float16))
-        mask_l.append(o["action_mask"].astype(np.int8))
-        act_l.append(a)
+        mask_l.append(mask.astype(np.int8))
+        act_l.append(label)
         seat_l.append(0 if agent == "p1" else 1)
         env.step(a)
     return {
@@ -119,9 +162,14 @@ def _schedule(games: int, opponents: list, mirror_frac: float, seed0: int) -> li
 
 
 def _gen_chunk(args: tuple) -> bytes:
-    """Worker: play a chunk of scheduled games, return one compressed blob."""
-    jobs, teacher, stops_mode, max_decisions = args
-    parts = [play_teacher_game(seed, teacher, opp, stops_mode, max_decisions)
+    """Worker: play a chunk of scheduled games, return one compressed blob.
+    `student_ckpt` (a PATH, loaded once per chunk -- never shipped through the
+    pipe; the 14MB-blob-per-chunk pattern is exactly what starved the collection
+    pipes under pressure) switches the chunk to DAgger mode."""
+    jobs, teacher, stops_mode, max_decisions, student_ckpt = args
+    student = load_student(student_ckpt) if student_ckpt else None
+    parts = [play_teacher_game(seed, teacher, opp, stops_mode, max_decisions,
+                               student=student)
              for seed, opp in jobs]
     return zlib.compress(pickle.dumps(parts), level=3)
 
@@ -130,15 +178,18 @@ def generate(games: int, teacher: str = "heuristic_1_2",
              opponents: tuple = ("heuristic", "heuristic_1_1", "heuristic_1_2"),
              mirror_frac: float = 0.5, seed: int = 0, workers: int = 0,
              stops_mode: str = "default", max_decisions: int = 2000,
-             chunk: int = 8, log=print) -> dict:
-    """Play `games` teacher games (optionally across worker processes) and return
-    the concatenated dataset with a per-sample game id for split-by-game."""
+             chunk: int = 8, log=print, student_ckpt: str | None = None) -> dict:
+    """Play `games` labelled games (optionally across worker processes) and return
+    the concatenated dataset with a per-sample game id for split-by-game.
+    `student_ckpt` -> DAgger mode: the student at that checkpoint path drives,
+    the teacher labels."""
     sched = _schedule(games, list(opponents), mirror_frac, seed)
     chunks = [sched[i:i + chunk] for i in range(0, len(sched), chunk)]
     results: list = []
     if workers and workers > 0:
         with ProcessPoolExecutor(max_workers=workers) as ex:
-            futs = [ex.submit(_gen_chunk, (c, teacher, stops_mode, max_decisions))
+            futs = [ex.submit(_gen_chunk, (c, teacher, stops_mode, max_decisions,
+                                           student_ckpt))
                     for c in chunks]
             for n, f in enumerate(futs, 1):
                 results.extend(pickle.loads(zlib.decompress(f.result())))
@@ -147,7 +198,7 @@ def generate(games: int, teacher: str = "heuristic_1_2",
     else:
         for n, c in enumerate(chunks, 1):
             results.extend(pickle.loads(zlib.decompress(
-                _gen_chunk((c, teacher, stops_mode, max_decisions)))))
+                _gen_chunk((c, teacher, stops_mode, max_decisions, student_ckpt)))))
             log(f"[datagen] chunk {n}/{len(chunks)} done "
                 f"({sum(len(r['act']) for r in results)} samples)")
     gid = np.concatenate([np.full(len(r["act"]), i, dtype=np.int32)

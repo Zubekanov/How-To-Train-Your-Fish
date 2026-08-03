@@ -75,6 +75,30 @@ def test_teacher_game_produces_clean_labels():
     assert out["obs"].shape[0] == out["mask"].shape[0] == len(out["act"])
 
 
+def test_dagger_mode_student_drives_teacher_labels(tmp_path):
+    """DAgger mode: the student policy (loaded from a checkpoint path) chooses the
+    actions while the adapter labels every visited state fresh. Labels must all be
+    legal under their recorded masks and the game must complete."""
+    from fishrl.imitate.bc import _payload
+    from fishrl.train.checkpoint import save_checkpoint
+    from fishrl.train.config import Config
+    from fishrl.train.train_loop import build_models
+
+    cfg = Config(device="cpu", use_belief=False, actor_hidden=(32, 32), card_dim=16,
+                 actor_encoder="entity", hidden=(32, 32), critic_hidden=(32, 32))
+    m = build_models(cfg)
+    path = str(tmp_path / "student.pt")
+    save_checkpoint(path, _payload(cfg, m, {"test": True}))
+
+    from fishrl.imitate.datagen import load_student
+    student = load_student(path)
+    out = play_teacher_game(seed=3, teacher=PROFILE, opponent=PROFILE,
+                            max_decisions=300, student=student)
+    assert len(out["act"]) > 20
+    for i in range(len(out["act"])):
+        assert out["mask"][i][out["act"][i]] == 1, f"illegal label at sample {i}"
+
+
 # ── golden parity ─────────────────────────────────────────────────────────────
 
 def _engine_reference(seed: int) -> tuple:

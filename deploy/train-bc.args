@@ -1,0 +1,1 @@
+--scenario-pool --pool-frac 0.6 --ent-end 0.008 --ent-anneal-iters 20000 --scenario-weight board_presence=0.5 --scenario-weight deckout=0.5

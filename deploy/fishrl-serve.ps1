@@ -14,13 +14,16 @@ $Dir = if ([System.IO.Path]::IsPathRooted($CkptDir)) { $CkptDir } else { Join-Pa
 if (-not (Test-Path $Dir)) { Write-Error "no such ckpt-dir: $Dir"; exit 1 }
 & "$Repo\.venv\Scripts\Activate.ps1"
 Set-Location $Repo
-# Replace any already-running instance: the dashboard page is baked in at
-# startup, so a survivor from an old session serves STALE code forever --
-# and Windows' SO_REUSEADDR semantics let both bind :8765 at once, with the
-# oldest winning the connections (observed: a June instance shadowing every
-# UI change since). Stop-Process on ourselves is impossible (new PID).
+# Replace any already-running instance OF THIS LINEAGE: the dashboard page is
+# baked in at startup, so a survivor from an old session serves STALE code
+# forever -- and Windows' SO_REUSEADDR semantics let both bind the same port at
+# once, with the oldest winning the connections (observed: a June instance
+# shadowing every UI change since). Stop-Process on ourselves is impossible
+# (new PID). Scoped to the same --ckpt-dir so two lineages' dashboards (e.g.
+# checkpoints-v2 on :8765 and checkpoints-bc on :8766) can run side by side.
+$Leaf = [regex]::Escape((Split-Path -Leaf $Dir))
 Get-CimInstance Win32_Process -Filter "Name like 'python%'" |
-    Where-Object { $_.CommandLine -match "fishrl\.serve" } |
+    Where-Object { $_.CommandLine -match "fishrl\.serve" -and $_.CommandLine -match $Leaf } |
     ForEach-Object {
         Write-Host "[fishrl-serve] stopping stale instance pid=$($_.ProcessId)"
         try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {}

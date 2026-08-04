@@ -62,9 +62,9 @@ set /p REGIME=<"%REPO%\deploy\train-bc.args"
 "%PY%" -m fishrl.train --resume --iters 0 --ckpt-dir "%CKPT%" %REGIME% ^
     --report-every-seconds 900 --report-winrate-games 0 ^
     --checkpoint-every-seconds 900 ^
-    --gpu --collect-workers 8 --reserve-cores 2 --collect-affinity 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 --pipeline-collect %*
+    --gpu --collect-workers 8 --reserve-cores 2 --collect-affinity 0,2,4,6,8,10,12,14 --pipeline-collect %*
 
-rem ── the trainer has exited (Ctrl-C, or the dashboard's "End training session") ──
+rem ?????? the trainer has exited (Ctrl-C, or the dashboard's "End training session") ??????
 rem End THIS lineage's eval panel with the session (matched on the ckpt dir so a
 rem v2 panel running alongside is untouched); an in-flight panel would otherwise
 rem grind for another minute or two, which reads as a hang.

@@ -72,11 +72,19 @@ not hybrid-aware**: unpinned collector workers drift onto E-cores, measured
 **2.3× slower per decision** (1.4 ms/dec on a P-core vs 3.3 ms on an E-core
 for this workload). The launchers therefore split the machine:
 
-* trainer collectors → `--collect-affinity 0,…,15` (the full P set: the
-  scheduler puts 8 workers one per physical core when free, and they can
-  shift among HT siblings when something intrudes — a strict one-LP-per-core
-  pin measured SLOWER in real sessions because a floating eval panel
-  time-sliced against workers that had nowhere to move),
+* trainer collectors → `--collect-affinity 0,2,…,14` (**one LP per physical
+  P-core**). This used to be the full P set 0–15 so workers could shift among
+  HT siblings when something intruded — a strict pin once measured slower
+  against a *floating* eval panel. That caveat died when the panel moved to
+  the E-cores: with nothing intruding on the P set, the full mask just let
+  the scheduler co-stack two workers onto one core's HT siblings while
+  another core idled. Live A/B (2026-08, it≈504k, panel-free arms of the
+  real pipelined regime): full mask 1477 it/h / 8.5 ms per worker decision
+  vs one-per-core 1645 it/h / 6.4 ms — **+11%**, and the update sped up too
+  (the main process's 18 torch threads land on the now-free odd siblings
+  during pipelined overlap instead of time-slicing against a worker).
+  Re-measure if the panel ever floats again; see
+  `python -m fishrl.eval.profile_discrete --sections a`.
 * eval panel workers → `--affinity 16,…,27` (E-cores): panels are
   deadline-insensitive (they only must finish inside the 15-min cadence), so
   they take the slow cores and never touch the collectors.

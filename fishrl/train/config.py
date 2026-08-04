@@ -48,6 +48,15 @@ class Config:
     # enumerate adjacently, so e.g. "0,2,4,6,8,10,12,14" on an 8P-core part).
     # Give at least as many LPs as workers or they queue inside the mask.
     collect_affinity: str = ""
+    # Central batched inference for the collectors (fishrl.train.inference): one
+    # server process on `device` answers all workers' learner actor/guesser
+    # forwards in pending-batch order, replacing 8 processes each streaming the
+    # full weights per batch-1 forward (measured DRAM-bound: 3.7 ms/decision
+    # contended vs 0.8 ms batched 8-wide). Machine flag, wall-clock only: same
+    # per-iteration weights (pushed + ACKed at submit), sampling RNG stays in
+    # the workers, and any server failure falls back to the local nets.
+    # Requires collect_workers > 0; default off (serial/ODROID byte-identical).
+    infer_server: bool = False
     # Pipelined collection (REGIME, not machine: it changes training semantics).
     # When on, the workers play iteration N+1's games WHILE the GPU updates on
     # iteration N's batch, hiding the update under collection. The behavior

@@ -71,7 +71,7 @@ set /p REGIME=<"%REPO%\deploy\train.args"
 "%PY%" -m fishrl.train --resume --iters 0 --ckpt-dir "%CKPT%" %REGIME% ^
     --report-every-seconds 900 --report-winrate-games 0 ^
     --checkpoint-every-seconds 900 ^
-    --gpu --collect-workers 8 --reserve-cores 2 --collect-affinity 0,2,4,6,8,10,12,14 --pipeline-collect %*
+    --gpu --collect-workers 8 --reserve-cores 2 --collect-affinity 0,2,4,6,8,10,12,14 --pipeline-collect --infer-server %*
 
 rem ?????? the trainer has exited (Ctrl-C, or the dashboard's "End training session") ??????
 rem The eval panel follows trainer.lock and DOES exit on its own -- but it only checks

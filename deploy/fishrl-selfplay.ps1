@@ -19,4 +19,4 @@ python -m fishrl.train --resume --iters 0 `
     --ckpt-dir "$Repo\checkpoints" $Regime `
     --report-every-seconds 900 --report-winrate-games 0 `
     --checkpoint-every-seconds 900 `
-    --gpu --collect-workers 8 --reserve-cores 2 --collect-affinity 0,2,4,6,8,10,12,14 --pipeline-collect
+    --gpu --collect-workers 8 --reserve-cores 2 --collect-affinity 0,2,4,6,8,10,12,14 --pipeline-collect --infer-server

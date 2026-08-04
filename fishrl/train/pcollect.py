@@ -112,6 +112,17 @@ def _winit(lite: dict) -> None:
         opp_actor=MaskedActor(ah, lite["enc_actor"], cd),
         opp_guesser=HandGuesser(hidden, lite["enc_guesser"], cd),
     )
+    if lite.get("serve_shm"):
+        # Batched-inference client: the LEARNER's forwards go to the central
+        # server (fishrl.train.inference); local nets stay loaded as the
+        # fallback and for frozen opponents. A failed claim just means this
+        # worker runs local -- never fatal.
+        try:
+            from fishrl.train.inference import ServedActor, ServedGuesser, _Client
+            cl = _Client(lite["serve_shm"], lite["serve_nslots"])
+            _G.update(served_actor=ServedActor(cl), served_guesser=ServedGuesser(cl))
+        except Exception as e:                            # noqa: BLE001 -- degrade, don't die
+            print(f"[infer] worker slot claim failed ({e!r}); running local", flush=True)
     if lite["scenario_names"]:
         from fishrl.train.scenarios import get_scenario
         for name in lite["scenario_names"]:
@@ -119,13 +130,28 @@ def _winit(lite: dict) -> None:
 
 
 def _collect_one(spec: dict):
-    """One game per the spec; mirrors the serial train-loop branches exactly."""
+    """One game per the spec; mirrors the serial train-loop branches exactly.
+    With a live inference server, the learner's nets are the served proxies;
+    an InferenceTimeout marks the server dead for this worker (sticky) and
+    replays the game with the local nets."""
+    from fishrl.train.inference import InferenceTimeout
+
+    if _G.get("served_actor") is not None and not _G.get("serve_dead"):
+        try:
+            return _collect_one_with(spec, _G["served_actor"], _G["served_guesser"])
+        except InferenceTimeout as e:
+            _G["serve_dead"] = True
+            print(f"[infer] server timeout ({e}); worker falls back to local nets",
+                  flush=True)
+    return _collect_one_with(spec, _G["actor"], _G["guesser"])
+
+
+def _collect_one_with(spec: dict, actor, guesser):
     from fishrl.train.belief_env import BeliefAugmentedEnv
     from fishrl.train.collector import (actor_act_fn, collect_games,
                                         collect_heuristic_games, collect_vs_opponent)
 
     lite = _G["lite"]
-    actor, guesser = _G["actor"], _G["guesser"]
     kind = spec["kind"]
     if kind == "self":
         benv = BeliefAugmentedEnv(guesser, belief=lite["use_belief"],
@@ -217,6 +243,14 @@ class ParallelCollector:
                 "train_public": cfg.train_public,
                 "scenario_names": scen_names,
                 "affinity": parse_affinity(getattr(cfg, "collect_affinity", ""))}
+        self._server = None
+        if getattr(cfg, "infer_server", False):
+            from fishrl.train.inference import InferenceServer
+            self._server = InferenceServer(lite | {"device": cfg.device}, workers)
+            lite = lite | {"serve_shm": self._server.shm.name,
+                           "serve_nslots": self._server.nslots}
+            print(f"[infer] batched inference server on {cfg.device} "
+                  f"({self._server.nslots} slots)", flush=True)
         self._lite = lite                              # kept so a poisoned pool can be rebuilt
         self._ex = self._new_executor()
 
@@ -255,6 +289,10 @@ class ParallelCollector:
             {"actor": _cpu_state(m.actor), "guesser": _cpu_state(m.guesser)},
             protocol=pickle.HIGHEST_PROTOCOL)          # serialize ONCE, memcpy per chunk
         self._last_blob = learner_blob                 # for gather's resubmit path
+        if self._server is not None:
+            # Same blob, applied + ACKed before any chunk starts: served forwards
+            # are exactly as fresh as the worker-local weights they replace.
+            self._server.push_weights(learner_blob)
         items = []
         for w, chunk in enumerate(specs[w::self.workers] for w in range(self.workers)):
             if chunk:
@@ -339,3 +377,5 @@ class ParallelCollector:
 
     def close(self) -> None:
         self._ex.shutdown(wait=False, cancel_futures=True)
+        if self._server is not None:
+            self._server.close()

@@ -118,7 +118,8 @@ class _T:
 # ── section A: iteration anatomy through a real worker pool ──────────────────
 
 def section_a(cfg, m, done: int, iters: int, warmup: int,
-              workers: int = LIVE_WORKERS, affinity: str = LIVE_AFFINITY) -> None:
+              workers: int = LIVE_WORKERS, affinity: str = LIVE_AFFINITY,
+              infer_server: bool = False) -> None:
     import torch
 
     from fishrl.data.buffer import RolloutBuffer
@@ -129,6 +130,7 @@ def section_a(cfg, m, done: int, iters: int, warmup: int,
     dev = cfg.device
     from fishrl.train.scenarios import scenario_names
     cfg.collect_workers, cfg.collect_affinity = workers, affinity
+    cfg.infer_server = infer_server
     cfg.scenarios_in_pool = True                     # workers pre-build ONLY these pools
     cfg.scenario_weights = {n: (1.0 if n in SCEN_NAMES else 0.0)
                             for n in scenario_names()}
@@ -452,6 +454,8 @@ def main() -> None:
                     help="pool size for section A (contention experiments)")
     ap.add_argument("--affinity", default=LIVE_AFFINITY,
                     help="worker affinity mask for section A")
+    ap.add_argument("--infer-server", action="store_true",
+                    help="section A with the central batched inference server")
     ap.add_argument("--cpu", action="store_true", help="force CPU for the update section")
     args = ap.parse_args()
 
@@ -464,7 +468,8 @@ def main() -> None:
 
     if "a" in secs:
         section_a(cfg, m, done, args.iters, args.warmup_iters,
-                  workers=args.workers, affinity=args.affinity)
+                  workers=args.workers, affinity=args.affinity,
+                  infer_server=args.infer_server)
     if "b" in secs:
         # section B wants CPU nets (a worker's shape); rebuild on CPU if needed
         if device != "cpu":

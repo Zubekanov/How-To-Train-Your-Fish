@@ -92,6 +92,25 @@ for this workload). The launchers therefore split the machine:
 Machine flags only — placement, never training semantics; default `""`
 (unpinned) everywhere else, including the ODROID.
 
+### `--infer-server` (batched collection inference)
+
+Batch-1 network forwards were the collectors' real cost: the entity actor
+streams ~14 MB of fp32 weights per decision, and with 8 workers that is
+DRAM-bound (measured 0.8 ms solo → 3.7 ms contended per forward). The flag
+starts ONE server process (fishrl.train.inference) on the training device
+that answers every worker's learner actor/guesser forward in pending-batch
+order via shared-memory slots, replaying **CUDA graphs** per batch bucket
+(the eager forward is ~60 kernel launches ≈ 0.54 ms regardless of batch; a
+graph replay is ~0.22 ms). Weights are pushed + ACKed at submit — served
+forwards are exactly as fresh as the worker-local path — sampling RNG stays
+in the workers, and a server timeout falls back to local nets, so it can
+degrade but not kill a run. Live A/B (13-min arms of the real regime,
+it≈505k): 1645 → **2079 it/h (+26%)**; worker cost 6.4 → 3.8 ms/decision
+(the DRAM contention is gone entirely). Wall-clock only, opt-in, and off
+everywhere serial (ODROID). The polling is deliberately sleepless while
+active: any timed sleep on Windows rounds up to the ~1 ms scheduler tick,
+which would double the cost of every served forward.
+
 ### Memory: why a session once died with `MemoryError`
 
 Every torch process costs **~1.6 GB of commit at birth** (the runtime alone,

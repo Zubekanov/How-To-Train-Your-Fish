@@ -53,6 +53,13 @@ def main():
                     help="comma-separated logical-processor indices the collector "
                          "workers are restricted to (machine flag; keeps them off "
                          "slow E-cores on hybrid CPUs -- see Config.collect_affinity)")
+    ap.add_argument("--infer-server", action="store_true",
+                    default=Config.infer_server,
+                    help="MACHINE: batch all collector workers' learner forwards on "
+                         "one server process on the training device instead of "
+                         "batch-1 per worker (DRAM-bound at 8 workers). Wall-clock "
+                         "only -- same weights per iteration, worker-side sampling, "
+                         "local fallback on failure. Requires --collect-workers > 0.")
     ap.add_argument("--pipeline-collect", action="store_true",
                     default=Config.pipeline_collect,
                     help="REGIME: collect iteration N+1's games while updating on N's "
@@ -209,6 +216,7 @@ def main():
                   collect_workers=args.collect_workers,
                   collect_affinity=args.collect_affinity,
                   pipeline_collect=args.pipeline_collect,
+                  infer_server=args.infer_server,
                   warmup_games=args.warmup_games,
                   pool_frac=args.pool_frac, pfsp_mode=args.pfsp_mode,
                   league_size=args.league_size, scenario_frac=args.scenario_frac,

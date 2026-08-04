@@ -12,8 +12,12 @@ rem
 rem  The active lineage is checkpoints-v2 (the entity / bigger-actor run, ~1700 it/h on
 rem  this box). The original 622h flat run is preserved untouched in checkpoints\.
 rem
-rem  End with Ctrl-C here or the dashboard's "End session" button: either way
-rem  the trainer checkpoints gracefully at the next iteration boundary.
+rem  End with Ctrl-C here or the dashboard's "End training session" button:
+rem  either way the trainer checkpoints gracefully at the next iteration
+rem  boundary. The BUTTON additionally tears the whole session down (it drops a
+rem  TEARDOWN marker this script consumes): eval panel, dashboard + its window,
+rem  and this console all close by themselves. Ctrl-C keeps the dashboard up and
+rem  this window open so you can read the run out.
 rem
 rem  THIS IS LOCAL-ONLY, deliberately. It used to be a RELAY launcher: it pulled
 rem  the lineage off the ODROID, trained here, and handed it back. That is gone.
@@ -41,6 +45,10 @@ set "CKPT=%REPO%\checkpoints-v2"
 rem Create the lineage dir up front: the dashboard (started below, before the trainer)
 rem refuses a non-existent --ckpt-dir, and on a fresh run the trainer hasn't made it yet.
 if not exist "%CKPT%" mkdir "%CKPT%"
+
+rem A TEARDOWN leftover from a session that died before consuming it is not ours
+rem to honor -- same hygiene the trainer applies to a stale STOP.
+if exist "%CKPT%\TEARDOWN" del "%CKPT%\TEARDOWN"
 
 if not exist "%CKPT%\latest.pt" (
     echo [fishrl-pc] no checkpoint in %CKPT% -- FRESH start with the deploy\train.args
@@ -81,9 +89,26 @@ rem now is useful (the checkpoint is final; the next session evaluates it anyway
 rem end it with the session.
 echo.
 echo [fishrl-pc] trainer exited; stopping the eval panel...
-powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*parallel_panel*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*parallel_panel*' -and $_.CommandLine -like '*checkpoints-v2*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+
+rem The dashboard's "End training session" drops a TEARDOWN marker next to the
+rem STOP file: it asks for the WHOLE session to close, not just the trainer.
+rem Consume it and take everything down -- the dashboard (killing its python
+rem ends fishrl-serve.ps1, which closes its minimized window) and this console
+rem (script end closes a double-clicked window; from a terminal it just
+rem returns). The browser tab can't be closed from here; the page shows
+rem "session ended" once the dashboard is gone.
+if exist "%CKPT%\TEARDOWN" goto :teardown
 
 echo.
 echo Session ended; the trainer checkpointed to %CKPT%\latest.pt.
 echo The dashboard is still running at http://%LANIP%:8765/ -- close its window when done.
 pause
+exit /b 0
+
+:teardown
+del "%CKPT%\TEARDOWN"
+echo [fishrl-pc] full teardown requested from the dashboard; closing it too...
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'python*' -and $_.CommandLine -like '*fishrl.serve*' -and $_.CommandLine -like '*checkpoints-v2*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+echo [fishrl-pc] session ended; the trainer checkpointed to %CKPT%\latest.pt.
+exit /b 0

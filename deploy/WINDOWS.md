@@ -198,11 +198,21 @@ deploy\fishrl-serve.ps1                  # binds the primary LAN IPv4 on :8765
 * `/api/summary`, `/api/actions`.
 
 **Actions** (the wrapper passes `--allow-actions`; omit it for strictly read-only):
-on this PC the dashboard gets one button — *End session & hand back* — which drops a
-`STOP` file the trainer consumes at the next iteration boundary (graceful checkpoint);
-if the session was started by `fishrl-relay.ps1`, the relay then exports and restarts
-the ODROID automatically. On the ODROID the buttons are *Stop/Start trainer* and *Run
-eval panel now* (`sudo -n systemctl`; needs the NOPASSWD rule the relay already uses).
+on this PC the dashboard's *End training session* button drops TWO files next to the
+checkpoint: a `STOP` file the trainer consumes at the next iteration boundary
+(graceful checkpoint), and a `TEARDOWN` marker the session bat (`fishrl-pc.bat` /
+`fishrl-bc.bat`) consumes after the trainer exits to close the WHOLE session — eval
+panel, dashboard server (whose exit closes its minimized window), and the trainer
+console itself. The browser tab can't be closed from outside; the page detects the
+dashboard going away after the click and renders "session ended" instead of an
+error. A `Ctrl-C` end leaves no marker: the dashboard stays up and the console
+pauses so the run can be read out (the old behaviour). Everything is matched on the
+lineage dir, so two sessions side by side (v2 on :8765, bc on :8766) tear down
+independently. Both bats also clear a stale `TEARDOWN` at startup — a marker left
+by a session that died before consuming it is not the next session's to honor (the
+same hygiene the trainer applies to a stale `STOP`). On the ODROID the buttons are
+*Stop/Start trainer* and *Run eval panel now* (`sudo -n systemctl`; needs the
+NOPASSWD rule the relay already uses).
 All actions are POST-only and re-validated server-side; nothing destructive is exposed.
 
 It never binds 0.0.0.0 and (without `--allow-actions`) never touches the training

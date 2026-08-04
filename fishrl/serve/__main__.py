@@ -69,6 +69,7 @@ STREAM_POLL_S = 1.0
 HEARTBEAT_S = 15.0
 TRAINER_LOCK = "trainer.lock"                          # fishrl.train.ownership's name
 STOP_FILE = "STOP"                                     # train_loop's stop-file protocol
+TEARDOWN_FILE = "TEARDOWN"                             # launcher's full-cleanup protocol
 PEER = "peer.json"                                     # fishrl.train.ownership's name
 PEER_PROBE_TIMEOUT_S = 2.0
 PEER_PROBE_TTL_S = 15.0
@@ -200,10 +201,14 @@ class Actions:
     validation, platform-specific registry:
 
       * Windows (a console session): "End training session" drops the STOP file --
-        the trainer checkpoints and exits at the next iteration boundary. It used
-        to be "End session & hand back", because fishrl.relay launched the trainer
-        and handed the lineage back to the ODROID afterwards. Training is local-only
-        now (deploy/fishrl-pc.bat), so there is nothing to hand back and the old
+        the trainer checkpoints and exits at the next iteration boundary -- plus a
+        TEARDOWN marker the launcher bat consumes after the trainer exits to close
+        the WHOLE session: eval panel, this dashboard (and its window), and the
+        trainer console. A Ctrl-C end leaves no marker, so that path keeps the
+        dashboard up and the console readable. It used to be "End session & hand
+        back", because fishrl.relay launched the trainer and handed the lineage
+        back to the ODROID afterwards. Training is local-only now
+        (deploy/fishrl-pc.bat), so there is nothing to hand back and the old
         label promised a step that never runs.
       * POSIX (the systemd box): stop/start the trainer unit and kick the eval
         oneshot, via ``sudo -n systemctl`` (needs the NOPASSWD rule). A raw STOP
@@ -256,11 +261,18 @@ class Actions:
         if not a["enabled"]:
             return False, f"refused: {a['reason']}"
         if action_id == "stop_session":
+            # STOP is the trainer's (consumed at the next iteration boundary);
+            # TEARDOWN is the launcher's: after the trainer exits, the session bat
+            # consumes it and closes everything else -- eval panel, this dashboard
+            # and its window, and its own console. Order matters: marker first, so
+            # the bat can never observe STOP's effect (trainer gone) without it.
+            with open(os.path.join(self.dir, TEARDOWN_FILE), "w") as f:
+                f.write("full teardown requested via fishrl.serve\n")
             with open(os.path.join(self.dir, STOP_FILE), "w") as f:
                 f.write("stop requested via fishrl.serve\n")
             return True, ("STOP written -- the trainer will checkpoint and exit at the "
-                          "next iteration boundary, and the eval panel exits with it. "
-                          "This dashboard stays up so you can still read the run.")
+                          "next iteration boundary, then the launcher closes the whole "
+                          "session: eval panel, terminals, and this dashboard.")
         if action_id == "run_eval_local":
             import sys
             subprocess.Popen([sys.executable, "-m", "fishrl.eval.parallel_panel",

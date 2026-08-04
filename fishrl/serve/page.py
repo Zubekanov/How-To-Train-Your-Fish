@@ -324,7 +324,12 @@ async function refreshActions(){
           const rsp = await fetch("/api/action", {method:"POST",
             headers:{"Content-Type":"application/json"},
             body:JSON.stringify({action:a.id})});
-          toast((await rsp.json()).message || rsp.statusText);
+          const j = await rsp.json();
+          toast(j.message || rsp.statusText);
+          // Full-session teardown: the launcher will close this dashboard too.
+          // Flag it so the server vanishing renders as "session ended", not as
+          // an error the page retries forever.
+          if (a.id === "stop_session" && j.ok) sessionEnding = true;
         } catch(e){ toast(""+e); }
         setTimeout(()=>{ refreshActions(); poll(); }, 800);
       };
@@ -351,13 +356,25 @@ async function loadAll(){
     } catch(e){}
   }
 }
+let sessionEnding = false;
 async function poll(){
   try { S.summary = await (await fetch("/api/summary")).json(); header(S.summary); }
-  catch(e){ set("stale","server unreachable","bad"); }
+  catch(e){
+    if (sessionEnding){
+      // "End training session" tears down the whole session, this server
+      // included -- its disappearance is the expected ending, not an outage.
+      set("stale","session ended — dashboard closed","idle");
+      set("live","trainer: stopped","idle");
+      es.close(); clearInterval(pollT); clearInterval(actT);
+      $("actions").innerHTML = "";
+      return;
+    }
+    set("stale","server unreachable","bad");
+  }
 }
 loadAll(); poll(); refreshActions();
-setInterval(poll, 5000);
-setInterval(refreshActions, 15000);
+const pollT = setInterval(poll, 5000);
+const actT = setInterval(refreshActions, 15000);
 setInterval(()=>{ if(dirty) render(); }, 700);
 setTimeout(render, 500);
 </script></body></html>

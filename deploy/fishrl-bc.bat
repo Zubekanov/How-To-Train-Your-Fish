@@ -23,8 +23,11 @@ rem  lineage -- they are deliberately NOT in train-bc.args. A future fresh clone
 rem  wants them back:  fishrl-bc.bat --freeze-actor-iters 500 ^
 rem                        --kl-teacher-coef 0.3 --kl-teacher-iters 5000
 rem
-rem  End with Ctrl-C here or the dashboard's "End session" button (STOP file;
-rem  the trainer checkpoints gracefully at the next iteration boundary).
+rem  End with Ctrl-C here or the dashboard's "End training session" button (STOP
+rem  file; the trainer checkpoints gracefully at the next iteration boundary).
+rem  The BUTTON additionally tears the whole session down (TEARDOWN marker this
+rem  script consumes): eval panel, dashboard + its window, and this console all
+rem  close by themselves. Ctrl-C keeps the dashboard and this window open.
 rem  Extra training flags pass through, e.g.:   fishrl-bc.bat --max-hours 12
 rem ============================================================================
 setlocal
@@ -32,6 +35,10 @@ for %%i in ("%~dp0..") do set "REPO=%%~fi"
 set "PY=%REPO%\.venv\Scripts\python.exe"
 set "CKPT=%REPO%\checkpoints-bc"
 set "PORT=8766"
+
+rem A TEARDOWN leftover from a session that died before consuming it is not ours
+rem to honor -- same hygiene the trainer applies to a stale STOP.
+if exist "%CKPT%\TEARDOWN" del "%CKPT%\TEARDOWN"
 
 if not exist "%CKPT%\latest.pt" (
     echo [fishrl-bc] no checkpoint in %CKPT%.
@@ -72,7 +79,20 @@ echo.
 echo [fishrl-bc] trainer exited; stopping the eval panel...
 powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*parallel_panel*' -and $_.CommandLine -like '*checkpoints-bc*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
 
+rem Dashboard's "End training session" = full teardown (see fishrl-pc.bat for
+rem the mechanics). Everything is matched on checkpoints-bc, so a v2 session
+rem running alongside is untouched.
+if exist "%CKPT%\TEARDOWN" goto :teardown
+
 echo.
 echo Session ended; the trainer checkpointed to %CKPT%\latest.pt.
 echo The dashboard is still running at http://%LANIP%:%PORT%/ -- close its window when done.
 pause
+exit /b 0
+
+:teardown
+del "%CKPT%\TEARDOWN"
+echo [fishrl-bc] full teardown requested from the dashboard; closing it too...
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'python*' -and $_.CommandLine -like '*fishrl.serve*' -and $_.CommandLine -like '*checkpoints-bc*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+echo [fishrl-bc] session ended; the trainer checkpointed to %CKPT%\latest.pt.
+exit /b 0

@@ -360,6 +360,7 @@ def test_stop_session_validates_state_and_writes_stop_file(tmp_path):
     ok, msg = a.run("stop_session")                      # no trainer -> refused
     assert ok is False and "no trainer" in msg
     assert not os.path.exists(os.path.join(d, "STOP"))
+    assert not os.path.exists(os.path.join(d, "TEARDOWN"))
 
     h = hold_lockfile(os.path.join(d, "trainer.lock"))   # "trainer running"
     try:
@@ -367,6 +368,9 @@ def test_stop_session_validates_state_and_writes_stop_file(tmp_path):
         ok, msg = a.run("stop_session")
         assert ok is True
         assert os.path.exists(os.path.join(d, "STOP"))
+        # The full-cleanup half of the protocol: the launcher bat consumes this
+        # after the trainer exits and closes eval panel + dashboard + consoles.
+        assert os.path.exists(os.path.join(d, "TEARDOWN"))
     finally:
         unlock(h)
         h.close()
@@ -401,6 +405,7 @@ def test_action_post_roundtrip(tmp_path):
             with urllib.request.urlopen(req, timeout=10) as r:
                 assert json.loads(r.read())["ok"] is True
             assert os.path.exists(os.path.join(d, "STOP"))
+            assert os.path.exists(os.path.join(d, "TEARDOWN"))
             # GET on the action path must never mutate
             with pytest.raises(urllib.error.HTTPError) as e:
                 _get(port, "/api/action")

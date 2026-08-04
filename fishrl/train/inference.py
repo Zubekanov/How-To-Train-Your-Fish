@@ -97,6 +97,28 @@ class InferenceTimeout(RuntimeError):
     """Server did not answer inside the deadline; caller should go local."""
 
 
+# ── weight transport ──────────────────────────────────────────────────────────
+# NUMPY ONLY, never torch tensors: plain-pickled torch CPU tensors LEAK their
+# storage on unpickle (torch 2.12.1 -- C-level, gc-immune, perfectly linear;
+# measured ~49 MB per 12M-param state dict). This killed the 2026-08-05 session:
+# the server unpickled one blob per iteration and reached 155 GB of commit in
+# ~4 h (pagefile exhaustion -> request timeouts -> trainer MemoryError). The
+# collector workers run the SAME unpickle per chunk and had been leaking too --
+# silently capped near 10 GB each by max_tasks_per_child recycling, visible as
+# the "hour-scale allocator creep" pcollect's recycle comment records. Numpy
+# arrays round-trip clean (measured flat over 300 iterations).
+
+def np_state(net) -> dict:
+    """state_dict as numpy arrays: the weight-transport format."""
+    return {k: v.detach().cpu().numpy() for k, v in net.state_dict().items()}
+
+
+def load_np_state(net, state: dict) -> None:
+    """Inverse of np_state. from_numpy is a zero-copy view; load_state_dict
+    copies it into the parameters, so nothing of the blob outlives the call."""
+    net.load_state_dict({k: torch.from_numpy(v) for k, v in state.items()})
+
+
 class _Client:
     """One worker's slot: claim on construction, release at exit."""
 
@@ -281,9 +303,9 @@ def _serve_main(shm_name: str, nslots: int, conn, lite: dict) -> None:
                 if msg[0] == "stop":
                     return
                 if msg[0] == "weights":
-                    state = pickle.loads(msg[1])
-                    actor.load_state_dict(state["actor"])
-                    guesser.load_state_dict(state["guesser"])
+                    state = pickle.loads(msg[1])            # numpy arrays only (see np_state)
+                    load_np_state(actor, state["actor"])
+                    load_np_state(guesser, state["guesser"])
                     have_weights = True
                     conn.send(("ok",))
             states = hdr[:, 1]

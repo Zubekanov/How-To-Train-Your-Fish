@@ -175,9 +175,10 @@ def _collect_one_with(spec: dict, actor, guesser):
     okind = spec["okind"]
     models = None
     if okind == "self":
+        from fishrl.train.inference import load_np_state
         a_state, g_state = spec["opp_state"]           # frozen nets ride with the spec
-        _G["opp_actor"].load_state_dict(a_state)
-        _G["opp_guesser"].load_state_dict(g_state)
+        load_np_state(_G["opp_actor"], a_state)
+        load_np_state(_G["opp_guesser"], g_state)
         models = SimpleNamespace(actor=_G["opp_actor"], guesser=_G["opp_guesser"])
     member = SimpleNamespace(kind=okind, models=models)
     learner = SimpleNamespace(actor=actor, guesser=guesser)
@@ -198,10 +199,11 @@ def _collect_chunk(learner_blob: bytes, specs: list, torch_seed: int) -> bytes:
     spike whose allocation failure once killed a whole session (MemoryError
     inside the executor's own result pickling, where no user code can catch)."""
     import torch
+    from fishrl.train.inference import load_np_state
     torch.manual_seed(torch_seed)                      # reproducible action sampling per chunk
-    learner_state = pickle.loads(learner_blob)
-    _G["actor"].load_state_dict(learner_state["actor"])
-    _G["guesser"].load_state_dict(learner_state["guesser"])
+    learner_state = pickle.loads(learner_blob)         # numpy arrays only (see np_state):
+    load_np_state(_G["actor"], learner_state["actor"])    # plain-pickled torch tensors
+    load_np_state(_G["guesser"], learner_state["guesser"])  # leak their storage on loads
     out = [(spec["idx"], _collect_one(spec)) for spec in specs]
     return zlib.compress(pickle.dumps(out, protocol=pickle.HIGHEST_PROTOCOL), 1)
 
@@ -209,7 +211,11 @@ def _collect_chunk(learner_blob: bytes, specs: list, torch_seed: int) -> bytes:
 # ── main-process side ─────────────────────────────────────────────────────────
 
 def _cpu_state(net) -> dict:
-    return {k: v.detach().cpu() for k, v in net.state_dict().items()}
+    """Weight-transport snapshot. NUMPY, not torch: see inference.np_state for
+    the unpickle leak this dodges (workers' recycle creep + the server's fatal
+    unbounded version of the same)."""
+    from fishrl.train.inference import np_state
+    return np_state(net)
 
 
 class CollectorStopped(Exception):
@@ -255,11 +261,13 @@ class ParallelCollector:
         self._ex = self._new_executor()
 
     def _new_executor(self) -> ProcessPoolExecutor:
-        # Recycle each worker after this many chunks: a fresh process resets the
-        # hour-scale allocator creep of long-lived torch workers (each worker is
-        # ~1.7 GB commit at BIRTH -- torch's runtime alone is 1.55 GB -- and only
-        # grows). All workers hit the cap on the same iteration (round-robin, one
-        # chunk each), so expect one slow re-warm iteration every `recycle` iters.
+        # Recycle each worker after this many chunks. Historically this capped an
+        # "hour-scale allocator creep" -- root-caused 2026-08-05 as the torch
+        # tensor-unpickle leak (~19 MB per chunk's weights load; see
+        # inference.np_state), now fixed at the source by the numpy transport
+        # format. Recycling stays as a cheap backstop against whatever leaks
+        # next: a fresh process costs one slow re-warm iteration every `recycle`
+        # iters (all workers hit the cap together -- round-robin, one chunk each).
         try:
             return ProcessPoolExecutor(max_workers=self.workers,
                                        initializer=_winit, initargs=(self._lite,),

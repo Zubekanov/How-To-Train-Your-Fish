@@ -18,7 +18,8 @@ from fishrl.obs.encoder import OBS_DIM
 from fishrl.obs import vocab as V
 from fishrl.spaces import action_space as A
 from fishrl.train.inference import (InferenceServer, InferenceTimeout, ServedActor,
-                                    ServedGuesser, _Client, slot_bytes)
+                                    ServedGuesser, _Client, load_np_state, np_state,
+                                    slot_bytes)
 
 LITE = {"hidden": (32, 32), "actor_hidden": (32, 32), "card_dim": 16,
         "enc_actor": "entity", "enc_guesser": "flat", "device": "cpu"}
@@ -33,7 +34,9 @@ def _nets(seed: int = 0):
 
 
 def _blob(actor, guesser) -> bytes:
-    return pickle.dumps({"actor": actor.state_dict(), "guesser": guesser.state_dict()})
+    # numpy transport, same as ParallelCollector.submit -- NEVER raw state_dicts:
+    # plain-pickled torch tensors leak their storage on unpickle (torch 2.12.1)
+    return pickle.dumps({"actor": np_state(actor), "guesser": np_state(guesser)})
 
 
 def _inputs(rng, n=6):
@@ -142,6 +145,30 @@ def test_cuda_graphed_server_matches_local():
         cl.release()
     finally:
         srv.close()
+
+
+def test_weight_transport_is_numpy_only_and_roundtrips_exactly():
+    """Plain-pickled torch CPU tensors LEAK their storage on unpickle (torch
+    2.12.1; C-level, gc-immune, linear). The long-lived server accumulated one
+    blob per iteration and killed the 2026-08-05 session at 155 GB of commit —
+    and the workers' recycle cadence had been silently capping the same leak
+    for weeks. Every weight-transport surface must therefore ship numpy."""
+    from types import SimpleNamespace
+
+    from fishrl.train.pcollect import ParallelCollector, _cpu_state
+
+    actor, guesser = _nets(0)
+    member = SimpleNamespace(models=SimpleNamespace(actor=actor, guesser=guesser))
+    surfaces = [np_state(actor), _cpu_state(guesser),
+                *ParallelCollector.opp_state_for(member)]
+    for st in surfaces:
+        assert st and all(isinstance(v, np.ndarray) for v in st.values()), \
+            "torch tensor in the weight-transport format"
+    # and the pickle round trip restores weights EXACTLY
+    actor2, _ = _nets(7)
+    load_np_state(actor2, pickle.loads(pickle.dumps(np_state(actor))))
+    for k, want in actor.state_dict().items():
+        assert torch.equal(actor2.state_dict()[k], want), k
 
 
 def test_no_server_times_out_not_hangs():

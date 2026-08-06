@@ -305,6 +305,10 @@ Two modes, mutually exclusive:
 - **`--scenario-frac`** (legacy): a fixed carve-out of each iteration.
 
 `--scenario-weight NAME=W` sets a fixed prior multiplier (and `W=0` is the off switch).
+In pool mode `--scenario-boost B` (default 3.0) additionally multiplies **every** scenario
+member's weight: scenario episodes are far shorter than full games, so boosting their
+play-count share costs sub-proportional wall-clock, and `pool_frac` still caps the whole
+pool slice (mirror self-play keeps the rest). `B=1` restores the unboosted behaviour.
 
 **Scenario win-rates are a curriculum signal, never a success metric** (`config.py:90-91`). Judge
 progress on the full-game vs-heuristic eval only.

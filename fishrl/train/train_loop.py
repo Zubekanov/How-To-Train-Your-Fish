@@ -252,10 +252,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
     scen_league = None
     if cfg.scenarios_in_pool:
         from fishrl.train.scenarios import scenario_names
-        for sname in scenario_names():
-            w = float(cfg.scenario_weights.get(sname, 1.0))
-            if w > 0:
-                league.anchors.append(LeagueMember(name=sname, kind="scenario", weight=w))
+        league.add_scenarios(cfg, scenario_names())   # weight x scenario_boost
     elif cfg.scenario_frac > 0:
         from fishrl.train.scenarios import scenario_names
         scen_league = PFSPLeague.scenario_league(cfg, scenario_names())

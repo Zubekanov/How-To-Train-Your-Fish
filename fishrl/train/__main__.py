@@ -113,6 +113,10 @@ def main():
     ap.add_argument("--scenario-weight", action="append", default=[], metavar="NAME=W",
                     help="override a scenario's PFSP prior weight (repeatable); e.g. "
                          "deckout=0.5 to stop a floored scenario from soaking the pool")
+    ap.add_argument("--scenario-boost", type=float, default=Config.scenario_boost,
+                    help="scenario-pool mode: flat multiplier on every scenario member's "
+                         "PFSP weight (scenario episodes are short, so a >1 boost raises "
+                         "their game count at sub-proportional wall-clock cost; 1 = off)")
     ENC = ["flat", "entity", "attention"]
     ap.add_argument("--encoder", choices=ENC, default="flat",
                     help="base encoder for any net without a per-net override")
@@ -232,6 +236,7 @@ def main():
                   pool_frac=args.pool_frac, pfsp_mode=args.pfsp_mode,
                   league_size=args.league_size, scenario_frac=args.scenario_frac,
                   scenarios_in_pool=args.scenario_pool, scenario_weights=scen_w,
+                  scenario_boost=args.scenario_boost,
                   p1_adv_weight=args.p1_adv_weight,
                   freeze_actor_iters=args.freeze_actor_iters,
                   kl_teacher_coef=args.kl_teacher_coef,

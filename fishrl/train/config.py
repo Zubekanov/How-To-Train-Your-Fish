@@ -109,11 +109,22 @@ class Config:
     # still reported on the [scenario] line / opp_scenario, never in the league's
     # paren counts.
     scenarios_in_pool: bool = False
-    # relative sampling weights over registered scenarios (see fishrl.train.scenarios)
+    # relative sampling weights over registered scenarios (see fishrl.train.scenarios).
+    # NOTE: every registered scenario must appear here — the legacy carve-out's
+    # sample_scenario_name treats a MISSING name as weight 0 (excluded), while the
+    # pool path defaults it to 1.0; listing them all keeps the two modes agreeing.
     scenario_weights: dict = field(
         default_factory=lambda: {"known_threat": 1.0, "known_threat_random": 1.0,
                                  "board_presence": 1.0, "deckout": 1.0,
-                                 "survive_lethal": 1.0, "survive_lethal_vision": 1.0})
+                                 "survive_lethal": 1.0, "survive_lethal_vision": 1.0,
+                                 "survive_lethal_single": 1.0})
+    # scenarios_in_pool only: a flat multiplier on every scenario member's PFSP
+    # sampling weight (composes with the per-scenario scenario_weights prior).
+    # Scenario episodes are far shorter than full games (~1/4 the decisions), so
+    # boosting their PLAY-COUNT share costs sub-proportional wall-clock — and the
+    # pool_frac cap still bounds the whole pool slice, mirror self-play keeps the
+    # rest. 1.0 restores the old behaviour.
+    scenario_boost: float = 3.0
 
     # PPO
     clip: float = 0.2

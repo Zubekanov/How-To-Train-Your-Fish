@@ -490,3 +490,37 @@ def test_sample_scenario_name_respects_weights():
     assert set(scenario_names()) == {"known_threat", "known_threat_random",
                                      "board_presence", "deckout", "survive_lethal",
                                      "survive_lethal_vision", "survive_lethal_single"}
+
+
+def test_config_default_weights_cover_every_registered_scenario():
+    # The legacy carve-out's sample_scenario_name treats a MISSING name as weight 0
+    # (excluded) while the pool path defaults it to 1.0 -- the default dict listing
+    # every registered scenario is what keeps the two modes agreeing.
+    from fishrl.train.config import Config
+    assert set(Config().scenario_weights) == set(scenario_names())
+
+
+def test_scenario_boost_multiplies_pool_member_weights():
+    # scenarios_in_pool: member weight = per-scenario prior x scenario_boost, so the
+    # short scenario episodes get a larger PLAY-COUNT share of the pool_frac budget.
+    from fishrl.train.config import Config
+    from fishrl.train.pfsp import PFSPLeague
+
+    cfg = Config(scenario_boost=4.0,
+                 scenario_weights={"known_threat": 1.0, "deckout": 0.5,
+                                   "board_presence": 0.0})
+    league = PFSPLeague.from_config(cfg)
+    n_anchors = len(league.anchors)
+    league.add_scenarios(cfg, ["known_threat", "deckout", "board_presence", "extra"])
+    by = {m.name: m for m in league.anchors[n_anchors:]}
+    assert set(by) == {"known_threat", "deckout", "extra"}   # weight 0 -> not a member
+    assert by["known_threat"].weight == 4.0                  # 1.0 x boost
+    assert by["deckout"].weight == 2.0                       # 0.5 x boost
+    assert by["extra"].weight == 4.0                         # unlisted -> 1.0 x boost
+    assert all(m.kind == "scenario" for m in by.values())
+    # boost 1.0 reproduces the raw priors (the old behaviour)
+    league1 = PFSPLeague.from_config(cfg)
+    league1.add_scenarios(Config(scenario_boost=1.0,
+                                 scenario_weights={"known_threat": 1.0}),
+                          ["known_threat"])
+    assert league1.anchors[-1].weight == 1.0

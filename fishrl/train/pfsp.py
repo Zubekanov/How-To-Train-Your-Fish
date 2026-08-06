@@ -115,6 +115,20 @@ class PFSPLeague:
         return cls(mode=cfg.pfsp_mode, p=cfg.pfsp_p, eps=cfg.pfsp_eps,
                    wr_ema=cfg.pfsp_wr_ema, anchors=anchors, selves=deque(maxlen=0))
 
+    def add_scenarios(self, cfg, names) -> None:
+        """scenarios_in_pool mode: append each positively-weighted scenario as a
+        member of THIS (main) league, competing with anchors/past-selves for the
+        pool_frac budget. weight = the per-scenario scenario_weights prior x
+        cfg.scenario_boost — scenario episodes are far shorter than full games,
+        so a >1 boost raises their play-count share at sub-proportional
+        wall-clock cost (pool_frac still caps the whole pool slice)."""
+        boost = float(getattr(cfg, "scenario_boost", 1.0))
+        for name in names:
+            w = float(cfg.scenario_weights.get(name, 1.0))
+            if w > 0:
+                self.anchors.append(LeagueMember(name=name, kind="scenario",
+                                                 weight=w * boost))
+
     def add_snapshot(self, models, it: int) -> None:
         """Append a frozen snapshot of the current learner as a past-self member
         (no-op when the ring is disabled, i.e. league_size == 0)."""

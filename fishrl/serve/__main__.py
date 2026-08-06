@@ -149,6 +149,15 @@ class Store:
                         "bytes": st.st_size, "mtime": st.st_mtime})
         return out
 
+    def best_file(self) -> dict | None:
+        """best.pt's transfer identity {file, bytes, mtime}, or None when this
+        host has no recorded best."""
+        try:
+            st = os.stat(os.path.join(self.dir, "best.pt"))
+        except OSError:
+            return None
+        return {"file": "best.pt", "bytes": st.st_size, "mtime": st.st_mtime}
+
     def since(self, kind: str, since_it) -> list:
         rows = self.rows(kind)
         if since_it is None:
@@ -353,13 +362,22 @@ class Handler(BaseHTTPRequestHandler):
                                  f"(want archive_########.pt; see /api/archives)"},
                        code=404)
             return
+        self._stream_ckpt(name, f"{name} not on this host (archives are per-host; "
+                                f"see /api/archives here and on the peer)")
+
+    def _stream_ckpt(self, name: str, missing_msg: str) -> None:
+        """Stream one checkpoint file from the ckpt dir. `name` is never user
+        input here (_send_archive full-matches it; /best.pt is fixed), so there
+        is no traversal surface. Rolling files (best.pt) are replaced
+        atomically, so the handle opened below pins a complete, self-consistent
+        file even if a new one lands mid-download -- the client re-checks
+        /api/best identity after landing it."""
         path = os.path.join(self.store.dir, name)
         try:
             size = os.path.getsize(path)
             f = open(path, "rb")
         except OSError:
-            self._json({"error": f"{name} not on this host (archives are per-host; "
-                                 f"see /api/archives here and on the peer)"}, code=404)
+            self._json({"error": missing_msg}, code=404)
             return
         with f:
             self.send_response(200)
@@ -402,6 +420,18 @@ class Handler(BaseHTTPRequestHandler):
                             "download": "/archives/<file>"})
             elif u.path.startswith("/archives/"):
                 self._send_archive(u.path[len("/archives/"):])
+            elif u.path == "/api/best":
+                # LOCAL best only, never peer-redirected (like the archives):
+                # best.pt rolls on the host that trains. The transfer identity
+                # {bytes, mtime} + best.json meta let a mirror (the website's
+                # archive collector) detect rolls without downloading.
+                self._json({"best": self.store.best_file(),
+                            "meta": _read_json(os.path.join(self.store.dir, "best.json")),
+                            "host": socket.gethostname(),
+                            "run": os.path.basename(os.path.abspath(self.store.dir)),
+                            "download": "/best.pt"})
+            elif u.path == "/best.pt":
+                self._stream_ckpt("best.pt", "no best.pt on this host")
             elif u.path in ("/api/reports", "/api/evals", "/api/ticks", "/api/stream"):
                 target = self._peer_target()
                 if target is not None:                   # live data is on the peer

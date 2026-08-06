@@ -425,3 +425,36 @@ def test_dashboard_page_served(site):
     for marker in ('id="wr"', 'id="sys"', 'id="thr"', 'id="mix"',
                    "/api/stream", "EventSource"):
         assert marker in html
+
+
+# ── best.pt exposure (website versus-picker mirror) ───────────────────────────
+
+def test_best_endpoint_and_download(site):
+    d, port = site
+    payload = _get(port, "/api/best")                    # no best yet
+    assert payload["best"] is None and payload["run"] == os.path.basename(d)
+
+    with open(os.path.join(d, "best.pt"), "wb") as f:
+        f.write(b"crowned")
+    with open(os.path.join(d, "best.json"), "w") as f:
+        json.dump({"it": 246241, "frozen_it": 246241, "heuristic": 0.55}, f)
+
+    payload = _get(port, "/api/best")
+    assert payload["best"]["file"] == "best.pt" and payload["best"]["bytes"] == 7
+    assert payload["meta"]["frozen_it"] == 246241
+    assert payload["download"] == "/best.pt"
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/best.pt", timeout=10) as r:
+        assert r.read() == b"crowned"
+
+
+def test_best_never_peer_redirected(site, monkeypatch):
+    """best.pt rolls on the host that trains; a peer redirect would hide it."""
+    import fishrl.serve.__main__ as sm
+    d, port = site
+    with open(os.path.join(d, "best.pt"), "wb") as f:
+        f.write(b"b")
+    _stamp_peer(d)
+    monkeypatch.setattr(sm, "peer_alive", lambda _u: True)
+    assert _get(port, "/api/best")["best"]["bytes"] == 1   # 200, local
+    status, _, body = _raw_get(port, "/best.pt")
+    assert status == 200 and body == b"b"

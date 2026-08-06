@@ -43,7 +43,13 @@ class SurviveLethalScenario(Scenario):
     name = "survive_lethal"
     pool_seed = 606
     engine_seat = "p2"
+    # Variant tuning knobs (subclasses override; defaults reproduce the base frame
+    # byte-identically — the rng draw order is unchanged when the hooks are unset):
+    n_dandan_min, n_dandan_max = N_DANDAN_MIN, N_DANDAN_MAX
+    hand_min, hand_max = HAND_MIN, HAND_MAX
     CURATED_CARD = None          # a subclass names a card to guarantee in the agent's grip
+    CURATED_CHOICES: tuple = ()  # ...or a set to draw ONE guaranteed card from per sample
+    FILLER_EXCLUDE: tuple = ()   # names never dealt as random filler (library-only instead)
 
     def predicate(self, env) -> bool:
         # Any clean p1 main-phase priority; the manufacture rebuilds both seats and
@@ -85,12 +91,13 @@ class SurviveLethalScenario(Scenario):
         rng.shuffle(islands); rng.shuffle(other_lands)
         rng.shuffle(dandans); rng.shuffle(nonland)
 
-        # the bot: 1–3 ready Dandâns, empty hand
-        n_dandan = min(int(rng.integers(N_DANDAN_MIN, N_DANDAN_MAX + 1)), len(dandans))
+        # the bot: ready Dandâns (1–3 in the base frame), empty hand
+        n_dandan = min(int(rng.integers(self.n_dandan_min, self.n_dandan_max + 1)),
+                       len(dandans))
         for _ in range(n_dandan):
             put_battlefield(g, "p2", dandans.pop())
         assert sum(1 for i in g.players["p2"].battlefield
-                   if g.objects[i].name == DANDAN) == n_dandan >= N_DANDAN_MIN
+                   if g.objects[i].name == DANDAN) == n_dandan >= self.n_dandan_min
 
         # both sides: at least one Island (the agent so the Dandâns can attack, the bot
         # so they aren't sacrificed), then a random mana base on top (4–10 lands each,
@@ -107,28 +114,35 @@ class SurviveLethalScenario(Scenario):
                 put_battlefield(g, seat, mana_base.pop())
             assert any(is_island(g.objects[i]) for i in g.players[seat].battlefield)
 
-        # the agent: 4 life and a 4–7 card NONLAND grip (leftover Dandâns count as
+        # the agent: 4 life and a random NONLAND grip (leftover Dandâns count as
         # nonland cards too — a possible blocker). A curated subclass guarantees one
-        # named answer (e.g. Vision Charm) in the grip; the rest of it stays random.
+        # named answer in the grip — a fixed CURATED_CARD (e.g. Vision Charm), or a
+        # per-sample rng draw from CURATED_CHOICES; the rest of the grip stays
+        # random, minus any FILLER_EXCLUDE names (those go to the library instead).
         g.players["p1"].life = P1_LIFE
         grip_pool = nonland + dandans
         rng.shuffle(grip_pool)
-        n_hand = int(rng.integers(HAND_MIN, HAND_MAX + 1))
-        hand = []
-        if self.CURATED_CARD is not None:
+        n_hand = int(rng.integers(self.hand_min, self.hand_max + 1))
+        curated = self.CURATED_CARD
+        if self.CURATED_CHOICES:
+            curated = self.CURATED_CHOICES[int(rng.integers(len(self.CURATED_CHOICES)))]
+        hand, skipped = [], []
+        if curated is not None:
             idx = next((i for i, iid in enumerate(grip_pool)
-                        if g.objects[iid].name == self.CURATED_CARD), None)
+                        if g.objects[iid].name == curated), None)
             assert idx is not None, \
-                f"survive_lethal: curated card {self.CURATED_CARD!r} not found in the deck"
+                f"survive_lethal: curated card {curated!r} not found in the deck"
             hand.append(grip_pool.pop(idx))
         while len(hand) < n_hand and grip_pool:
-            hand.append(grip_pool.pop())
+            iid = grip_pool.pop()
+            (skipped if g.objects[iid].name in self.FILLER_EXCLUDE else hand).append(iid)
         for iid in hand:
             put_hand(g, "p1", iid)
-        assert len(g.players["p1"].hand) >= HAND_MIN, "survive_lethal: short grip"
+        assert len(g.players["p1"].hand) >= self.hand_min, "survive_lethal: short grip"
 
-        # library: everything left (undealt lands + leftover grip); nothing stacked on top
-        rest = mana_base + grip_pool
+        # library: everything left (undealt lands + leftover grip + excluded filler);
+        # nothing stacked on top
+        rest = mana_base + grip_pool + skipped
         rng.shuffle(rest)
         rebuild_library(g, rest)
 
@@ -173,3 +187,41 @@ class SurviveLethalVisionScenario(SurviveLethalScenario):
         if not super().predicate(env):
             return False
         return any(env.g.objects[i].name == VISION for i in env.g.objects)
+
+
+# One-card answers to a lone Dandân, each exercising a decision surface the
+# 2026-08-07 weakness probe measured at ~0 exemplar agreement (memory:
+# weakness-probe-v13): Mind Bend / Crystal Spray answer through
+# `choose_text_change` (rewrite "Island" out of the attack clause — the deck's
+# removal-by-text line the agent never finds), Metamorphose through targeting
+# (library-top bounce; its put-onto-battlefield rider is dead against this
+# bot's EMPTY hand, so here it is clean removal).
+ANSWERS = ("Metamorphose", "Mind Bend", "Crystal Spray")
+
+
+class SurviveLethalSingleScenario(SurviveLethalScenario):
+    """survive_lethal narrowed to a SINGLE Dandân and a single guaranteed answer.
+
+    The bot has exactly ONE Dandân; the agent's grip is one rng-chosen card from
+    ``ANSWERS`` plus 0–6 random nonland cards — with Vision Charm excluded from
+    the random filler, so the land-mode dodge the `_vision` variant trains can't
+    substitute for the targeted-answer line this one measures. Life stays at 4:
+    the single Dandân is exactly lethal, and the win condition (survive the bot's
+    turn) is unchanged. Against `survive_lethal` (can the agent answer with a
+    random grip?) and `_vision` (does it find the known clean dodge?), this asks:
+    does it find and correctly APPLY the deck's actual removal — the text-change
+    choice or the bounce — when one is guaranteed to be in hand?"""
+    name = "survive_lethal_single"
+    pool_seed = 717
+    n_dandan_min = n_dandan_max = 1
+    hand_min, hand_max = 1, 7            # the answer + 0–6 random cards
+    CURATED_CHOICES = ANSWERS
+    FILLER_EXCLUDE = (VISION,)
+
+    def predicate(self, env) -> bool:
+        # the base frame, plus every candidate answer present to deal (the
+        # per-sample rng may pick any of them)
+        if not super().predicate(env):
+            return False
+        names = {env.g.objects[i].name for i in env.g.objects}
+        return all(a in names for a in ANSWERS)

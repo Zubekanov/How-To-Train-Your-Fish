@@ -290,8 +290,11 @@ policy is — it only changes which states the agent practises. `ScenarioEnv` ov
 sample a deep-copied legal start state and `_terminal_override` to return an early verdict
 (`scenarios/env.py:17-45`). The verdict is cached and **wins over** the engine result.
 
-Six are registered: `known_threat`, `known_threat_random`, `board_presence`, `deckout`,
-`survive_lethal`, `survive_lethal_vision`. All run the engine bot on p2 at profile
+Seven are registered: `known_threat`, `known_threat_random`, `board_presence`, `deckout`,
+`survive_lethal`, `survive_lethal_vision`, `survive_lethal_single` (one Dandân, one
+guaranteed answer from Metamorphose/Mind Bend/Crystal Spray, Vision Charm excluded from
+the filler — targets the text-change/removal surfaces the 2026-08-07 weakness probe
+measured at ~0 exemplar agreement). All run the engine bot on p2 at profile
 `heuristic_1_3` (the current testbench mainline; v1.2 until 2026-08-06, v1.0 before
 2026-07-10 — `scenario_wr` steps down at each upgrade).
 

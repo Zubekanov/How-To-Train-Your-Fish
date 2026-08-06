@@ -16,8 +16,9 @@ from fishrl.train.scenarios.board_presence import BoardPresenceScenario, _creatu
 from fishrl.train.scenarios.deckout import DeckoutScenario
 from fishrl.train.scenarios.known_threat import (THREAT, TOOL, KnownThreatScenario,
                                                  KnownThreatRandomScenario)
-from fishrl.train.scenarios.survive_lethal import (DANDAN, P1_LIFE, VISION,
+from fishrl.train.scenarios.survive_lethal import (ANSWERS, DANDAN, P1_LIFE, VISION,
                                                    SurviveLethalScenario,
+                                                   SurviveLethalSingleScenario,
                                                    SurviveLethalVisionScenario)
 
 
@@ -59,6 +60,7 @@ def test_base_env_terminal_override_is_none_and_winner_matches():
 # ── pools build from real play and every state satisfies the predicate ───────
 @pytest.mark.parametrize("scn_cls", [BoardPresenceScenario, DeckoutScenario,
                                      SurviveLethalScenario, SurviveLethalVisionScenario,
+                                     SurviveLethalSingleScenario,
                                      KnownThreatScenario, KnownThreatRandomScenario])
 def test_pool_builds_and_states_match_predicate(scn_cls):
     scn = _small(scn_cls)
@@ -333,6 +335,36 @@ def test_survive_lethal_vision_grip_holds_the_answer():
         assert any("Island" in (g.objects[i].type_line or "") for i in g.players["p1"].battlefield)
 
 
+def test_survive_lethal_single_one_dandan_and_one_guaranteed_answer():
+    from fishrl.forgetful_fish import engine as E
+    scn = _small(SurviveLethalSingleScenario)
+    seen = set()
+    for s in range(12):
+        env = ScenarioEnv(scn, max_decisions=800)
+        env.reset(seed=s)
+        g = env.g
+        # exactly ONE Dandân, and its swing is live (agent at exactly-lethal life)
+        assert len(_dandans(g, "p2")) == 1
+        assert g.players["p1"].life == P1_LIFE
+        assert E._eligible_attackers(g, "p2")
+        # the grip: 1-7 nonland cards, at least one of the curated answers, and
+        # NEVER the Vision Charm dodge (excluded from the random filler)
+        hand_names = [g.objects[i].name for i in g.players["p1"].hand]
+        assert 1 <= len(hand_names) <= 7
+        held = [a for a in ANSWERS if a in hand_names]
+        assert held, f"no curated answer in {hand_names}"
+        seen.update(held)
+        assert VISION not in hand_names
+        assert all("Land" not in (g.objects[i].type_line or "") for i in g.players["p1"].hand)
+        # every answer is castable off the agent's board (max cost {2}{U})
+        assert len([i for i in g.players["p1"].battlefield
+                    if "Land" in (g.objects[i].type_line or "")]) >= 3
+        # nothing dropped by the filler-exclusion path
+        assert _accounted(g) == len(g.objects)
+    # across a dozen seeds the rng draw exercises the whole answer set
+    assert seen == set(ANSWERS), seen
+
+
 def _drive_vision_answer(env, max_steps=800):
     """Scripted success line for survive_lethal_vision: cast the held Vision Charm in
     its LAND mode (PLAY_HAND_ALT), pay {U} by tapping a land, choose Island -> Plains
@@ -410,7 +442,8 @@ def test_scenario_reset_is_deterministic():
 
 # ── manufactured states carry no stale per-card state ────────────────────────
 @pytest.mark.parametrize("scn_cls", [KnownThreatScenario, BoardPresenceScenario,
-                                     DeckoutScenario, SurviveLethalScenario])
+                                     DeckoutScenario, SurviveLethalScenario,
+                                     SurviveLethalSingleScenario])
 def test_manufactured_states_are_scrubbed(scn_cls):
     scn = _small(scn_cls)
     env = ScenarioEnv(scn, max_decisions=800)
@@ -456,4 +489,4 @@ def test_sample_scenario_name_respects_weights():
     assert picks == {"known_threat"}
     assert set(scenario_names()) == {"known_threat", "known_threat_random",
                                      "board_presence", "deckout", "survive_lethal",
-                                     "survive_lethal_vision"}
+                                     "survive_lethal_vision", "survive_lethal_single"}

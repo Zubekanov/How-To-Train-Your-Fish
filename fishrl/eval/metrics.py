@@ -210,6 +210,9 @@ def panel_winrates(models, frozen=None, n_games=30, max_decisions=2000,
         "heuristic12": winrate_vs_heuristic(models, n_games=n_games, seed=960_000,
                                             max_decisions=max_decisions, use_belief=use_belief,
                                             profile="heuristic_1_2"),
+        "heuristic13": winrate_vs_heuristic(models, n_games=n_games, seed=970_000,
+                                            max_decisions=max_decisions, use_belief=use_belief,
+                                            profile="heuristic_1_3"),
     }
     if frozen is not None:
         out["frozen"] = winrate_vs_frozen(models, frozen, n_games=n_games, seed=500_000,

@@ -43,6 +43,9 @@ def teacher_module(profile: str):
     if profile == "heuristic_1_2":
         from fishrl.forgetful_fish import ai_v1_2
         return ai_v1_2
+    if profile == "heuristic_1_3":
+        from fishrl.forgetful_fish import ai_v1_3
+        return ai_v1_3
     from fishrl.forgetful_fish import ai
     return ai
 

@@ -34,9 +34,10 @@ import numpy as np
 # Scripted anchors the league can include (the engine heuristics are driven
 # separately via the sandbox path, but are first-class league members here).
 # "heuristic" is v1.0 — the run's long-standing opponent/eval anchor;
-# "heuristic_1_1" (frozen at release) and "heuristic_1_2" (current testbench)
-# are pool opponents ONLY.
-SCRIPTED_KINDS = ("random", "attacker", "heuristic", "heuristic_1_1", "heuristic_1_2")
+# "heuristic_1_1"/"heuristic_1_2" (frozen at their releases) and
+# "heuristic_1_3" (current testbench mainline) are pool opponents ONLY.
+SCRIPTED_KINDS = ("random", "attacker", "heuristic", "heuristic_1_1", "heuristic_1_2",
+                  "heuristic_1_3")
 
 
 @dataclass

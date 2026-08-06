@@ -61,6 +61,7 @@ _STATUS_WR = re.compile(
     r"attacker=(?P<att>[-\d.naif]+)\s+heuristic=(?P<heu>[-\d.naif]+)\s+"
     r"(?:heuristic11=(?P<heu11>[-\d.naif]+)\s+)?"      # newer inline panels only
     r"(?:heuristic12=(?P<heu12>[-\d.naif]+)\s+)?"
+    r"(?:heuristic13=(?P<heu13>[-\d.naif]+)\s+)?"
     r"\(n=(?P<n>\d+),\s+eval\s+(?P<es>[\d.]+)s\)")
 
 # Opponent-mix tail of a `[status ...]` line: `... gmae=0.18 | opp trained=0.92 | ...`. Newer
@@ -75,11 +76,13 @@ _LEAGUE = re.compile(
     r"\[league\s+it=(?P<it>\d+)\]\s+games=(?P<games>\d+)\s+trained=[\d.]+\s+"
     r"\(self=(?P<self>\d+)\s+past=(?P<past>\d+)\s+heuristic=(?P<heu>\d+)\s+"
     r"attacker=(?P<att>\d+)\s+random=(?P<rand>\d+)\)"
-    # July 2026: heuristic v1.1 joins the pool, then v1.2. Their counts ride after
-    # the paren block (`h11=N h12=N`) so the strict 5-token sequence stays stable;
-    # on those lines the paren `heuristic=` count is the MERGED all-versions total.
+    # July 2026: heuristic v1.1 joins the pool, then v1.2, then v1.3 (Aug 2026).
+    # Their counts ride after the paren block (`h11=N h12=N h13=N`) so the strict
+    # 5-token sequence stays stable; on those lines the paren `heuristic=` count
+    # is the MERGED all-versions total.
     r"(?:\s+h11=(?P<h11>\d+))?"
-    r"(?:\s+h12=(?P<h12>\d+))?")
+    r"(?:\s+h12=(?P<h12>\d+))?"
+    r"(?:\s+h13=(?P<h13>\d+))?")
 
 # Scenario-curriculum games this window, in either era's format:
 #   new: `[scenario it=9358] games=37 (survive_lethal=20 ...) | wr ...`
@@ -95,7 +98,8 @@ _EVAL = re.compile(
     r"took=(?P<took>[\d.]+)s\]\s+WR\s+frozen@(?P<fat>\d+)=(?P<frozen>[-\d.naif]+)\s+"
     r"random=(?P<rand>[-\d.naif]+)\s+attacker=(?P<att>[-\d.naif]+)\s+heuristic=(?P<heu>[-\d.naif]+)"
     r"(?:\s+heuristic11=(?P<heu11>[-\d.naif]+))?"      # newer panels only
-    r"(?:\s+heuristic12=(?P<heu12>[-\d.naif]+))?")
+    r"(?:\s+heuristic12=(?P<heu12>[-\d.naif]+))?"
+    r"(?:\s+heuristic13=(?P<heu13>[-\d.naif]+))?")
 
 
 def _f(s):
@@ -153,19 +157,21 @@ def parse_league(lines, scenarios=None) -> dict:
         it = int(m.group("it"))
         scen = scenarios.get(it)
         grand = (int(m.group("games")) + (scen or 0)) or 1
-        # Pre-split lines carry no h11/h12 token: the whole heuristic count is v1.0
-        # (later versions did not exist) and opp_heuristic11/12 stay None, matching
-        # the live writer's schema. With the tokens, the paren count is the merged
-        # all-versions total - subtract them out to recover v1.0.
+        # Pre-split lines carry no h11/h12/h13 token: the whole heuristic count is
+        # v1.0 (later versions did not exist) and opp_heuristic11/12/13 stay None,
+        # matching the live writer's schema. With the tokens, the paren count is
+        # the merged all-versions total - subtract them out to recover v1.0.
         h11 = int(m.group("h11")) if m.group("h11") is not None else None
         h12 = int(m.group("h12")) if m.group("h12") is not None else None
+        h13 = int(m.group("h13")) if m.group("h13") is not None else None
         out[it] = {
             "opp_trained": (int(m.group("self")) + int(m.group("past"))) / grand,
             "opp_self": int(m.group("self")) / grand,
             "opp_past": int(m.group("past")) / grand,
-            "opp_heuristic": (int(m.group("heu")) - (h11 or 0) - (h12 or 0)) / grand,
+            "opp_heuristic": (int(m.group("heu")) - (h11 or 0) - (h12 or 0) - (h13 or 0)) / grand,
             "opp_heuristic11": h11 / grand if h11 is not None else None,
             "opp_heuristic12": h12 / grand if h12 is not None else None,
+            "opp_heuristic13": h13 / grand if h13 is not None else None,
             "opp_attacker": int(m.group("att")) / grand,
             "opp_random": int(m.group("rand")) / grand,
             "opp_scenario": scen / grand if scen is not None else None,
@@ -226,6 +232,7 @@ def parse_status(lines, league=None) -> tuple:
                 "random": _f(w.group("rand")), "attacker": _f(w.group("att")),
                 "heuristic": _f(w.group("heu")), "heuristic11": _f(w.group("heu11")),
                 "heuristic12": _f(w.group("heu12")),
+                "heuristic13": _f(w.group("heu13")),
                 "new_best": False,
                 "source": "journald-inline",
             })
@@ -246,6 +253,7 @@ def parse_evals(lines) -> list:
             "attacker": _f(m.group("att")), "heuristic": _f(m.group("heu")),
             "heuristic11": _f(m.group("heu11")),
             "heuristic12": _f(m.group("heu12")),
+            "heuristic13": _f(m.group("heu13")),
             "new_best": "NEW BEST" in line, "source": "journald",
         })
     return recs

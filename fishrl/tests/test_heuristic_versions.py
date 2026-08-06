@@ -1,21 +1,22 @@
 """Heuristic versions behind separate engine profiles: "heuristic" (v1.0 —
 the run's long-standing opponent, eval anchor, scenario bot), "heuristic_1_1"
-(the testbench line frozen at its original release) and "heuristic_1_2" (the
-current testbench line) — the latter two PFSP pool opponents only. The dispatch
-must route each profile to its own module, and every versioned bot must play
-clean full games under THIS repo's engine."""
+and "heuristic_1_2" (testbench lines frozen at their releases) and
+"heuristic_1_3" (the current testbench mainline) — the versioned ones PFSP
+pool opponents only. The dispatch must route each profile to its own module,
+and every versioned bot must play clean full games under THIS repo's engine."""
 from __future__ import annotations
 
 import numpy as np
 
-from fishrl.forgetful_fish import ai, ai_v1_1, ai_v1_2
+from fishrl.forgetful_fish import ai, ai_v1_1, ai_v1_2, ai_v1_3
 from fishrl.forgetful_fish import engine as E
 from fishrl.forgetful_fish.cards import load_decklist
 from fishrl.opponents.heuristic import HeuristicMatch
 from fishrl.train.config import Config
 from fishrl.train.pfsp import PFSPLeague
 
-VERSIONED = {"heuristic_1_1": ai_v1_1, "heuristic_1_2": ai_v1_2}
+VERSIONED = {"heuristic_1_1": ai_v1_1, "heuristic_1_2": ai_v1_2,
+             "heuristic_1_3": ai_v1_3}
 
 
 def test_engine_dispatch_routes_profiles_to_modules():
@@ -69,12 +70,13 @@ def test_league_includes_all_heuristics_and_pool_routes_them():
     cfg = Config()
     league = PFSPLeague.from_config(cfg)
     kinds = {m.kind for m in league.members()}
-    assert {"random", "attacker", "heuristic", "heuristic_1_1", "heuristic_1_2"} <= kinds
+    assert {"random", "attacker", "heuristic", "heuristic_1_1", "heuristic_1_2",
+            "heuristic_1_3"} <= kinds
     # engine-driven kinds must NOT go through collect_vs_opponent
     import pytest
     from fishrl.train.collector import collect_vs_opponent
     from fishrl.train.pfsp import LeagueMember
-    for kind in ("heuristic", "heuristic_1_1", "heuristic_1_2"):
+    for kind in ("heuristic", "heuristic_1_1", "heuristic_1_2", "heuristic_1_3"):
         with pytest.raises(ValueError):
             collect_vs_opponent(None, LeagueMember(name=kind, kind=kind), 1, 0)
 
@@ -92,5 +94,5 @@ def test_league_checkpoint_restore_matches_by_name_across_new_anchor():
     new.load_state_dict(state)
     by = {m.name: m for m in new.anchors}
     assert by["heuristic"].games == 1 and by["heuristic"].wr < 0.5
-    for fresh in ("heuristic_1_1", "heuristic_1_2"):
+    for fresh in ("heuristic_1_1", "heuristic_1_2", "heuristic_1_3"):
         assert by[fresh].games == 0 and by[fresh].wr == 0.5

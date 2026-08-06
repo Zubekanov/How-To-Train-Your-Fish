@@ -67,6 +67,7 @@ svg text{font-family:inherit;font-size:11px;fill:var(--dim)}
 <script>
 "use strict";
 const WR = {heuristic:"#4fc3f7", heuristic11:"#b39ddb", heuristic12:"#f8bbd0",
+            heuristic13:"#ce93d8",
             random:"#9ccc65", attacker:"#ffb74d", frozen:"#e57373",
             // self-play seat balance (from --seat-diag-games): a LEARNED asymmetry if
             // it strays from 0.5. Same 0-1 / 0.5-reference axis as the win-rates.
@@ -75,6 +76,7 @@ const SYS = {cpu:"#4fc3f7", gpu:"#9ccc65", ram:"#b39ddb"};   // utilization % pe
 const SYS_SMOOTH = 250;   // system-panel running-mean window (ticks span ~2000 it)
 const MIX = {opp_self:"#4fc3f7", opp_past:"#b39ddb", opp_heuristic:"#e57373",
              opp_heuristic11:"#ef9a9a", opp_heuristic12:"#f8bbd0",
+             opp_heuristic13:"#ce93d8",
              opp_attacker:"#ffb74d", opp_random:"#9ccc65",
              opp_scenario:"#80cbc4"};
 const WR_SMOOTH = 5000;   // win-rate running-mean window, in iterations

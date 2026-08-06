@@ -95,7 +95,7 @@ def test_maybe_save_best_keeps_the_highest_heuristic(tmp_path):
 
 
 TARGETS = {"heuristic": 100, "heuristic11": 100, "heuristic12": 100,
-           "attacker": 50, "random": 30}
+           "heuristic13": 100, "attacker": 50, "random": 30}
 
 
 def test_plan_topup_adds_harvest_on_top_of_a_full_panel():
@@ -109,6 +109,7 @@ def test_plan_topup_adds_harvest_on_top_of_a_full_panel():
     assert p["random"] == (30, 30, 31)               # still topped up: pool starves it
     assert p["heuristic11"] == (100, 0, 0)           # nothing harvested -> full panel
     assert p["heuristic12"] == (100, 11, 126)        # over-target harvest is kept, not dropped
+    assert p["heuristic13"] == (100, 0, 0)           # new anchor, nothing harvested yet
 
 
 def test_plan_topup_attacker_rounds_odd_target_up_to_even():

@@ -195,7 +195,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
     # self-play + frozen past-selves -- vs the scripted/engine bots (random/attacker/
     # heuristic). Reset each report alongside win_iters.
     OPP_CATS = ("self", "pastself", "heuristic", "heuristic_1_1", "heuristic_1_2",
-                "attacker", "random")
+                "heuristic_1_3", "attacker", "random")
     opp_mix = {k: 0 for k in OPP_CATS}
     # Harvested anchor win-rates: [wins, games] vs each SCRIPTED anchor this window,
     # from the pool games training plays anyway. Counted under the EVAL convention
@@ -203,7 +203,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
     # strictly decided for the learner -- so the eval service can pool these with its
     # own top-up games into one estimate. Distinct from league.update (EMA,
     # decided-only) and from opp_mix (game counts, no outcomes).
-    AWIN_KINDS = ("heuristic", "heuristic_1_1", "heuristic_1_2", "attacker", "random")
+    AWIN_KINDS = ("heuristic", "heuristic_1_1", "heuristic_1_2", "heuristic_1_3",
+                  "attacker", "random")
     awin = {k: [0, 0] for k in AWIN_KINDS}
     # Near-live per-iteration ticks (fishrl.serve's SSE feed; reports stay the hourly
     # durable record). Buffered in memory, flushed to ticks.json at most every
@@ -322,6 +323,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
             f"random={wr['random']:.2f} attacker={wr['attacker']:.2f} "
             f"heuristic={wr['heuristic']:.2f} heuristic11={wr.get('heuristic11', float('nan')):.2f} "
             f"heuristic12={wr.get('heuristic12', float('nan')):.2f} "
+            f"heuristic13={wr.get('heuristic13', float('nan')):.2f} "
             f"(n={cfg.report_winrate_games}, eval {eval_s:.1f}s)"
             if wr is not None else " | WR via eval timer"
         )
@@ -412,6 +414,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 "opp_heuristic": opp_mix["heuristic"] / grand_total,        # v1.0 only
                 "opp_heuristic11": opp_mix["heuristic_1_1"] / grand_total,  # v1.1 (frozen)
                 "opp_heuristic12": opp_mix["heuristic_1_2"] / grand_total,  # testbench v1.2
+                "opp_heuristic13": opp_mix["heuristic_1_3"] / grand_total,  # testbench v1.3
                 "opp_attacker": opp_mix["attacker"] / grand_total,
                 "opp_random": opp_mix["random"] / grand_total,
                 "opp_scenario": scen_total / grand_total,
@@ -422,7 +425,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 "scenario_wr": {mm.name: mm.wr for mm in scen_members},
                 # Same for the scripted league anchors, keyed by profile name —
                 # mirrors the [league] line's wr table. Matters most for the
-                # versioned heuristics (heuristic_1_1 / heuristic_1_2), which have
+                # versioned heuristics (heuristic_1_1/_1_2/_1_3), which have
                 # no eval anchor, so this EMA is their only win-rate signal.
                 # Members that never played stay out (their 0.5 prior isn't data).
                 "league_wr": {mm.name: mm.wr for mm in league.anchors
@@ -433,6 +436,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 "wr_train": {"heuristic": list(awin["heuristic"]),
                              "heuristic11": list(awin["heuristic_1_1"]),
                              "heuristic12": list(awin["heuristic_1_2"]),
+                             "heuristic13": list(awin["heuristic_1_3"]),
                              "attacker": list(awin["attacker"]),
                              "random": list(awin["random"])},
                 "source": "live",
@@ -448,23 +452,25 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     "attacker": wr["attacker"], "heuristic": wr["heuristic"],
                     "heuristic11": wr.get("heuristic11"),
                     "heuristic12": wr.get("heuristic12"),
+                    "heuristic13": wr.get("heuristic13"),
                     "new_best": False, "source": "inline",
                 })
         if cfg.pool_frac > 0 and league.members():        # PFSP composition + win-rate table
             # The paren-count format is parsed by the website collector and by
             # backfill_stats with a STRICT 5-token sequence, so `heuristic=` prints the
-            # MERGED v1.0+v1.1+v1.2 count to keep the format stable. The per-version
-            # split rides AFTER the closing paren as `h11=`/`h12=` tokens (strict
-            # parsers stop at the paren and ignore them; split-aware ones subtract them
-            # out), and also lives in stats.json (opp_heuristic / opp_heuristic11 /
-            # opp_heuristic12) and the wr table after the bar, which names each
-            # versioned profile separately.
+            # MERGED v1.0+v1.1+v1.2+v1.3 count to keep the format stable. The
+            # per-version split rides AFTER the closing paren as `h11=`/`h12=`/`h13=`
+            # tokens (strict parsers stop at the paren and ignore them; split-aware
+            # ones subtract them out), and also lives in stats.json (opp_heuristic /
+            # opp_heuristic11 / opp_heuristic12 / opp_heuristic13) and the wr table
+            # after the bar, which names each versioned profile separately.
             log(f"[league it={done}] games={mix_total} trained={trained_frac:.2f} "
                 f"(self={opp_mix['self']} past={opp_mix['pastself']} "
-                f"heuristic={opp_mix['heuristic'] + opp_mix['heuristic_1_1'] + opp_mix['heuristic_1_2']} "
+                f"heuristic={opp_mix['heuristic'] + opp_mix['heuristic_1_1'] + opp_mix['heuristic_1_2'] + opp_mix['heuristic_1_3']} "
                 f"attacker={opp_mix['attacker']} "
                 f"random={opp_mix['random']}) "
-                f"h11={opp_mix['heuristic_1_1']} h12={opp_mix['heuristic_1_2']} | "
+                f"h11={opp_mix['heuristic_1_1']} h12={opp_mix['heuristic_1_2']} "
+                f"h13={opp_mix['heuristic_1_3']} | "
                 f"{league.summary(exclude_kinds=('scenario',))}")
         # Per-scenario games this window + the PFSP win-rate driving selection
         # (scen_members computed above, before the stats.json report). Every

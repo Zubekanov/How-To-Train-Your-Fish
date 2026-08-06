@@ -146,6 +146,7 @@ def _chunks(n: int, k: int) -> list:
 SEED_RANDOM, SEED_ATTACKER, SEED_HEURISTIC = 800_000, 700_000, 900_000
 SEED_HEURISTIC11 = 950_000
 SEED_HEURISTIC12 = 960_000
+SEED_HEURISTIC13 = 970_000
 SEED_FROZEN_A, SEED_FROZEN_B = 500_000, 510_000
 SEED_SEAT_DIAG = 100  # matches metrics.selfplay_seat_diagnostics default seed band
 
@@ -153,7 +154,8 @@ SEED_SEAT_DIAG = 100  # matches metrics.selfplay_seat_diagnostics default seed b
 # report rows' "wr_train": anchor -> [wins, games], eval convention). Frozen-self
 # is NOT harvestable: the league's past-selves are assorted ring members, not the
 # last-report snapshot this panel matches against.
-HARVEST_ANCHORS = ("heuristic", "heuristic11", "heuristic12", "attacker", "random")
+HARVEST_ANCHORS = ("heuristic", "heuristic11", "heuristic12", "heuristic13",
+                   "attacker", "random")
 
 
 def plan_topup(targets: dict, harvest: dict | None) -> dict:
@@ -260,7 +262,7 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
     """Compute win-rates vs random / attacker / heuristic / frozen-self from a checkpoint,
     fanning the games across a process pool. Returns the rates plus eval metadata.
 
-    `n_games` is the heuristic/heuristic11/heuristic12 target; `n_random`/`n_attacker`/`n_frozen`
+    `n_games` is the versioned-heuristic (v1.0/1.1/1.2/1.3) target; `n_random`/`n_attacker`/`n_frozen`
     default to it (tiered targets: random saturates early, frozen is the most
     expensive anchor). The panel always plays the full target per anchor; with
     `harvest` (summed ``wr_train`` from the report windows since the last eval) those
@@ -284,6 +286,7 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
     workers = max_workers or max(1, min(6, (os.cpu_count() or 2) - reserve_cores))
 
     targets = {"heuristic": n_games, "heuristic11": n_games, "heuristic12": n_games,
+               "heuristic13": n_games,
                "attacker": n_attacker if n_attacker is not None else n_games,
                "random": n_random if n_random is not None else n_games}
     plan = plan_topup(targets, harvest)
@@ -311,6 +314,8 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
                             for s, c in _chunks(plan["heuristic11"][0], workers)],
             "heuristic12": [ex.submit(_task_heuristic, s, c, SEED_HEURISTIC12, "heuristic_1_2")
                             for s, c in _chunks(plan["heuristic12"][0], workers)],
+            "heuristic13": [ex.submit(_task_heuristic, s, c, SEED_HEURISTIC13, "heuristic_1_3")
+                            for s, c in _chunks(plan["heuristic13"][0], workers)],
             "frozen_a": [ex.submit(_task_match, True, c, SEED_FROZEN_A + s) for s, c in fch],
             "frozen_b": [ex.submit(_task_match, False, c, SEED_FROZEN_B + s) for s, c in fch],
         }
@@ -340,6 +345,7 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
         "heuristic": combined["heuristic"],
         "heuristic11": combined["heuristic11"],   # versioned yardsticks; best.pt
         "heuristic12": combined["heuristic12"],   # stays keyed on v1.0
+        "heuristic13": combined["heuristic13"],
         "frozen": (mw / dec) if dec else 0.5,
         "n": n_games, "workers": workers,
         "anchor_n": anchor_n, "harvest_from": harvest_from,
@@ -406,7 +412,7 @@ def run_once(args, ckpt_path: str, allow_harvest: bool) -> None:
         "wall_time": time.time(), "n": r["n"], "workers": r["workers"], "took_s": r["took_s"],
         "frozen": r["frozen"], "random": r["random"], "attacker": r["attacker"],
         "heuristic": r["heuristic"], "heuristic11": r["heuristic11"],
-        "heuristic12": r["heuristic12"],
+        "heuristic12": r["heuristic12"], "heuristic13": r["heuristic13"],
         "anchor_n": r["anchor_n"], "harvest_from": r["harvest_from"],
         "new_best": bool(r.get("new_best")), "source": "eval",
     }
@@ -428,7 +434,8 @@ def run_once(args, ckpt_path: str, allow_harvest: bool) -> None:
         f"[eval it={r['it']} @{r['elapsed_h']:.2f}h n={r['n']} w={r['workers']} "
         f"took={r['took_s']:.1f}s] WR frozen@{r['frozen_it']}={r['frozen']:.3f} "
         f"random={r['random']:.3f} attacker={r['attacker']:.3f} heuristic={r['heuristic']:.3f} "
-        f"heuristic11={r['heuristic11']:.3f} heuristic12={r['heuristic12']:.3f}"
+        f"heuristic11={r['heuristic11']:.3f} heuristic12={r['heuristic12']:.3f} "
+        f"heuristic13={r['heuristic13']:.3f}"
         f"{seat}{best}",
         flush=True,
     )

@@ -256,7 +256,8 @@ Win-rates are tracked as an EMA over decided games (`wr_ema=0.1`, prior 0.5).
 | `attacker` | barely above random — *not* a skill test |
 | `heuristic` (v1.0) | **the eval anchor**, held fixed for run-long comparability |
 | `heuristic_1_1` | stronger testbench line — **pool only** |
-| `heuristic_1_2` | current testbench line, the only one that plays deckout — **pool only** |
+| `heuristic_1_2` | testbench line frozen at release, plays deckout — **pool only** |
+| `heuristic_1_3` | current testbench mainline (evaluator off; ~83% vs v1.0 in the testbench arena) — **pool only** |
 
 The versioning discipline matters: **only v1.0 is ever the eval anchor**, so the headline
 vs-heuristic curve remains comparable across the entire run even as better opponents enter the
@@ -612,7 +613,8 @@ win-rates from a blocking panel.**
 | `forced_dec_frac` | fraction of steps with exactly 1 legal action — decision dilution |
 
 **Opponent mix** — `opp_trained` (= self+past), `opp_self`, `opp_past`, `opp_heuristic` (v1.0
-**only**), `opp_heuristic11`, `opp_heuristic12`, `opp_attacker`, `opp_random`, `opp_scenario`.
+**only**), `opp_heuristic11`, `opp_heuristic12`, `opp_heuristic13`, `opp_attacker`, `opp_random`,
+`opp_scenario`.
 **Denominator = grand total (league + scenario games).**
 
 **Nested**
@@ -620,7 +622,7 @@ win-rates from a blocking panel.**
 - `scenario_mix` — `{name: share}`, same denominator.
 - `scenario_wr` — `{name: PFSP EMA}`. **Curriculum difficulty, not skill.**
 - `league_wr` — `{name: EMA}` for scripted anchors with games > 0. The only WR signal for
-  `heuristic_1_1`/`heuristic_1_2` in the report row.
+  `heuristic_1_1`/`heuristic_1_2`/`heuristic_1_3` in the report row.
 - `wr_train` — `{anchor: [wins, games]}` — **the harvest** (§3.4). Window-scoped, reset each report.
 
 NaN/inf are sanitized to `null`.

@@ -95,6 +95,27 @@ def test_parse_league_splits_three_heuristic_versions():
     assert abs(sum(s[k] for k in shares) - 1.0) < 1e-9
 
 
+# Aug 2026: heuristic v1.3 joins the pool — a third post-paren token (h13); the
+# paren heuristic= count is the merged v1.0+v1.1+v1.2+v1.3 total.
+_LEAGUE_H13 = (
+    "2026-08-06T15:00:00+10:00 [league it=520000] games=1600 trained=0.84 "
+    "(self=950 past=390 heuristic=205 attacker=30 random=25) h11=55 h12=40 h13=50 | "
+    "heuristic_1_3=0.03(60) heuristic_1_2=0.06(120) heuristic_1_1=0.12(420) "
+    "heuristic=0.22(3100)")
+
+
+def test_parse_league_splits_four_heuristic_versions():
+    s = parse_league([_LEAGUE_H13])[520000]
+    assert abs(s["opp_heuristic"] - 60 / 1600) < 1e-9     # merged 205 minus 55/40/50
+    assert abs(s["opp_heuristic11"] - 55 / 1600) < 1e-9
+    assert abs(s["opp_heuristic12"] - 40 / 1600) < 1e-9
+    assert abs(s["opp_heuristic13"] - 50 / 1600) < 1e-9
+    shares = ("opp_self", "opp_past", "opp_heuristic", "opp_heuristic11",
+              "opp_heuristic12", "opp_heuristic13", "opp_attacker", "opp_random")
+    assert abs(sum(s[k] for k in shares) - 1.0) < 1e-9
+    assert parse_league([_LEAGUE_H12])[74100]["opp_heuristic13"] is None  # pre-v1.3 line
+
+
 def test_parse_scenarios_both_formats():
     assert parse_scenarios([_SCENARIO_NEW]) == {12755: 304}
     assert parse_scenarios([_SCENARIO_OLD]) == {12755: 304}
@@ -207,3 +228,18 @@ def test_parse_eval_with_heuristic12():
     assert r["heuristic"] == 0.33 and r["heuristic11"] == 0.15
     assert r["heuristic12"] == 0.09
     assert parse_evals([_EVAL_H11])[0]["heuristic12"] is None   # pre-v1.2 panel line
+
+
+# Aug 2026: heuristic v1.3 measured on the same panel (own seed band, still not
+# the best.pt anchor).
+_EVAL_H13 = (
+    "2026-08-06T18:00:00+10:00 [eval it=520500 @640.0h n=100 w=6 took=45.0s] "
+    "WR frozen@520028=0.510 random=0.960 attacker=0.910 heuristic=0.350 "
+    "heuristic11=0.170 heuristic12=0.110 heuristic13=0.060")
+
+
+def test_parse_eval_with_heuristic13():
+    r = parse_evals([_EVAL_H13])[0]
+    assert r["it"] == 520500
+    assert r["heuristic12"] == 0.11 and r["heuristic13"] == 0.06
+    assert parse_evals([_EVAL_H12])[0]["heuristic13"] is None   # pre-v1.3 panel line

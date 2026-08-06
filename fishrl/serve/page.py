@@ -266,7 +266,10 @@ function header(s){
   $("iph1k").textContent = rk ? rk.rate.toFixed(1) : "—";
   $("iph1kwrap").title = rk ?
     `${rk.rate.toFixed(1)} it/h over the last ${rk.span} it on ${rk.host} (${rk.src})` : "";
-  $("best").textContent = s.best?`${s.best.heuristic.toFixed(2)}@${s.best.it}`:"—";
+  // best_score (maximin over anchors) on new best.json; legacy files only carry
+  // the old v1.0-keyed rate.
+  $("best").textContent = s.best
+    ? `${(s.best.best_score ?? s.best.heuristic).toFixed(2)}@${s.best.it}` : "—";
   // Ownership chip is relay-era: on a local-only PC run it's always "this host, active"
   // -- redundant with the header host. Show it ONLY when noteworthy (released, or owned by
   // another host), so the normal case stays uncluttered.

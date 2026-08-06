@@ -13,7 +13,8 @@ import pytest
 
 from fishrl.eval.metrics import seat_diag_rates
 from fishrl.eval.parallel_panel import (BEST, BEST_META, _even_chunks, _maybe_save_best,
-                                        find_harvest, parallel_panel, plan_topup)
+                                        best_score, find_harvest, parallel_panel,
+                                        plan_topup)
 from fishrl.train import checkpoint as ckpt
 from fishrl.train.config import Config
 from fishrl.train.train_loop import _model_state, build_models
@@ -73,25 +74,48 @@ def test_seat_diag_rates_tolerates_no_choice_decisions():
     assert r["choose_first_frac"] != r["choose_first_frac"]           # NaN, not a crash
 
 
-def test_maybe_save_best_keeps_the_highest_heuristic(tmp_path):
-    # best.pt rolls only when heuristic win-rate strictly improves; the saved payload is exactly
-    # the one evaluated (we pass distinct sentinels), and best.json tracks the winning rate.
+def test_best_score_is_the_minimum_present_anchor():
+    # The score is the LOWEST scripted-anchor wr (the hardest opponent) with its name;
+    # anchors a row doesn't carry (pre-that-heuristic panels) are skipped, not zeroed.
+    assert best_score({"random": 0.9, "attacker": 0.8, "heuristic": 0.5,
+                       "heuristic13": 0.04}) == (0.04, "heuristic13")
+    assert best_score({"heuristic": 0.5, "heuristic13": None}) == (0.5, "heuristic")
+    assert best_score({}) == (float("-inf"), "none")
+
+
+def test_maybe_save_best_keeps_the_highest_maximin(tmp_path):
+    # best.pt rolls only when the MAXIMIN anchor wr strictly improves; the saved payload
+    # is exactly the one evaluated (distinct sentinels), and best.json records the score.
     d = str(tmp_path)
     bpt, bjson = os.path.join(d, BEST), os.path.join(d, BEST_META)
 
-    assert _maybe_save_best(d, {"tag": "a"}, {"heuristic": 0.40}) is True   # seeds the best
-    assert os.path.exists(bpt) and json.load(open(bjson))["heuristic"] == 0.40
+    assert _maybe_save_best(d, {"tag": "a"}, {"heuristic": 0.40, "heuristic13": 0.10}) is True
+    meta = json.load(open(bjson))
+    assert os.path.exists(bpt) and meta["best_score"] == 0.10
+    assert meta["best_low_anchor"] == "heuristic13"
     import torch
     assert torch.load(bpt, weights_only=False)["tag"] == "a"
 
-    assert _maybe_save_best(d, {"tag": "b"}, {"heuristic": 0.30}) is False   # worse -> ignored
-    assert json.load(open(bjson))["heuristic"] == 0.40
+    # a HIGHER v1.0 wr with a lower minimum is WORSE under the maximin -> ignored
+    assert _maybe_save_best(d, {"tag": "b"}, {"heuristic": 0.60, "heuristic13": 0.05}) is False
+    assert json.load(open(bjson))["best_score"] == 0.10
     assert torch.load(bpt, weights_only=False)["tag"] == "a"                 # unchanged
 
-    assert _maybe_save_best(d, {"tag": "c"}, {"heuristic": 0.40}) is False   # tie -> not better
-    assert _maybe_save_best(d, {"tag": "d"}, {"heuristic": 0.55}) is True    # better -> rolls
-    assert json.load(open(bjson))["heuristic"] == 0.55
+    assert _maybe_save_best(d, {"tag": "c"}, {"heuristic": 0.40, "heuristic13": 0.10}) is False
+    assert _maybe_save_best(d, {"tag": "d"}, {"heuristic": 0.45, "heuristic13": 0.12}) is True
+    assert json.load(open(bjson))["best_score"] == 0.12
     assert torch.load(bpt, weights_only=False)["tag"] == "d"
+
+
+def test_maybe_save_best_supersedes_legacy_v10_keyed_meta(tmp_path):
+    # A best.json written under the old rule (keyed on heuristic v1.0, no best_score,
+    # never measured on the newer anchors) cannot compete under the maximin: the first
+    # panel after the metric change re-seeds the ratchet even with a "worse" v1.0 wr.
+    d = str(tmp_path)
+    with open(os.path.join(d, BEST_META), "w") as f:
+        json.dump({"heuristic": 0.60, "heuristic11": 0.42, "heuristic12": 0.27}, f)
+    assert _maybe_save_best(d, {"tag": "n"}, {"heuristic": 0.35, "heuristic13": 0.04}) is True
+    assert json.load(open(os.path.join(d, BEST_META)))["best_score"] == 0.04
 
 
 TARGETS = {"heuristic": 100, "heuristic11": 100, "heuristic12": 100,

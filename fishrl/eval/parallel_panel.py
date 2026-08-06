@@ -24,8 +24,14 @@ from concurrent.futures import ProcessPoolExecutor
 
 NETS = ("actor", "critic", "guesser", "public")
 
-# A rolling "best so far" checkpoint, selected by win-rate vs the heuristic anchor. best.pt is a
-# full, resume-able checkpoint (same schema as latest.pt); best.json records the winning panel.
+# A rolling "best so far" checkpoint, selected by MAXIMIN over the scripted anchors:
+# a panel's score is its LOWEST anchor win-rate (= the wr vs its hardest opponent,
+# in practice the newest testbench heuristic), and best.pt rolls when that minimum
+# strictly improves. Keying on one fixed anchor (the old rule: heuristic v1.0) let
+# "best" saturate once v1.0 was outgrown while regressions vs harder opponents went
+# unnoticed; the maximin tracks the frontier as harder anchors join the panel.
+# best.pt is a full, resume-able checkpoint (same schema as latest.pt); best.json
+# records the winning panel + its `best_score`.
 BEST, BEST_META = "best.pt", "best.json"
 
 # Per-worker globals, populated by _init in each subprocess (set once, reused across tasks).
@@ -222,15 +228,31 @@ def find_harvest(stats: dict, max_age_s: float, now: float) -> tuple:
     return total, max(int(r["it"]) for r in fresh)
 
 
+def best_score(r: dict) -> tuple:
+    """A panel's best.pt score: ``(min anchor wr, name of that anchor)`` over the
+    scripted anchors present in the row — the win-rate vs the checkpoint's HARDEST
+    opponent. Anchors absent from the row (None / missing: a panel from before that
+    heuristic existed) are skipped, not treated as 0."""
+    vals = [(float(r[k]), k) for k in HARVEST_ANCHORS if r.get(k) is not None]
+    if not vals:
+        return float("-inf"), "none"
+    return min(vals)
+
+
 def _maybe_save_best(ckpt_dir: str, payload: dict, r: dict) -> bool:
-    """If this panel's heuristic win-rate beats the stored best, persist the *evaluated* payload
-    to best.pt and record the panel in best.json. Returns True iff a new best was written.
+    """If this panel's maximin score (see best_score) beats the stored best, persist the
+    *evaluated* payload to best.pt and record the panel in best.json. Returns True iff a
+    new best was written.
 
     Saves the in-memory `payload` (the checkpoint we just evaluated) rather than re-reading
     latest.pt -- the trainer overwrites latest.pt every ~15 min and a panel takes ~90s, so a
     file copy could capture a *different* checkpoint than the one that earned this win-rate.
     best.json (atomic write) is the source of truth for the threshold; a missing/corrupt file
-    means "no best yet", so the first successful panel always seeds it."""
+    means "no best yet", so the first successful panel always seeds it. The threshold is the
+    stored `best_score`; a legacy best.json without one (written under the old rule, highest
+    wr vs heuristic v1.0, and never measured on the newer anchors) cannot compete under the
+    maximin and is superseded by the first panel after the metric change -- deliberate
+    re-seed, not an accident."""
     from fishrl.train.checkpoint import save_checkpoint
 
     meta_path = os.path.join(ckpt_dir, BEST_META)
@@ -241,13 +263,15 @@ def _maybe_save_best(ckpt_dir: str, payload: dict, r: dict) -> bool:
                 prev = json.load(f)
         except (OSError, ValueError):
             prev = None
-    if prev is not None and r["heuristic"] <= prev.get("heuristic", -1.0):
+    score, low_anchor = best_score(r)
+    if prev is not None and score <= prev.get("best_score", float("-inf")):
         return False
 
     save_checkpoint(os.path.join(ckpt_dir, BEST), payload)
     tmp = meta_path + ".tmp"
     with open(tmp, "w") as f:
-        json.dump(r, f, indent=2)
+        json.dump({**r, "best_score": score, "best_low_anchor": low_anchor,
+                   "best_metric": "maximin-scripted-anchors"}, f, indent=2)
     from fishrl.train.checkpoint import replace_with_retry
     replace_with_retry(tmp, meta_path)                # Windows: tolerate a monitor read
     return True
@@ -270,10 +294,11 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
     -- more samples, not a cheaper panel. Consumers see one number per anchor either
     way. No harvest -> plain full-target panel, the historic behaviour.
 
-    When `save_best`, also roll best.pt (highest heuristic win-rate seen) next to the
-    checkpoint; the returned dict carries `new_best` (bool). The gate reads the same
-    combined estimate (harvested forfeit games can only bias it LOW -- see train_loop's
-    wr_train comment -- so it never falsely promotes)."""
+    When `save_best`, also roll best.pt (highest MAXIMIN anchor win-rate seen -- the wr
+    vs the hardest scripted anchor, see best_score) next to the checkpoint; the returned
+    dict carries `new_best` (bool). The gate reads the same combined estimates (harvested
+    forfeit games can only bias them LOW -- see train_loop's wr_train comment -- so it
+    never falsely promotes)."""
     import torch  # noqa: F401  (ensure torch import cost is paid in the parent too)
 
     from fishrl.train.checkpoint import load_checkpoint
@@ -343,9 +368,9 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
         "random": combined["random"],
         "attacker": combined["attacker"],
         "heuristic": combined["heuristic"],
-        "heuristic11": combined["heuristic11"],   # versioned yardsticks; best.pt
-        "heuristic12": combined["heuristic12"],   # stays keyed on v1.0
-        "heuristic13": combined["heuristic13"],
+        "heuristic11": combined["heuristic11"],   # versioned yardsticks; the hardest
+        "heuristic12": combined["heuristic12"],   # of them is what best.pt's maximin
+        "heuristic13": combined["heuristic13"],   # gate keys on (best_score)
         "frozen": (mw / dec) if dec else 0.5,
         "n": n_games, "workers": workers,
         "anchor_n": anchor_n, "harvest_from": harvest_from,
@@ -426,7 +451,9 @@ def run_once(args, ckpt_path: str, allow_harvest: bool) -> None:
                                     else sd["choose_first_frac"])   # NaN -> null
         row["seat_diag_n"] = sd["decided"]
     stats_io.append_eval(args.ckpt_dir, row)
-    best = "  *** NEW BEST (heuristic) -> best.pt ***" if r.get("new_best") else ""
+    score, low = best_score(r)
+    best = (f"  *** NEW BEST (maximin {score:.3f} @{low}) -> best.pt ***"
+            if r.get("new_best") else "")
     seat = (f" | seat p1={r['seat']['seat_p1_wr']:.3f} p2={r['seat']['seat_p2_wr']:.3f} "
             f"play={r['seat']['play_wr']:.3f} draw={r['seat']['draw_wr']:.3f}"
             if "seat" in r else "")
@@ -476,7 +503,7 @@ def main() -> None:
     ap.add_argument("--reserve-cores", type=int, default=0,
                     help="keep this many CPUs free of eval workers (0 = historic behaviour)")
     ap.add_argument("--no-best", action="store_true",
-                    help="skip rolling best.pt (highest heuristic win-rate) for this run")
+                    help="skip rolling best.pt (highest maximin anchor win-rate) for this run")
     ap.add_argument("--no-harvest", action="store_true",
                     help="ignore the trainer's wr_train counts; play full targets")
     ap.add_argument("--harvest-max-age-seconds", type=float, default=7200.0,

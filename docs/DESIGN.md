@@ -662,8 +662,12 @@ makes harvested and freshly-played games poolable into one estimate.
 Anchors are seeded per-chunk, so a panel is **reproducible for a fixed checkpoint + worker count**
 — hour-over-hour deltas reflect the policy, not sampling noise.
 
-`best.pt` is ratcheted on **`heuristic` v1.0 only**. At n=100 the binomial noise is ±5%, so it is
-the best *measured* checkpoint, not a certainty.
+`best.pt` is ratcheted on the **maximin over the scripted anchors** (2026-08-07, was v1.0-only
+before): a panel's `best_score` is its *lowest* anchor win-rate — the wr vs its hardest opponent,
+in practice the newest testbench heuristic — and best.pt rolls when that minimum strictly
+improves. A legacy v1.0-keyed `best.json` (no `best_score`) is superseded by the first panel
+after the change. At n=100 the binomial noise is ±5%, so it is the best *measured* checkpoint,
+not a certainty.
 
 ### 3.4 The harvest — why win-rates are "out of more than 100"
 

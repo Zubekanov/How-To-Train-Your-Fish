@@ -190,7 +190,18 @@ def main():
     refusal = ownership.check(args.ckpt_dir)
     if refusal is not None:
         raise SystemExit(f"[owner] refusing to train: {refusal}")
-    _trainer_lock = hold_lockfile(ownership.trainer_lock_path(args.ckpt_dir))  # noqa: F841
+    # Retry briefly before refusing: is_locked() probes (the dashboard's 1 s
+    # status poll, the eval panel's --follow wait) ACQUIRE the lock for a few
+    # microseconds each -- a single attempt can land inside one and refuse with
+    # no trainer anywhere (observed 2026-08-06: launcher starts dashboard+panel
+    # first, trainer lost the race). A real trainer holds the lock CONTINUOUSLY
+    # for its whole life, so retrying cannot false-pass; it only rides out probes.
+    _trainer_lock = None                                  # noqa: F841 -- held for process life
+    for _ in range(12):
+        _trainer_lock = hold_lockfile(ownership.trainer_lock_path(args.ckpt_dir))
+        if _trainer_lock is not None:
+            break
+        time.sleep(0.25)
     if _trainer_lock is None:
         raise SystemExit(f"[owner] refusing to train: another trainer is live on "
                          f"{args.ckpt_dir} (trainer.lock is held)")

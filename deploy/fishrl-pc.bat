@@ -68,7 +68,13 @@ rem hostname resolves to a VIRTUAL host-only adapter here (192.168.56.1, Virtual
 rem Hyper-V) with nothing listening on it, while serve binds the real LAN IPv4
 rem (192.168.4.25). curl retries the other resolved addresses and succeeds; a browser
 rem stops at the first and just shows "unavailable" -- with the server running fine.
-for /f "usebackq tokens=*" %%u in (`"%PY%" -c "from fishrl.serve.__main__ import lan_ip; print(lan_ip())"`) do set "LANIP=%%u"
+rem Temp-file capture, NOT for /f: for /f re-runs its command via `cmd /c`,
+rem which strips the first+last quote of a command that STARTS with one and
+rem mangled this into 'python.exe" -c "from' -- the probe errored on every
+rem launch and LANIP silently fell back to 127.0.0.1.
+"%PY%" -c "from fishrl.serve.__main__ import lan_ip; print(lan_ip())" > "%TEMP%\fishrl_lanip.txt" 2>nul
+set /p LANIP=<"%TEMP%\fishrl_lanip.txt"
+del "%TEMP%\fishrl_lanip.txt" 2>nul
 if not defined LANIP set "LANIP=127.0.0.1"
 echo [fishrl-pc] dashboard: http://%LANIP%:8765/
 start "" "http://%LANIP%:8765/"

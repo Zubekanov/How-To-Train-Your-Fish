@@ -57,7 +57,12 @@ ping -n 4 127.0.0.1 >nul
 
 rem Open the address the dashboard ACTUALLY binds (lan_ip(), same helper serve
 rem binds with) -- see fishrl-pc.bat for why not %COMPUTERNAME%.
-for /f "usebackq tokens=*" %%u in (`"%PY%" -c "from fishrl.serve.__main__ import lan_ip; print(lan_ip())"`) do set "LANIP=%%u"
+rem Temp-file capture, NOT for /f: for /f re-runs its command via `cmd /c`,
+rem which strips the first+last quote of a command that STARTS with one (see
+rem fishrl-pc.bat) -- LANIP always fell back to 127.0.0.1.
+"%PY%" -c "from fishrl.serve.__main__ import lan_ip; print(lan_ip())" > "%TEMP%\fishrl_lanip.txt" 2>nul
+set /p LANIP=<"%TEMP%\fishrl_lanip.txt"
+del "%TEMP%\fishrl_lanip.txt" 2>nul
 if not defined LANIP set "LANIP=127.0.0.1"
 echo [fishrl-bc] dashboard: http://%LANIP%:%PORT%/
 start "" "http://%LANIP%:%PORT%/"

@@ -292,7 +292,8 @@ sample a deep-copied legal start state and `_terminal_override` to return an ear
 
 Six are registered: `known_threat`, `known_threat_random`, `board_presence`, `deckout`,
 `survive_lethal`, `survive_lethal_vision`. All run the engine bot on p2 at profile
-`heuristic_1_2`.
+`heuristic_1_3` (the current testbench mainline; v1.2 until 2026-08-06, v1.0 before
+2026-07-10 — `scenario_wr` steps down at each upgrade).
 
 Two modes, mutually exclusive:
 - **`--scenario-pool`** (current): each scenario becomes a league member competing for the

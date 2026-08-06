@@ -100,7 +100,8 @@ def make_engine_heuristic(g, seat: str, profile: str = "heuristic") -> None:
     """Hand `seat` to the engine's heuristic AI (it then auto-draws + casts, while
     the other seat stays controlled). Verified to take effect mid-game on a snapshot.
     `profile` picks the vendored AI version ("heuristic" = v1.0, "heuristic_1_1",
-    "heuristic_1_2"); an unknown name would silently mean v1.0, so validate here."""
+    "heuristic_1_2", "heuristic_1_3"); an unknown name would silently mean v1.0,
+    so validate here."""
     from fishrl.forgetful_fish.engine import _HEURISTIC_PROFILES
     if profile not in _HEURISTIC_PROFILES:
         raise ValueError(f"unknown heuristic profile {profile!r}; have {_HEURISTIC_PROFILES}")

@@ -135,7 +135,7 @@ def test_known_threat_manufacture():
     # the bot: 10 random untapped lands (any type), empty hand, no creatures, engine-driven
     assert _lands(g, "p2") == 10 and len(g.players["p2"].hand) == 0
     assert not any(E._is_creature(g.objects[i]) for i in g.players["p2"].battlefield)
-    assert g.players["p2"].is_ai and g.players["p2"].ai_profile == "heuristic_1_2"
+    assert g.players["p2"].is_ai and g.players["p2"].ai_profile == "heuristic_1_3"
     # the agent also has 10 lands (ample mana to answer)
     assert _lands(g, "p1") == 10
     # the threat on top, the agent holding its counter (curated grip)
@@ -263,7 +263,7 @@ def test_survive_lethal_manufacture():
     assert 1 <= len(nd) <= 3
     assert all(not g.objects[i].tapped and not g.objects[i].entered_this_turn for i in nd)
     assert 4 <= _lands(g, "p2") <= 10 and len(g.players["p2"].hand) == 0
-    assert g.players["p2"].is_ai and g.players["p2"].ai_profile == "heuristic_1_2"
+    assert g.players["p2"].is_ai and g.players["p2"].ai_profile == "heuristic_1_3"
     # both sides hold at least one Island: the bot so its Dandâns aren't sacrificed,
     # the agent so the Dandâns are allowed to attack it
     for seat in ("p1", "p2"):
@@ -432,9 +432,10 @@ def test_manufactured_states_are_scrubbed(scn_cls):
 # ── registry / weighted sampling ─────────────────────────────────────────────
 def test_every_scenario_seats_the_v12_heuristic():
     """Since 2026-07-10 every engine-driven scenario seat runs the CURRENT
-    testbench heuristic (v1.2, upgraded from v1.0) -- scenario_wr trends step
-    DOWN at the upgrade (stronger opponent), they don't regress. A typo'd
-    profile must raise, not silently mean v1.0 (the engine's fallback)."""
+    testbench heuristic (v1.3, upgraded from v1.2, from v1.0) -- scenario_wr
+    trends step DOWN at each upgrade (stronger opponent), they don't regress.
+    A typo'd profile must raise, not silently mean v1.0 (the engine's
+    fallback)."""
     import pytest
 
     from fishrl.train.scenarios import get_scenario, scenario_names
@@ -442,7 +443,7 @@ def test_every_scenario_seats_the_v12_heuristic():
 
     for name in scenario_names():                    # class contract; no pool build
         scn = get_scenario(name)
-        assert scn.engine_seat == "p2" and scn.engine_profile == "heuristic_1_2", name
+        assert scn.engine_seat == "p2" and scn.engine_profile == "heuristic_1_3", name
     g = _small(KnownThreatScenario).sample(np.random.default_rng(0))
     with pytest.raises(ValueError):
         make_engine_heuristic(g, "p2", "heuristic_9_9")

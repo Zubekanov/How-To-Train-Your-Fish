@@ -49,10 +49,11 @@ class Scenario:
     # Seat handed to the engine's heuristic AI after `_manufacture` (None: both
     # seats stay learner-controlled — the base self-play contract).
     engine_seat: str | None = None
-    # Which vendored heuristic drives that seat. v1.2 (the current testbench line)
-    # since 2026-07-10; earlier scenario games ran v1.0, so scenario_wr trends have
-    # a step DOWN at the upgrade (stronger opponent), not a regression in the agent.
-    engine_profile: str = "heuristic_1_2"
+    # Which vendored heuristic drives that seat. v1.3 (the current testbench
+    # mainline) since 2026-08-06; v1.2 from 2026-07-10, v1.0 before that. Each
+    # upgrade steps scenario_wr DOWN (stronger opponent), not a regression in
+    # the agent — read trends per era.
+    engine_profile: str = "heuristic_1_3"
 
     def __init__(self):
         self._pool = None

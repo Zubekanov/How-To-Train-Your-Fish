@@ -64,14 +64,19 @@ workers at startup (one-time, parallel — expect a ~30s first iteration when
 scenarios are enabled). `0` (default) is the serial path, byte-identical:
 what the ODROID service runs.
 
-Since 2026-08-07 the PC launchers run **16 workers × 16 games/iteration**
-(train.args carries `--games-per-iter 16 --minibatch 512`): both hyperthreads
-of every P-core, one worker per LP. Worker count and games-per-iter must move
-together — pcollect stripes specs statically (`specs[w::workers]`), so workers
-beyond the game count sit idle and the iteration always waits on the slowest
-chunk. The doubled minibatch keeps the PPO step count unchanged on the doubled
-batch (the update is launch-bound, so wider steps are nearly free). This trades
-the it/h reading for games/h: iterations carry 2× the games at ~1.5× the wall.
+Since 2026-08-07 the PC launchers run **16 workers × 32 games/iteration**
+(train.args carries `--games-per-iter 32 --minibatch 1024`): both hyperthreads
+of every P-core, one worker per LP, two games per stripe. Worker count and
+games-per-iter must move together — pcollect stripes specs statically
+(`specs[w::workers]`), so workers beyond the game count sit idle and the
+iteration always waits on the slowest chunk; two games per stripe smooths that
+barrier (game length varies ~6× between scenario and full games — at one game
+per worker, measured occupancy left CPU at ~42%). The 4× minibatch keeps the
+PPO step count unchanged on the 4× batch (the update is launch-bound: 16→32
+games left update_s at 361 s, byte-for-byte the 8-game figure). This trades
+the it/h reading for games/h: measured at 16 games, 22.5k games/h and 4.17M
+transitions/h vs 18.3k / 3.35M at 8 games (+23%), with approx_kl easing
+0.0117 → 0.0093 on the smoother steps.
 
 ### `--collect-affinity LP,LP,…` (+ the panel's `--affinity`)
 

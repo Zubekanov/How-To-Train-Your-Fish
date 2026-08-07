@@ -85,14 +85,16 @@ rem is declared in one place and cannot drift between launchers.
 rem
 rem Collection layout (machine flags, this box = i7-14700KF, 8P+12E / 28 LPs):
 rem 16 workers saturating BOTH hyperthreads of every P-core (LPs 0-15), paired
-rem with train.args' --games-per-iter 16 so every worker owns a game. UNIFORM
-rem workers matter: pcollect stripes specs statically (specs[w::workers]), so the
-rem iteration waits on the slowest worker -- mixing in E-cores (2.3x slower per
-rem decision) would gate every iteration. The eval panel keeps the E-cores
-rem (affinity 16-27 above); the trainer/infer-server threads float. Before
-rem 2026-08-07 this was 8 workers on one LP per P-core (0,2,..,14) at ~2300 it/h
-rem x8 games; the HT-wide layout trades it/h for games/h -- iterations are 2x
-rem the games at ~1.5x the wall, so the it/h reading dropping is expected.
+rem with train.args' --games-per-iter 32 -- TWO games per worker stripe, which
+rem smooths the straggler barrier (game length varies ~6x between scenario and
+rem full games; at one game per worker the iteration idled on the longest).
+rem UNIFORM workers matter: pcollect stripes specs statically (specs[w::workers]),
+rem so the iteration waits on the slowest worker -- mixing in E-cores (2.3x
+rem slower per decision) would gate every iteration. The eval panel keeps the
+rem E-cores (affinity 16-27 above); the trainer/infer-server threads float.
+rem Before 2026-08-07 this was 8 workers on one LP per P-core (0,2,..,14) at
+rem ~2300 it/h x8 games; the wide layout trades it/h for games/h -- iterations
+rem carry 4x the games at longer wall, so the it/h reading dropping is expected.
 set /p REGIME=<"%REPO%\deploy\train.args"
 "%PY%" -m fishrl.train --resume --iters 0 --ckpt-dir "%CKPT%" %REGIME% ^
     --report-every-seconds 900 --report-winrate-games 0 ^

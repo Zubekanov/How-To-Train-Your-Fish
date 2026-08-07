@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import multiprocessing as mp
 import os
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -468,6 +469,35 @@ def run_once(args, ckpt_path: str, allow_harvest: bool) -> None:
     )
 
 
+def run_once_isolated(args, ckpt_path: str, allow_harvest: bool) -> None:
+    """`run_once` in a ONE-SHOT child process, for --follow mode only.
+
+    torch 2.12.1 leaks the backing storage of every plain-unpickled CPU tensor
+    (the same bug that forced all training-side weight transport to numpy), and
+    a panel torch.loads the full ~250 MB checkpoint every cycle: run in-process,
+    a follow-mode panel main accreted ~230 MB/cycle == ~0.9 GB/h, measured at
+    8.9 GB after one night. The child takes the leak to its grave each cycle;
+    the long-lived follow loop never touches torch at all. The one-shot paths
+    (--ckpt / no --follow) stay in-process -- they exit right after the panel.
+
+    A bare Process, deliberately NOT a ProcessPoolExecutor: run_once returns
+    nothing (the row/best.pt/log line are all written inside the child), and
+    this child can die AT TEARDOWN after finishing its work -- the torch /
+    shared-memory exit access-violation family this repo has hit before
+    (0xC0000005 at interpreter exit). An executor turns that harmless dirty
+    exit into a fatal BrokenProcessPool in the follow loop (observed live:
+    row written, [eval] printed, then the pool raised and the service died).
+    Here a nonzero exitcode is a logged warning; the row, if the panel truly
+    failed mid-flight, is simply missing until the next cycle retries."""
+    ctx = mp.get_context("spawn")
+    p = ctx.Process(target=run_once, args=(args, ckpt_path, allow_harvest))
+    p.start()
+    p.join()
+    if p.exitcode != 0:
+        print(f"[eval] panel child exited {p.exitcode}; if no [eval] line printed "
+              f"above, this cycle's panel was lost (next one in --follow s)", flush=True)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Parallel out-of-band win-rate panel.")
     ap.add_argument("--ckpt-dir", default="checkpoints")
@@ -543,7 +573,7 @@ def main() -> None:
         return
     while True:
         if os.path.exists(latest):
-            run_once(args, latest, allow_harvest=True)
+            run_once_isolated(args, latest, allow_harvest=True)
         if not sleep_while_locked(lock, args.follow):
             print("[eval] trainer stopped; follow mode done", flush=True)
             return

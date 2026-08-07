@@ -64,6 +64,15 @@ workers at startup (one-time, parallel — expect a ~30s first iteration when
 scenarios are enabled). `0` (default) is the serial path, byte-identical:
 what the ODROID service runs.
 
+Since 2026-08-07 the PC launchers run **16 workers × 16 games/iteration**
+(train.args carries `--games-per-iter 16 --minibatch 512`): both hyperthreads
+of every P-core, one worker per LP. Worker count and games-per-iter must move
+together — pcollect stripes specs statically (`specs[w::workers]`), so workers
+beyond the game count sit idle and the iteration always waits on the slowest
+chunk. The doubled minibatch keeps the PPO step count unchanged on the doubled
+batch (the update is launch-bound, so wider steps are nearly free). This trades
+the it/h reading for games/h: iterations carry 2× the games at ~1.5× the wall.
+
 ### `--collect-affinity LP,LP,…` (+ the panel's `--affinity`)
 
 This box's i7-14700KF is hybrid (8 P-cores as logical processors 0–15 in
@@ -85,6 +94,13 @@ for this workload). The launchers therefore split the machine:
   during pipelined overlap instead of time-slicing against a worker).
   Re-measure if the panel ever floats again; see
   `python -m fishrl.eval.profile_discrete --sections a`.
+  **Superseded 2026-08-07 for the 16-worker layout**: with 16 workers on the
+  full mask 0–15 every LP owns exactly one worker, so the co-stacking
+  pathology that A/B caught (2 workers sharing a core's siblings while
+  another core idled) cannot occur. The one-per-core result still stands for
+  any 8-worker configuration. The known cost of HT-wide: the main process's
+  torch threads time-slice against workers during pipelined overlap — fine
+  while the update keeps hiding under the (now longer) collection window.
 * eval panel workers → `--affinity 16,…,27` (E-cores): panels are
   deadline-insensitive (they only must finish inside the 15-min cadence), so
   they take the slow cores and never touch the collectors.

@@ -9,8 +9,9 @@ rem    2. runs win-rate panels alongside the session, every 15 min
 rem    3. trains in THIS window: resumes %CKPT%\latest.pt, or FRESH-starts (with the
 rem       architecture in deploy\train.args) when the dir is empty
 rem
-rem  The active lineage is checkpoints-v2 (the entity / bigger-actor run, ~1700 it/h on
-rem  this box). The original 622h flat run is preserved untouched in checkpoints\.
+rem  The active lineage is checkpoints-v2 (the entity / bigger-actor run; ~23k games/h
+rem  on this box at 16-game iterations). The original 622h flat run is preserved
+rem  untouched in checkpoints\.
 rem
 rem  End with Ctrl-C here or the dashboard's "End training session" button:
 rem  either way the trainer checkpoints gracefully at the next iteration
@@ -81,11 +82,22 @@ start "" "http://%LANIP%:8765/"
 
 rem Training-regime flags come from deploy\train.args (single line) so the regime
 rem is declared in one place and cannot drift between launchers.
+rem
+rem Collection layout (machine flags, this box = i7-14700KF, 8P+12E / 28 LPs):
+rem 16 workers saturating BOTH hyperthreads of every P-core (LPs 0-15), paired
+rem with train.args' --games-per-iter 16 so every worker owns a game. UNIFORM
+rem workers matter: pcollect stripes specs statically (specs[w::workers]), so the
+rem iteration waits on the slowest worker -- mixing in E-cores (2.3x slower per
+rem decision) would gate every iteration. The eval panel keeps the E-cores
+rem (affinity 16-27 above); the trainer/infer-server threads float. Before
+rem 2026-08-07 this was 8 workers on one LP per P-core (0,2,..,14) at ~2300 it/h
+rem x8 games; the HT-wide layout trades it/h for games/h -- iterations are 2x
+rem the games at ~1.5x the wall, so the it/h reading dropping is expected.
 set /p REGIME=<"%REPO%\deploy\train.args"
 "%PY%" -m fishrl.train --resume --iters 0 --ckpt-dir "%CKPT%" %REGIME% ^
     --report-every-seconds 900 --report-winrate-games 0 ^
     --checkpoint-every-seconds 900 ^
-    --gpu --collect-workers 8 --reserve-cores 2 --collect-affinity 0,2,4,6,8,10,12,14 --pipeline-collect --infer-server %*
+    --gpu --collect-workers 16 --reserve-cores 2 --collect-affinity 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 --pipeline-collect --infer-server %*
 
 rem ?????? the trainer has exited (Ctrl-C, or the dashboard's "End training session") ??????
 rem The eval panel follows trainer.lock and DOES exit on its own -- but it only checks

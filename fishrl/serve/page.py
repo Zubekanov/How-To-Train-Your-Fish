@@ -42,10 +42,11 @@ svg text{font-family:inherit;font-size:11px;fill:var(--dim)}
 </style></head><body>
 <header>
   <span>fishrl <b id="host">…</b></span>
+  <span id="gameswrap" title="">games <b id="games">—</b></span>
+  <span id="gphwrap" title=""><b id="gph">—</b> games/h</span>
+  <span id="gph1kwrap" title="">recent <b id="gph1k">—</b> g/h</span>
   <span>it <b id="it">—</b></span>
   <span><b id="elapsed">—</b> h</span>
-  <span><b id="iph">—</b> it/h</span>
-  <span id="iph1kwrap" title="">last-1k <b id="iph1k">—</b> it/h</span>
   <span>best <b id="best">—</b></span>
   <span id="turn" class="chip idle">turn: …</span>
   <span id="live" class="chip idle">trainer: …</span>
@@ -80,7 +81,7 @@ const MIX = {opp_self:"#4fc3f7", opp_past:"#b39ddb", opp_heuristic:"#e57373",
              opp_attacker:"#ffb74d", opp_random:"#9ccc65",
              opp_scenario:"#80cbc4"};
 const WR_SMOOTH = 5000;   // win-rate running-mean window, in iterations
-const RATE_ITERS = 1000;  // "last-1k it/h" throughput window
+const RATE_ITERS = 1000;  // "recent" throughput window, in iterations
 const S = {reports:new Map(), evals:new Map(), ticks:new Map(), best:null, summary:null};
 let dataViaPeer = null;   // where the charts' data comes from (set on first poll)
 const key = {reports:r=>r.it, ticks:r=>r.it, evals:r=>r.it+":"+(r.wall_time||0)};
@@ -210,8 +211,14 @@ function render(){
     sysSeries.push({name:k+" %", color:c, pts:smooth(raw, SYS_SMOOTH)});
   }
   chart($("sys"), $("sysL"), sysSeries, {y0:0, y1:100, yStep:10});
+  // games/h per report window = games x iters_per_h / iters (window hours =
+  // iters / iters_per_h). The it/h series moved to the header tooltip when
+  // iteration SIZE became a regime knob (8 -> 16 -> 32 games/iter, 2026-08-07):
+  // games/h is the cross-regime throughput, it/h just tracks the knob.
   chart($("thr"), $("thrL"), [
-      {name:"iters/h", color:"#4fc3f7", pts: rp.filter(r=>r.iters_per_h!=null).map(r=>[r.it,r.iters_per_h])},
+      {name:"games/h", color:"#4fc3f7",
+       pts: rp.filter(r=>r.games!=null&&r.iters>0&&r.iters_per_h!=null)
+              .map(r=>[r.it, r.games*r.iters_per_h/r.iters])},
       {name:"transitions", color:"#9ccc65", right:true,
        pts: rp.filter(r=>r.transitions!=null).map(r=>[r.it,r.transitions])},
     ].filter(s=>s.pts.length), {});
@@ -227,7 +234,8 @@ function rate1k(){
   // report cadence. Primary source: report rows (elapsed_h excludes downtime),
   // restricted to the trailing run of rows sharing the newest row's host tag --
   // merged relay histories interleave hosts. Fallback for a session too young
-  // for two reports: tick wall-clock (live device only).
+  // for two reports: tick wall-clock (live device only). `games` (games/h over
+  // the same window, summed from the report rows) is null on the tick fallback.
   const rp = rows("reports");
   if (rp.length >= 2){
     const last = rp[rp.length-1], host = last.host;
@@ -238,8 +246,11 @@ function rate1k(){
       let base = tail[0];
       for (const r of tail){ if (r.it <= last.it - RATE_ITERS) base = r; else break; }
       const dit = last.it - base.it, dh = last.elapsed_h - base.elapsed_h;
+      let dg = 0;
+      for (const r of tail) if (r.it > base.it && r.games != null) dg += r.games;
       if (dit > 0 && dh > 0)
-        return {rate: dit/dh, span: dit, host: host || "?", src: "reports"};
+        return {rate: dit/dh, games: dg > 0 ? dg/dh : null, span: dit,
+                host: host || "?", src: "reports"};
     }
   }
   const tk = rows("ticks");
@@ -248,9 +259,32 @@ function rate1k(){
     let base = tk[0];
     for (const t of tk){ if (t.it <= last.it - RATE_ITERS) base = t; else break; }
     const dit = last.it - base.it, dh = (last.wall_time - base.wall_time)/3600;
-    if (dit > 0 && dh > 0) return {rate: dit/dh, span: dit, host: "this device", src: "ticks"};
+    if (dit > 0 && dh > 0) return {rate: dit/dh, games: null, span: dit,
+                                   host: "this device", src: "ticks"};
   }
   return null;
+}
+
+// Lifetime games. Report rows carry exact per-window game counts; iterations in
+// windows no report covers (session ends, crashes) are estimated at 8 games/iter
+// -- correct for essentially the whole gap, which predates the 2026-08-07 move
+// to bigger iterations.
+const GAMES_PER_ITER_LEGACY = 8;
+function totalGames(lastIt){
+  const rp = rows("reports");
+  if (!rp.length || lastIt == null) return null;
+  let g = 0, covered = 0;
+  for (const r of rp){
+    if (r.games != null) { g += r.games; covered += r.iters || 0; }
+  }
+  const gap = Math.max(0, lastIt - covered);
+  return {games: g + gap*GAMES_PER_ITER_LEGACY, exact: g, gapIters: gap};
+}
+function fmtBig(v){
+  if (v == null) return "—";
+  if (v >= 1e6) return (v/1e6).toFixed(2)+"M";
+  if (v >= 1e4) return (v/1e3).toFixed(1)+"k";
+  return String(Math.round(v));
 }
 
 function header(s){
@@ -259,13 +293,24 @@ function header(s){
   $("host").textContent = s.host + " " + s.ckpt_dir.split(/[\\/]/).pop() +
     (dev ? " [" + dev + "]" : "");
   const lr = s.last_report||{}, lt = s.last_tick||{};
-  $("it").textContent = lt.it!=null?lt.it:(lr.it!=null?lr.it:"—");
+  const lastIt = lt.it!=null?lt.it:(lr.it!=null?lr.it:null);
+  $("it").textContent = lastIt!=null?lastIt:"—";
   $("elapsed").textContent = lr.elapsed_h!=null?lr.elapsed_h.toFixed(1):"—";
-  $("iph").textContent = lr.iters_per_h!=null?lr.iters_per_h.toFixed(1):"—";
+  // Games are the headline: iteration SIZE is a regime knob (8/16/32 games/iter),
+  // so it/h moved into the tooltips and games carry the throughput story.
+  const tg = totalGames(lastIt);
+  $("games").textContent = tg ? fmtBig(tg.games) : "—";
+  $("gameswrap").title = tg ?
+    `${tg.games.toLocaleString()} lifetime games (${tg.exact.toLocaleString()} report-counted + ${tg.gapIters} uncovered it x ${GAMES_PER_ITER_LEGACY})` : "";
+  const gph = (lr.games!=null && lr.iters>0 && lr.iters_per_h!=null)
+    ? lr.games*lr.iters_per_h/lr.iters : null;
+  $("gph").textContent = fmtBig(gph);
+  $("gphwrap").title = lr.iters_per_h!=null ?
+    `last report window; ${lr.iters_per_h.toFixed(1)} it/h x ${(lr.games&&lr.iters?(lr.games/lr.iters).toFixed(1):"?")} games/iter` : "";
   const rk = rate1k();
-  $("iph1k").textContent = rk ? rk.rate.toFixed(1) : "—";
-  $("iph1kwrap").title = rk ?
-    `${rk.rate.toFixed(1)} it/h over the last ${rk.span} it on ${rk.host} (${rk.src})` : "";
+  $("gph1k").textContent = rk && rk.games!=null ? fmtBig(rk.games) : "—";
+  $("gph1kwrap").title = rk ?
+    `over the last ${rk.span} it on ${rk.host} (${rk.src}); ${rk.rate.toFixed(1)} it/h` : "";
   // best_score (maximin over anchors) on new best.json; legacy files only carry
   // the old v1.0-keyed rate.
   $("best").textContent = s.best

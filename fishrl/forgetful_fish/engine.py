@@ -18,7 +18,8 @@ from fishrl.forgetful_fish.state import (
     _mark_seen, _public_object, enters_tapped, mark_library_known, forget_rearranged,
     PERMANENT_ABILITIES,
     CYCLING, _reverse_source, rng_from_state, _serialize_rng,
-    BASIC_TYPES, add_text_change, revert_text_changes, expire_eot_text_changes,
+    BASIC_TYPES, LAND_TYPES, _plural as _plural_word,
+    add_text_change, revert_text_changes, expire_eot_text_changes,
     controls_basic_type, land_mana_color, _drop_pool, MODAL_SPELLS, modal_mode_text,
 )
 
@@ -455,6 +456,12 @@ def _apply_blocks(g: GameState, player: str, eligible: list, blocks: dict) -> No
             if bid in eligible and bid not in used:    # a creature can block only one attacker
                 g.combat.attackers[aid]["blockers"].append(bid)
                 used.add(bid)
+    # Remember blocked-ness independently of the blocker list: an attacker
+    # REMAINS blocked even if every blocker later leaves combat (CR 509.2), and
+    # departed blockers are purged from the list by _detach_from_battlefield.
+    for a in g.combat.attackers.values():
+        if a["blockers"]:
+            a["blocked"] = True
     blocked = sum(1 for a in g.combat.attackers.values() if a["blockers"])
     if blocked:
         g.log.append(f"{g.players[player].name} blocks {blocked} attacker"
@@ -472,7 +479,19 @@ def declare_blockers(g: GameState, player: str, blocks: dict) -> bool:
     return True
 
 
+def _live_blockers(g: GameState, info: dict) -> list:
+    return [b for b in info.get("blockers", [])
+            if b in g.objects and _on_battlefield(g, b)]
+
+
 def _combat_damage_step(g: GameState) -> None:
+    # CR 510.1: the attacking player divides a blocked attacker's damage among
+    # its blockers. Every seat in this vendored engine is policy- or AI-driven
+    # (there are no human seats in the trainer), so the engine always takes the
+    # lethal-first auto-spread in _resolve_combat_damage — the same division the
+    # upstream (Website) engine auto-assigns for its AI/model/exhibition seats.
+    # The upstream `assign_damage` pending must NEVER be raised here: the RL
+    # action space has no block for it, so an env seat could never answer it.
     if not g.combat.attackers:
         _advance_step(g)
         return
@@ -480,18 +499,44 @@ def _combat_damage_step(g: GameState) -> None:
     _give_priority(g, g.active_player)                 # CR 510.4
 
 
+def _on_battlefield(g: GameState, iid: str) -> bool:
+    return any(iid in p.battlefield for p in g.players.values())
+
+
 def _resolve_combat_damage(g: GameState) -> None:
-    # All combat damage is dealt simultaneously (CR 510.1-510.2).
+    # All combat damage is dealt simultaneously (CR 510.1-510.2). Only creatures
+    # still ON the battlefield deal or take it: g.objects is the permanent
+    # registry (cards keep existing there in every zone), so membership alone
+    # says nothing — a bounced/Metamorphosed combatant must contribute nothing.
     for aid, info in g.combat.attackers.items():
         atk = g.objects.get(aid)
-        if not atk:
+        if not atk or not _on_battlefield(g, aid):     # attacker left combat mid-swing
             continue
-        blockers = [b for b in info.get("blockers", []) if b in g.objects]
+        blockers = _live_blockers(g, info)
         if blockers:
-            for i, bid in enumerate(blockers):         # 1 damage to each blocker up to power
-                if i < atk.power:
-                    g.objects[bid].damage_marked += 1
+            # Lethal to each blocker in order until the power runs out; any
+            # excess still lands on a blocker (no trample in this pool).
+            dist = {}
+            remaining = atk.power
+            for bid in blockers:
+                o = g.objects[bid]
+                need = max(1, o.toughness - o.damage_marked)
+                give = min(need, remaining)
+                if give <= 0:
+                    break
+                dist[bid] = give
+                remaining -= give
+            if remaining > 0 and dist:
+                first = blockers[0]
+                dist[first] = dist.get(first, 0) + remaining
+            for bid, dmg in dist.items():
+                if dmg > 0 and bid in g.objects:
+                    g.objects[bid].damage_marked += dmg
             atk.damage_marked += sum(g.objects[b].power for b in blockers)  # blockers hit back
+        elif info.get("blocked") or info.get("blockers"):
+            # It WAS blocked and every blocker has since left: the attacker
+            # stays blocked (CR 509.2) and, with no trample here, hits nothing.
+            continue
         else:
             target = info.get("target")                # unblocked -> hit the player
             g.players[target].life -= atk.power
@@ -703,6 +748,15 @@ def _trigger_needs_choice(g: GameState, t: StackObject) -> bool:
     return bool(tspec) and bool(_trigger_legal_targets(g, tspec))
 
 
+def _trigger_unplaceable(g: GameState, t: StackObject) -> bool:
+    """A trigger that REQUIRES a target but has no legal one never reaches the
+    stack (CR 603.3d) — it must not create a stack object for players to pass
+    priority through (e.g. Mystic Sanctuary entering with no instant or sorcery
+    in the graveyard)."""
+    tspec = _trigger_target_spec(g, t)
+    return bool(tspec) and not _trigger_legal_targets(g, tspec)
+
+
 def _place_on_stack(g: GameState, t: StackObject) -> None:
     if t in g.pending_triggers:
         g.pending_triggers.remove(t)
@@ -735,6 +789,11 @@ def _flush_triggers(g: GameState) -> bool:
 def _place_triggers(g: GameState) -> bool:
     """Advance trigger placement; returns True if paused for a holding-area
     decision, False once all queued triggers are on the stack."""
+    # Triggers that require a target but have none never reach the stack
+    # (CR 603.3d) — drop them before anyone is asked to order or respond.
+    for t in list(g.pending_triggers):
+        if _trigger_unplaceable(g, t):
+            g.pending_triggers.remove(t)
     for who in (g.active_player, _OTHER[g.active_player]):
         mine = [t for t in g.pending_triggers if t.controller == who]
         if not mine:
@@ -843,7 +902,7 @@ def _pay_source(g: GameState, player: str, iid: str, ab: dict) -> None:
     if ab["tap"]:
         obj.tapped = True
     if ab["sac"] and iid in g.players[player].battlefield:
-        g.players[player].battlefield.remove(iid)
+        _detach_from_battlefield(g, g.players[player], iid, obj)
         g.graveyard.append(iid)
         _mark_seen(g, iid)
 
@@ -1502,10 +1561,15 @@ def register_after_text_change(key):
 
 
 def start_text_change(g: GameState, player: str, source_iid: str, *, then: str,
-                      change_targets, resolving_kind: str = "spell") -> bool:
-    """Pause while `player` picks 'turn X to Y' from two basic-land-type lists."""
+                      change_targets, resolving_kind: str = "spell",
+                      from_types=None) -> bool:
+    """Pause while `player` picks 'turn X to Y'. Crystal Spray / Mind Bend allow
+    basic land types on both sides; Vision Charm's FIRST choice is any land type
+    (`from_types`) while the second must still be basic. (The RL action space's
+    TEXT_CHANGE block is basics x basics, so a policy seat can never pick the
+    Sphere from-type — same reach as before this fix; AI seats can.)"""
     g.pending = PendingDecision(type="choose_text_change", player=player, context={
-        "from_types": list(BASIC_TYPES), "to_types": list(BASIC_TYPES), "then": then,
+        "from_types": list(from_types or BASIC_TYPES), "to_types": list(BASIC_TYPES), "then": then,
         "change_targets": list(change_targets),
         "resolving": source_iid, "resolving_kind": resolving_kind,
         "resolving_name": g.objects[source_iid].name if source_iid in g.objects else "",
@@ -1517,7 +1581,8 @@ def start_text_change(g: GameState, player: str, source_iid: str, *, then: str,
 def complete_text_change(g: GameState, player: str, frm, to) -> bool:
     if not g.pending or g.pending.type != "choose_text_change" or g.pending.player != player:
         return False
-    if frm not in BASIC_TYPES or to not in BASIC_TYPES:
+    ctx0 = g.pending.context or {}
+    if frm not in (ctx0.get("from_types") or BASIC_TYPES) or to not in (ctx0.get("to_types") or BASIC_TYPES):
         return False
     ctx = g.pending.context
     g.pending = None
@@ -1596,7 +1661,10 @@ def _after_mind_bend(g: GameState, player: str, frm: str, to: str, ctx: dict) ->
 def _effect_vision_charm(g: GameState, controller: str, iid: str, obj=None) -> bool:
     mode = g.objects[iid].chosen.get("mode", "mill")
     if mode == "land":
-        return start_text_change(g, controller, iid, then="vision_land", change_targets=[])
+        # "Choose a land type and a basic land type": the FIRST choice may be
+        # any land type — including The Surgical Bay's Sphere.
+        return start_text_change(g, controller, iid, then="vision_land",
+                                 change_targets=[], from_types=LAND_TYPES)
     for _ in range(4):                                    # mill four off the shared library
         if not _mill(g, controller):
             break
@@ -1691,9 +1759,10 @@ def _effect_metamorphose(g: GameState, controller: str, iid: str, obj=None) -> b
     owner = perm.controller if perm else None
     if not perm or owner not in g.players or tgt not in g.players[owner].battlefield:
         return False                                  # target gone -> spell does nothing
-    g.players[owner].battlefield.remove(tgt)
-    perm.tapped = False
-    perm.entered_this_turn = False
+    # Through the one battlefield-exit helper: it also pulls the creature out
+    # of combat and sheds marked damage — a Metamorphosed attacker must not
+    # still swing from the library, nor arrive pre-damaged when next cast.
+    _detach_from_battlefield(g, g.players[owner], tgt, perm)
     # onto the top of the shared library, known to everyone (it was on the battlefield)
     g.library.insert(0, LibrarySlot(instance_id=tgt, known_by={"p1": True, "p2": True}))
     g.log.append(f"{g.players[controller].name} puts {perm.name} on top of the library.")
@@ -1753,9 +1822,14 @@ def _effect_days_undoing(g: GameState, controller: str, iid: str, obj=None) -> b
     g.graveyard = []
     shuffle_library(g)                                # ...shuffled into the library (knowledge cleared)
     for pid in order:                                 # then each player draws seven, active first
+        if g.result.get("status") != "ongoing":       # a failed draw already decided it
+            break
         pl = g.players[pid]
         for _ in range(7):
             if not g.library:
+                # "Draws seven" is seven draw events: running dry is a game
+                # loss (CR 120.3), same as every other draw in the engine.
+                _lose(g, pid, "drawing from an empty library")
                 break
             slot = g.library.pop(0)
             g.objects[slot.instance_id].known_by = []   # freshly shuffled -> known to nobody
@@ -1941,6 +2015,8 @@ def play(g: GameState, player: str, instance_id: str, hold: bool = False, mode=N
     modes = MODAL_SPELLS.get(obj.name)
     if modes:                                          # lock in the chosen mode before casting
         keys = {m["key"] for m in modes}
+        if mode is not None and mode not in keys:
+            return False                               # an unknown mode is an invalid cast, not a coercion
         obj.chosen["mode"] = mode if mode in keys else modes[0]["key"]
     tl = (obj.type_line or "").lower()
     is_land = "land" in tl
@@ -2171,12 +2247,9 @@ def end_turn(g: GameState, player: str) -> bool:
 
 
 def _cleanup(g: GameState) -> None:
+    # CR 514.1 first: discard to hand size — while "until end of turn" effects
+    # are still live (they end in 514.2, i.e. only after this decision).
     p = g.players[g.active_player]
-    for o in g.objects.values():                      # "until end of turn" text changes wear off
-        expire_eot_text_changes(o)
-    for pl in g.players.values():                     # CR 514.2 — remove all marked damage
-        for iid in pl.battlefield:
-            g.objects[iid].damage_marked = 0
     excess = len(p.hand) - p.max_hand_size
     if excess > 0:
         if p.is_ai:
@@ -2192,7 +2265,28 @@ def _cleanup(g: GameState) -> None:
         else:
             g.pending = PendingDecision(type="discard", player=g.active_player,
                                         context={"count": excess})
-            return                                    # wait for the human to discard
+            return                                    # wait for the seat to discard
+    _finish_cleanup(g)
+
+
+def _finish_cleanup(g: GameState) -> None:
+    """CR 514.2 (damage wears off, 'until end of turn' effects end
+    simultaneously), then the 514.3a check: if that made a state trigger's
+    condition true (e.g. a Crystal Spray land-type change expiring leaves a
+    player with no Islands), the trigger goes on the stack DURING cleanup and
+    players receive priority; the turn only ends once the stack empties and
+    everyone passes again. Otherwise no priority is granted and the next turn
+    begins."""
+    for o in g.objects.values():                      # "until end of turn" text changes wear off
+        expire_eot_text_changes(o)
+    for pl in g.players.values():                     # remove all marked damage
+        for iid in pl.battlefield:
+            g.objects[iid].damage_marked = 0
+    _check_state_triggers(g)
+    if g.pending_triggers:
+        g.passed = {"p1": False, "p2": False}
+        _give_priority(g, g.active_player)            # flushes the triggers; play continues
+        return                                        # both pass on an empty stack -> next turn
     _advance_step(g)                                  # cleanup is last -> next turn
 
 
@@ -2234,22 +2328,60 @@ def discard_to_hand_size(g: GameState, player: str, instance_ids: list) -> bool:
         g.graveyard.append(iid)
     g.pending = None
     g.log.append(f"{g.players[player].name} discards {need}.")
-    _advance_step(g)
+    _finish_cleanup(g)                                # 514.2 + the 514.3a check follow the discard
     return True
 
 
+# NOTE: group(1) yields the SINGULAR type word ("Island") — the released AI
+# modules (ai.py v1.0 is the frozen trainer anchor) read this regex directly
+# and depend on that, so its shape must not change. The one word it mangles is
+# "Plains" (the lazy capture + optional s yield "Plain"); _singular_type
+# repairs that at the engine's use site.
 _SAC_NO_TYPE_RE = re.compile(r"when you control no (\w+?)s?\s*,?\s*sacrifice", re.I)
 
 
-def _remove_from_battlefield(g: GameState, pl, iid: str, o, reason: str) -> None:
+def _singular_type(word: str) -> str:
+    """The land-type word behind a _SAC_NO_TYPE_RE capture. 'Island' passes
+    through; 'Plain' (the regex's mangling of 'Plains') maps back to 'Plains',
+    which otherwise never matches a type line and reads the condition wrong."""
+    if word in LAND_TYPES:
+        return word
+    if word + "s" in LAND_TYPES:
+        return word + "s"
+    return word
+
+
+def _detach_from_battlefield(g: GameState, pl, iid: str, o) -> None:
+    """Take a permanent off the battlefield, wherever it is headed: remove it
+    from its controller's row AND from combat, and shed the battlefield-only
+    state that must never follow the card into another zone. A card that left
+    combat deals and takes no combat damage (CR 510.1c), and marked damage
+    carried into the library/graveyard would kill the creature the moment it
+    is next cast. EVERY battlefield exit must go through here — a hand-rolled
+    `battlefield.remove()` recreates exactly that bug."""
     pl.battlefield.remove(iid)
-    g.graveyard.append(iid)
     o.damage_marked = 0
     o.tapped = False
+    o.entered_this_turn = False
     g.combat.attackers.pop(iid, None)
     for info in g.combat.attackers.values():
         if iid in info.get("blockers", []):
             info["blockers"].remove(iid)
+    # A text change ends the moment the object leaves the battlefield (CR
+    # 400.7), not at the next priority sweep — a paused resolution (e.g.
+    # Metamorphose's put-from-hand window) must not show stale text.
+    _sweep_text_changes(g)
+    # State triggers fire the moment their condition becomes true (CR 603.8).
+    # Sample HERE, not only at the next priority: if this exit made "you
+    # control no Islands" true, the sacrifice is owed even if a paused
+    # resolution puts a replacement Island onto the battlefield before the
+    # next priority (the Metamorphose window from the audit).
+    _check_state_triggers(g)
+
+
+def _remove_from_battlefield(g: GameState, pl, iid: str, o, reason: str) -> None:
+    _detach_from_battlefield(g, pl, iid, o)
+    g.graveyard.append(iid)
     g.log.append(reason)
 
 
@@ -2316,14 +2448,17 @@ def _check_state_triggers(g: GameState) -> None:
             if not o:
                 continue
             m = _SAC_NO_TYPE_RE.search(o.oracle_text or "")
-            if not m or controls_basic_type(g, pid, m.group(1)):
-                continue                                  # no clause, or the condition is false
+            if not m:
+                continue                                  # no sacrifice clause
+            typ = _singular_type(m.group(1))
+            if controls_basic_type(g, pid, typ):
+                continue                                  # the condition is false
             if _state_trigger_pending(g, iid):
                 continue                                  # an instance is already pending/on the stack
             g.pending_triggers.append(StackObject(
                 stack_id=uuid.uuid4().hex, kind="triggered",
                 source_instance_id=iid, controller=pid,
-                description=f"When you control no {m.group(1).capitalize()}s, sacrifice this creature.",
+                description=f"When you control no {_plural_word(typ)}, sacrifice this creature.",
                 chosen={"state_trigger": "sacrifice"},
             ))
             g.log.append(f"{o.name}'s ability triggers.")

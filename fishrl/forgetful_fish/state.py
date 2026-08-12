@@ -410,12 +410,19 @@ def _is_land(type_line: str) -> bool:
 # ---------------------------------------------------------------------------
 
 BASIC_TYPES = ["Plains", "Island", "Swamp", "Mountain", "Forest"]
+# Vision Charm's first choice is "a land type" (any), not a basic one — the
+# pool's only non-basic land type is The Surgical Bay's Sphere (CR audit).
+LAND_TYPES = BASIC_TYPES + ["Sphere"]
 _PLURAL = {"Plains": "Plains", "Island": "Islands", "Swamp": "Swamps",
-           "Mountain": "Mountains", "Forest": "Forests"}
+           "Mountain": "Mountains", "Forest": "Forests", "Sphere": "Spheres"}
+
+
+def _plural(word: str) -> str:
+    return _PLURAL.get(word, word + "s")
 
 
 def _swap_basic_type(text: str, frm: str, to: str) -> str:
-    """Replace every instance of basic land type `frm` with `to`, fixing 'a/an'
+    """Replace every instance of land type `frm` with `to`, fixing 'a/an'
     and the plural. Leaves unrelated words (and the card name) untouched."""
     if not text:
         return text
@@ -424,15 +431,18 @@ def _swap_basic_type(text: str, frm: str, to: str) -> str:
     def repl_art(m):
         return (art.capitalize() if m.group(1)[0].isupper() else art) + " " + to
     text = re.sub(r"\b([Aa]n?) " + re.escape(frm) + r"\b", repl_art, text)
-    text = re.sub(r"\b" + re.escape(_PLURAL[frm]) + r"\b", _PLURAL[to], text)
+    text = re.sub(r"\b" + re.escape(_plural(frm)) + r"\b", _plural(to), text)
     text = re.sub(r"\b" + re.escape(frm) + r"\b", to, text)
     return text
 
 
 def change_relevant(o: "CardInstance", frm: str) -> bool:
-    """Whether rewriting `frm` would actually change this object's text/type."""
-    hay = (o.text_orig.get("type_line", o.type_line) + " "
-           + o.text_orig.get("oracle_text", o.oracle_text))
+    """Whether rewriting `frm` would actually change this object's text/type.
+    Checked against the EFFECTIVE (already-changed) text, not the pristine
+    original: text changes apply sequentially to the current text (CR 612/613
+    timestamp order — an Island turned Swamp is then turnable Swamp->Mountain),
+    which is exactly how recompute_text composes them."""
+    hay = (o.type_line or "") + " " + (o.oracle_text or "")
     return bool(re.search(r"\b" + re.escape(frm) + r"s?\b", hay))
 
 
@@ -887,10 +897,18 @@ def new_game(decklist, *, p1_name="Player 1", p2_name="Player 2",
             return int(v)
         except (TypeError, ValueError):
             return 0
+    # Instance ids are derived from a per-game counter (not uuid4) so that a
+    # fixed `seed` produces a fully reproducible game. The heuristic AI breaks
+    # ties between equal-value cards on the instance id, so random uuid4 ids
+    # would make same-seed games diverge run-to-run. Fixed-width hex keeps the
+    # id shape (32 chars) and makes string order match creation order. The
+    # counter does not touch `rng`, so the shuffle/deal for a seed is unchanged.
+    iid_counter = 0
     for card in decklist:
         card_key = f"{card.get('set', '')}/{card.get('collector_number', '')}".strip("/")
         for _ in range(int(card.get("qty") or 1)):
-            iid = uuid.uuid4().hex
+            iid = f"{seed:08x}{iid_counter:024x}"
+            iid_counter += 1
             g.objects[iid] = CardInstance(
                 instance_id=iid,
                 card_key=card_key,

@@ -326,7 +326,10 @@ def test_peer_alive_probe_and_cache(site):
 def test_actions_registry_per_platform(tmp_path):
     d = str(tmp_path)
     nt = Actions(d, "fishrl-selfplay", "fishrl-eval.service", os_name="nt")
-    assert [a["id"] for a in nt.list()] == ["stop_session", "run_eval_local"]
+    assert [a["id"] for a in nt.list()] == ["stop_session", "run_eval_local",
+                                            "sleep_display"]
+    (sleep,) = [a for a in nt.list() if a["id"] == "sleep_display"]
+    assert sleep["countdown"] == 3 and not sleep["danger"]   # 3-2-1 on the button, no dialog
     px = Actions(d, "fishrl-selfplay", "fishrl-eval.service", os_name="posix")
     assert [a["id"] for a in px.list()] == ["stop_trainer", "start_trainer", "run_eval"]
 

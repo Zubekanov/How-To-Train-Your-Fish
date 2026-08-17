@@ -357,7 +357,7 @@ function set(id, txt, cls){ const e=$(id); e.textContent=txt; e.className="chip 
 // ── actions bar (server-driven; absent unless --allow-actions) ───────────────
 async function refreshActions(){
   try {
-    const r = await fetch("/api/actions");
+    const r = await tfetch("/api/actions");
     if (!r.ok){ $("actions").innerHTML=""; return; }
     const acts = (await r.json()).actions;
     $("actions").innerHTML = "";
@@ -422,8 +422,19 @@ async function loadAll(){
   }
 }
 let sessionEnding = false;
+// fetch with a deadline: browser fetch has NO default timeout, so one hung
+// request (a dead address in the host's DNS set, a mid-restart socket) would
+// leave poll() pending forever while its interval piles more hung requests
+// onto the per-origin connection limit -- the "charts update but the header is
+// dead" failure. An aborted poll rejects, the catch paints the state, and the
+// next tick retries on a fresh connection.
+function tfetch(url, opts){
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), 4000);
+  return fetch(url, {...(opts||{}), signal: c.signal}).finally(() => clearTimeout(t));
+}
 async function poll(){
-  try { S.summary = await (await fetch("/api/summary")).json(); header(S.summary); }
+  try { S.summary = await (await tfetch("/api/summary")).json(); header(S.summary); }
   catch(e){
     if (sessionEnding){
       // "End training session" tears down the whole session, this server

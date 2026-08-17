@@ -239,7 +239,13 @@ class Actions:
                      "danger": True, "enabled": live,
                      "reason": None if live else "no trainer is running here"},
                     {"id": "run_eval_local", "label": "Run eval panel now",
-                     "danger": False, "enabled": True, "reason": None}]
+                     "danger": False, "enabled": True, "reason": None},
+                    # `countdown` makes the CLIENT count 3-2-1 on the button before
+                    # POSTing (no confirm dialog) — you asked for the lights out,
+                    # you get three seconds to take your hand off the mouse.
+                    {"id": "sleep_display", "label": "Sleep display",
+                     "danger": False, "enabled": True, "reason": None,
+                     "countdown": 3}]
         return [
             {"id": "stop_trainer", "label": f"Stop trainer ({self.unit})",
              "danger": True, "enabled": live,
@@ -289,6 +295,31 @@ class Actions:
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return True, ("eval panel started (a one-shot subprocess; its row appears "
                           "in the win-rate chart when it finishes, ~30s-2min)")
+        if action_id == "sleep_display":
+            # The same mechanism the 15-minute idle timeout uses: a DPMS monitor
+            # power-off (SC_MONITORPOWER, 2). System keeps running (the trainer's
+            # keepawake holds ES_SYSTEM_REQUIRED, not ES_DISPLAY_REQUIRED, which is
+            # why the display is allowed to blank at all); any input wakes it.
+            # Fired on a daemon thread: SendMessageTimeout's timeout is PER WINDOW
+            # on a broadcast, and this desktop has enough slow windows (wallpaper
+            # engine et al.) that the sum blows past any HTTP client timeout —
+            # measured >15s. The display goes dark as soon as the first responsive
+            # window processes the message; the stragglers finish off-thread.
+            import ctypes
+            import threading
+
+            def _off():
+                HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER = 0xFFFF, 0x0112, 0xF170
+                SMTO_ABORTIFHUNG = 0x0002
+                u32 = ctypes.windll.user32
+                u32.SendMessageTimeoutW.argtypes = [
+                    ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t,
+                    ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p]
+                res = ctypes.c_size_t(0)
+                u32.SendMessageTimeoutW(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 2,
+                                        SMTO_ABORTIFHUNG, 500, ctypes.byref(res))
+            threading.Thread(target=_off, daemon=True).start()
+            return True, "display sleeping — any input wakes it"
         if action_id == "stop_trainer":
             return self._systemctl("stop", self.unit)
         if action_id == "start_trainer":

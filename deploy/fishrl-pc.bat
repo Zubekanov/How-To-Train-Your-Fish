@@ -52,10 +52,18 @@ rem A TEARDOWN leftover from a session that died before consuming it is not ours
 rem to honor -- same hygiene the trainer applies to a stale STOP.
 if exist "%CKPT%\TEARDOWN" del "%CKPT%\TEARDOWN"
 
+rem An EMPTY v3 lineage seeds itself: bootstrap_v3 writes latest.pt with the actor
+rem warm-started from checkpoints-v2\best.pt (fresh public critic + parity aux),
+rem then the trainer below simply --resume's it. If the bootstrap can't run (no v2
+rem best.pt on this box), fall through: --resume on an empty dir cold-starts from
+rem the deploy\train.args architecture instead -- valid, just without the warm start.
 if not exist "%CKPT%\latest.pt" (
-    echo [fishrl-pc] no checkpoint in %CKPT% -- FRESH start with the deploy\train.args
-    echo             architecture ^(entity actor, 768/768/384, card_dim 128^).
-    echo             The original flat run is untouched in %REPO%\checkpoints.
+    echo [fishrl-pc] no checkpoint in %CKPT% -- seeding the v3 warm start from
+    echo             checkpoints-v2\best.pt via fishrl.train.bootstrap_v3 ...
+    "%PY%" -m fishrl.train.bootstrap_v3 --src "%REPO%\checkpoints-v2\best.pt" --out "%CKPT%"
+    if not exist "%CKPT%\latest.pt" (
+        echo [fishrl-pc] bootstrap failed -- COLD fresh start from deploy\train.args instead.
+    )
 )
 
 start "fishrl dashboard" /min powershell -NoProfile -ExecutionPolicy Bypass -File "%REPO%\deploy\fishrl-serve.ps1" -CkptDir "%CKPT%"

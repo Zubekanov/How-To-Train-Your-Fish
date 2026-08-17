@@ -368,8 +368,23 @@ async function refreshActions(){
       b.disabled = !a.enabled;
       b.title = a.enabled ? "" : (a.reason||"");
       b.onclick = async () => {
-        if (!confirm(a.label + " — are you sure?")) return;
-        b.disabled = true;
+        if (a.countdown){
+          // countdown actions (e.g. Sleep display) skip the confirm dialog: the
+          // 3-2-1 on the button IS the grace period, and a second click cancels.
+          if (b.dataset.counting){ delete b.dataset.counting; b.textContent = a.label; return; }
+          b.dataset.counting = "1";
+          for (let s = a.countdown; s > 0; s--){
+            b.textContent = a.label + " in " + s + "…";
+            await new Promise(r => setTimeout(r, 1000));
+            if (!b.dataset.counting){ return; }          // cancelled mid-count
+          }
+          delete b.dataset.counting;
+          b.textContent = a.label;
+          b.disabled = true;
+        } else {
+          if (!confirm(a.label + " — are you sure?")) return;
+          b.disabled = true;
+        }
         try {
           const rsp = await fetch("/api/action", {method:"POST",
             headers:{"Content-Type":"application/json"},

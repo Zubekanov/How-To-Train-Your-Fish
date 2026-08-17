@@ -962,7 +962,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
             done += 1
             if checkpoint_path is not None and cfg.tick_every_seconds > 0:
                 sysv = sysstats.latest()
-                ticks.append({
+                tick = {
                     "it": done, "wall_time": time.time(), "T": len(buf),
                     "games": len(buf.games),
                     "policy_loss": ppo_stats["policy_loss"],
@@ -971,13 +971,21 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     **({"kl_teacher": ppo_stats["kl_teacher"]} if kl_now > 0 else {}),
                     "guesser_loss": aux_stats["guesser_loss"],
                     "public_loss": aux_stats["public_loss"],
+                    **({"deckout_aux_loss": ppo_stats["deckout_aux_loss"]}
+                       if cfg.critic_view == "public" else {}),
                     "collect_s": round(iter_collect_s, 3), "update_s": round(iter_update_s, 3),
                     # machine utilization at the last sampler beat (%; None = unknown) --
                     # the dashboard's system panel plots these over iteration
                     "cpu": None if sysv["cpu"] is None else round(sysv["cpu"], 1),
                     "ram": None if sysv["ram"] is None else round(sysv["ram"], 1),
                     "gpu": None if sysv["gpu"] is None else round(sysv["gpu"], 1),
-                })
+                }
+                # NaN/inf -> null like the report rows: python's json would emit
+                # BARE NaN (v3's public_loss), which is not JSON — the browser's
+                # JSON.parse rejects the whole payload and the dashboard header
+                # freezes while python-side consumers parse it fine.
+                ticks.append({k: (None if isinstance(v, float) and not math.isfinite(v)
+                                  else v) for k, v in tick.items()})
                 tick_pending = True
                 if time.perf_counter() - last_tick_flush >= cfg.tick_every_seconds:
                     _flush_ticks()

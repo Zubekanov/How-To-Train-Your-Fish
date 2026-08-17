@@ -51,6 +51,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import math
 import os
 import re
 import socket
@@ -78,6 +79,24 @@ PEER_PROBE_TTL_S = 15.0
 ARCHIVE_RE = re.compile(r"^archive_(\d{8})\.pt$")
 
 _peer_probe_cache: dict = {}                           # url -> (monotonic ts, alive)
+
+
+def _finite(o):
+    """NaN/inf -> None, recursively, on everything this server emits.
+
+    Python's json module writes BARE `NaN` by default (and reads it back), but
+    that is not JSON: the browser's JSON.parse raises SyntaxError, the page's
+    header poll dies, and every server-side probe (python-parsed) looks healthy —
+    a genuinely nasty asymmetry (v3's tick rows carry public_loss=NaN and froze
+    the dashboard header exactly this way). Rows already on disk carry NaN, so
+    sanitize on the way OUT rather than trusting every writer forever."""
+    if isinstance(o, float) and not math.isfinite(o):
+        return None
+    if isinstance(o, dict):
+        return {k: _finite(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_finite(v) for v in o]
+    return o
 
 
 def peer_alive(url: str) -> bool:
@@ -349,7 +368,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _json(self, obj, code: int = 200) -> None:
-        self._send(code, json.dumps(obj).encode("utf-8"), "application/json")
+        self._send(code, json.dumps(_finite(obj)).encode("utf-8"), "application/json")
 
     def _since_it(self, q: dict):
         try:
@@ -541,7 +560,7 @@ class Handler(BaseHTTPRequestHandler):
             msg = f"event: {kind}\n"
             if it is not None:
                 msg += f"id: {it}\n"
-            msg += f"data: {json.dumps(row)}\n\n"
+            msg += f"data: {json.dumps(_finite(row))}\n\n"
             self.wfile.write(msg.encode("utf-8"))
 
         kinds = ("reports", "evals", "ticks")

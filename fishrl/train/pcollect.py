@@ -101,16 +101,22 @@ def _winit(lite: dict) -> None:
     torch.set_num_threads(1)
     _apply_affinity(lite.get("affinity") or [])
     from fishrl.data import features
-    features.set_public_encoding(lite.get("train_public", True))   # match the trainer's public gate
+    from fishrl.spaces import masking
+    # Match the trainer's gates exactly: public encoding is on iff the diagnostic
+    # wants it OR the critic eats it; the text-change mask mode mirrors the run's.
+    features.set_public_encoding(lite.get("train_public", True)
+                                 or lite.get("critic_view", "god") == "public")
+    masking.set_text_change_mode(lite.get("text_change_mode", "full"))
     hidden = tuple(lite["hidden"])                        # guesser head width
     ah = tuple(lite.get("actor_hidden", hidden))          # actor head width (may differ)
     cd = int(lite.get("card_dim", 64))                    # entity card-embedding width
+    has_guesser = lite.get("belief_mode", "guesser") == "guesser"
     _G.update(
         lite=lite,
         actor=MaskedActor(ah, lite["enc_actor"], cd),
-        guesser=HandGuesser(hidden, lite["enc_guesser"], cd),
+        guesser=HandGuesser(hidden, lite["enc_guesser"], cd) if has_guesser else None,
         opp_actor=MaskedActor(ah, lite["enc_actor"], cd),
-        opp_guesser=HandGuesser(hidden, lite["enc_guesser"], cd),
+        opp_guesser=HandGuesser(hidden, lite["enc_guesser"], cd) if has_guesser else None,
     )
     if lite.get("serve_shm"):
         # Batched-inference client: the LEARNER's forwards go to the central
@@ -153,24 +159,29 @@ def _collect_one_with(spec: dict, actor, guesser):
 
     lite = _G["lite"]
     kind = spec["kind"]
+    bmode = lite.get("belief_mode",
+                     "guesser" if lite.get("use_belief", True) else "none")
+    cview = lite.get("critic_view", "god")
     if kind == "self":
-        benv = BeliefAugmentedEnv(guesser, belief=lite["use_belief"],
+        benv = BeliefAugmentedEnv(guesser, mode=bmode,
                                   max_decisions=lite["max_decisions"])
         return collect_games(benv, actor_act_fn(actor), 1, spec["seed"],
-                             critic=None, max_decisions=lite["max_decisions"])
+                             critic=None, max_decisions=lite["max_decisions"],
+                             critic_view=cview)
     if kind == "scenario":
         from fishrl.train.scenarios import ScenarioEnv, get_scenario
         senv = BeliefAugmentedEnv(
-            guesser, belief=lite["use_belief"],
+            guesser, mode=bmode,
             env=ScenarioEnv(get_scenario(spec["name"]),
                             max_decisions=lite["max_decisions"]))
         return collect_games(senv, actor_act_fn(actor), 1, spec["seed"],
-                             critic=None, max_decisions=lite["max_decisions"])
+                             critic=None, max_decisions=lite["max_decisions"],
+                             critic_view=cview)
     if kind == "heuristic":
         return collect_heuristic_games(guesser, actor, 1, spec["seed"], critic=None,
-                                       use_belief=lite["use_belief"],
+                                       belief_mode=bmode,
                                        max_decisions=lite["max_decisions"],
-                                       profile=spec["profile"])
+                                       profile=spec["profile"], critic_view=cview)
     # kind == "opponent": random / attacker / frozen past-self
     okind = spec["okind"]
     models = None
@@ -178,14 +189,15 @@ def _collect_one_with(spec: dict, actor, guesser):
         from fishrl.train.inference import load_np_state
         a_state, g_state = spec["opp_state"]           # frozen nets ride with the spec
         load_np_state(_G["opp_actor"], a_state)
-        load_np_state(_G["opp_guesser"], g_state)
+        if g_state is not None and _G["opp_guesser"] is not None:
+            load_np_state(_G["opp_guesser"], g_state)
         models = SimpleNamespace(actor=_G["opp_actor"], guesser=_G["opp_guesser"])
     member = SimpleNamespace(kind=okind, models=models)
     learner = SimpleNamespace(actor=actor, guesser=guesser)
     return collect_vs_opponent(learner, member, 1, spec["seed"], critic=None,
-                               use_belief=lite["use_belief"],
+                               belief_mode=bmode,
                                max_decisions=lite["max_decisions"],
-                               learner_seat=spec["lseat"])
+                               learner_seat=spec["lseat"], critic_view=cview)
 
 
 def _collect_chunk(learner_blob: bytes, specs: list, torch_seed: int) -> bytes:
@@ -203,7 +215,8 @@ def _collect_chunk(learner_blob: bytes, specs: list, torch_seed: int) -> bytes:
     torch.manual_seed(torch_seed)                      # reproducible action sampling per chunk
     learner_state = pickle.loads(learner_blob)         # numpy arrays only (see np_state):
     load_np_state(_G["actor"], learner_state["actor"])    # plain-pickled torch tensors
-    load_np_state(_G["guesser"], learner_state["guesser"])  # leak their storage on loads
+    if "guesser" in learner_state and _G["guesser"] is not None:   # leak their storage
+        load_np_state(_G["guesser"], learner_state["guesser"])     # on loads
     out = [(spec["idx"], _collect_one(spec)) for spec in specs]
     return zlib.compress(pickle.dumps(out, protocol=pickle.HIGHEST_PROTOCOL), 1)
 
@@ -247,6 +260,8 @@ class ParallelCollector:
                 "enc_actor": cfg.enc_for("actor"), "enc_guesser": cfg.enc_for("guesser"),
                 "use_belief": cfg.use_belief, "max_decisions": cfg.max_decisions,
                 "train_public": cfg.train_public,
+                "belief_mode": cfg.belief_mode, "critic_view": cfg.critic_view,
+                "text_change_mode": cfg.text_change_mode,
                 "scenario_names": scen_names,
                 "affinity": parse_affinity(getattr(cfg, "collect_affinity", ""))}
         self._server = None
@@ -281,8 +296,10 @@ class ParallelCollector:
         """A frozen past-self's nets as CPU state_dicts, shipped WITH its spec.
         Workers are anonymous under ProcessPoolExecutor, so a ship-once cache
         can't guarantee coverage -- and at 1-2 pool games per iteration, a few
-        MB alongside the per-chunk learner shipment is noise."""
-        return (_cpu_state(member.models.actor), _cpu_state(member.models.guesser))
+        MB alongside the per-chunk learner shipment is noise. The guesser leg is
+        None for a bookkeeper-mode past-self (nothing to freeze)."""
+        g = getattr(member.models, "guesser", None)
+        return (_cpu_state(member.models.actor), _cpu_state(g) if g is not None else None)
 
     def submit(self, m, specs: list, it: int) -> list:
         """Ship the CURRENT weights of `m` and start the specs' games on the pool;
@@ -294,7 +311,8 @@ class ParallelCollector:
         for i, s in enumerate(specs):
             s["idx"] = i
         learner_blob = pickle.dumps(
-            {"actor": _cpu_state(m.actor), "guesser": _cpu_state(m.guesser)},
+            {"actor": _cpu_state(m.actor),
+             **({"guesser": _cpu_state(m.guesser)} if m.guesser is not None else {})},
             protocol=pickle.HIGHEST_PROTOCOL)          # serialize ONCE, memcpy per chunk
         self._last_blob = learner_blob                 # for gather's resubmit path
         if self._server is not None:

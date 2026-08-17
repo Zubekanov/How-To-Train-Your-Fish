@@ -11,11 +11,34 @@ import numpy as np
 import torch
 
 from fishrl.data.buffer import RolloutBuffer, Step
-from fishrl.data.features import encode_god, encode_public, opponent_hand_counts
+from fishrl.data.features import (
+    GOD_DIM, bookkeeper_counts, encode_god, encode_public, opponent_hand_counts,
+)
 from fishrl.models import device_of
 from fishrl.obs import vocab as V
 from fishrl.obs.encoder import OBS_DIM
 from fishrl.train.advantages import SEAT_SIGN
+
+# Shared placeholder for god features when critic_view="public": the god encode is
+# skipped entirely (throughput), but Step.god_feat keeps its shape so the batch
+# stacks unchanged. Read-only by contract (steps only ever np.stack it).
+_ZERO_GOD = np.zeros(GOD_DIM, dtype=np.float32)
+
+
+def _resolve_belief_mode(belief_mode, guesser, use_belief) -> str:
+    """Back-compat shim: legacy callers pass (guesser, use_belief); v3 callers pass
+    belief_mode explicitly. `None` derives the legacy meaning."""
+    if belief_mode is not None:
+        assert belief_mode in ("guesser", "bookkeeper", "none"), belief_mode
+        return belief_mode
+    return "guesser" if (use_belief and guesser is not None) else "none"
+
+
+def _deckout_ended(g) -> bool:
+    """Did the game end by drawing from an empty library? (The parity aux head's
+    label domain.) Scenario-terminator verdicts leave g.result untouched and are
+    deliberately excluded — the aux learns from real engine deckouts only."""
+    return "empty library" in (g.result.get("reason") or "")
 
 
 def random_act_fn(rng: np.random.Generator):
@@ -47,43 +70,54 @@ def actor_act_fn(actor):
     return act
 
 
-def _stamp_game(buf: RolloutBuffer, start: int, winner, truncated: bool = False) -> None:
+def _stamp_game(buf: RolloutBuffer, start: int, winner, truncated: bool = False,
+                deckout: bool = False) -> None:
     """Back-fill one finished game's outcome onto its steps and register the game.
 
     Every step gets the winner label plus a buffer-local game_id so GAE segments
     per game (never bootstrapping across a boundary), and `truncated` marks a
     decision-cap cut (winner None but not a decided draw) so the advantage tail
-    bootstraps from the critic instead of scoring the cut as a draw. The winner is
-    ALSO recorded in `buf.games` even when the game produced zero learner steps —
-    league win-rate updates must count games the learner lost before its first
-    decision."""
+    bootstraps from the critic instead of scoring the cut as a draw. `deckout`
+    flags an empty-library-draw ending (the parity aux head's label domain). The
+    winner is ALSO recorded in `buf.games` even when the game produced zero learner
+    steps — league win-rate updates must count games the learner lost before its
+    first decision."""
     gid = len(buf.games)
     for i in range(start, len(buf.steps)):
         buf.steps[i].winner = winner
         buf.steps[i].game_id = gid
         buf.steps[i].truncated = truncated
+        buf.steps[i].deckout_end = deckout
     buf.games.append(winner)
     buf.meta.append({"truncated": truncated})
 
 
-def fill_critic_values(buf: RolloutBuffer, critic, batch: int = 8192) -> None:
-    """Batched post-collection value pass for the privileged critic.
+def fill_critic_values(buf: RolloutBuffer, critic, batch: int = 8192,
+                       view: str = "god") -> None:
+    """Batched post-collection value pass for the PPO critic.
 
     The critic is the ONLY value head in the advantage loop (asymmetric actor-critic),
     but it is FIXED during collection -- it's updated only afterward in `ppo_update`.
     So computing each step's seat-frame value baseline in one batched forward over the
-    buffered `god_feat` is numerically identical to the old per-decision batch=1 calls,
+    buffered features is numerically identical to the old per-decision batch=1 calls,
     while lifting the critic forward out of the per-decision hot loop (it was ~14% of
-    collection wall-clock at batch=1). No extra state: god_feat is already buffered."""
+    collection wall-clock at batch=1). `view` selects the critic's input:
+    "god" (legacy PrivilegedCritic) or "public" (v3 PublicCritic on pub_feat)."""
     if not buf.steps:
         return
     dev = device_of(critic)
-    god = np.stack([s.god_feat for s in buf.steps])
+    feat = np.stack([s.pub_feat if view == "public" else s.god_feat for s in buf.steps])
+    if view == "public":
+        # Landmine guard: encode_public is gated by set_public_encoding — if the gate
+        # zeroed it the critic would silently train on nothing. A genuine pub row
+        # always carries a nonzero globals tail (life/20 etc.).
+        assert np.abs(feat).sum() > 0.0, \
+            "critic_view='public' but pub features are all-zero — set_public_encoding gate?"
     sign = np.array([SEAT_SIGN[s.seat] for s in buf.steps], dtype=np.float32)
     out = np.empty(len(buf.steps), dtype=np.float32)
     with torch.no_grad():
-        for i in range(0, len(god), batch):
-            gt = torch.as_tensor(god[i:i + batch], dtype=torch.float32).to(dev)
+        for i in range(0, len(feat), batch):
+            gt = torch.as_tensor(feat[i:i + batch], dtype=torch.float32).to(dev)
             p1 = critic.p1_winprob(gt).cpu().numpy()
             out[i:i + batch] = sign[i:i + batch] * (2.0 * p1 - 1.0)
     for s, v in zip(buf.steps, out):
@@ -92,7 +126,8 @@ def fill_critic_values(buf: RolloutBuffer, critic, batch: int = 8192) -> None:
 
 def collect_heuristic_games(guesser, actor, n_games, base_seed, critic=None,
                             use_belief=True, max_decisions=2000,
-                            stops_mode="default", profile="heuristic") -> RolloutBuffer:
+                            stops_mode="default", profile="heuristic",
+                            belief_mode=None, critic_view="god") -> RolloutBuffer:
     """Collect rollouts where the LEARNING policy (p1) plays the engine's heuristic
     AI (p2) — the curriculum/pool opponent, in contrast to `collect_games`'
     shared-policy self-play.
@@ -108,8 +143,9 @@ def collect_heuristic_games(guesser, actor, n_games, base_seed, critic=None,
     """
     from fishrl.opponents.heuristic import SEAT, HeuristicMatch
 
+    mode = _resolve_belief_mode(belief_mode, guesser, use_belief)
     act = actor_act_fn(actor)
-    dev = device_of(guesser)
+    dev = device_of(guesser) if mode == "guesser" else None
     zeros = np.zeros(V.N_NAMES, dtype=np.float32)
     buf = RolloutBuffer()
     for gi in range(n_games):
@@ -130,13 +166,16 @@ def collect_heuristic_games(guesser, actor, n_games, base_seed, critic=None,
             # g is the decision-time state (p2 already resolved by the engine). god/public
             # are p1-oriented like the self-play path; recomputed per decision (the pool is
             # a minority of games, so the self-play decision_id dedupe isn't worth the coupling).
-            god, pub = encode_god(g), encode_public(g)
-            if use_belief:
+            god = encode_god(g) if critic_view == "god" else _ZERO_GOD
+            pub = encode_public(g)
+            if mode == "guesser":
                 with torch.no_grad():
                     guess = guesser(
                         torch.as_tensor(persp, dtype=torch.float32).unsqueeze(0).to(dev),
                         torch.as_tensor(prev_guess, dtype=torch.float32).unsqueeze(0).to(dev),
                     ).squeeze(0).cpu().numpy().astype(np.float32)
+            elif mode == "bookkeeper":
+                guess = bookkeeper_counts(g, SEAT)
             else:
                 guess = zeros.copy()
             x_act = np.concatenate([persp, guess]).astype(np.float32)
@@ -152,9 +191,10 @@ def collect_heuristic_games(guesser, actor, n_games, base_seed, critic=None,
             obs, _reward, done, _info = match.step(action)
         winner = match.g.result.get("winner")
         _stamp_game(buf, start, winner,
-                    truncated=winner is None and match.g.result.get("status") == "ongoing")
+                    truncated=winner is None and match.g.result.get("status") == "ongoing",
+                    deckout=_deckout_ended(match.g))
     if critic is not None:
-        fill_critic_values(buf, critic)
+        fill_critic_values(buf, critic, view=critic_view)
     return buf
 
 
@@ -170,7 +210,8 @@ def _belief_guess(guesser, persp, prev, dev):
 
 def collect_vs_opponent(learner, opponent, n_games, base_seed, critic=None,
                         use_belief=True, max_decisions=2000,
-                        learner_seat=None) -> RolloutBuffer:
+                        learner_seat=None, belief_mode=None,
+                        critic_view="god") -> RolloutBuffer:
     """Collect rollouts where the LEARNER plays a fixed pool ``opponent`` through the
     two-seat AEC env, recording ONLY the learner's transitions (the opponent is
     off-policy and must never enter the PPO buffer). Seat-balanced: the learner plays
@@ -191,16 +232,22 @@ def collect_vs_opponent(learner, opponent, n_games, base_seed, critic=None,
     if kind.startswith("heuristic"):
         raise ValueError("heuristic opponents (any version) are collected via "
                          "collect_heuristic_games, not collect_vs_opponent")
+    mode = _resolve_belief_mode(belief_mode, getattr(learner, "guesser", None), use_belief)
     learn_act = actor_act_fn(learner.actor)
-    ldev = device_of(learner.guesser)
+    ldev = device_of(learner.guesser) if mode == "guesser" else None
     zeros = np.zeros(V.N_NAMES, dtype=np.float32)
 
     rng = np.random.default_rng(base_seed)
     opp_actor = opp_guesser = opp_dev = None
     attacker_action = None
     if kind == "self":
-        opp_actor, opp_guesser = opponent.models.actor, opponent.models.guesser
-        opp_dev = device_of(opp_guesser)
+        # A frozen self acts through its own belief channel. In guesser mode that is
+        # its own frozen guesser; in bookkeeper mode the channel is the same pure
+        # state function the learner uses (nothing to freeze).
+        opp_actor = opponent.models.actor
+        opp_guesser = getattr(opponent.models, "guesser", None)
+        opp_dev = device_of(opp_guesser if mode == "guesser" and opp_guesser is not None
+                            else opp_actor)
     elif kind == "attacker":
         from fishrl.opponents.attacker import attacker_action
 
@@ -228,14 +275,18 @@ def collect_vs_opponent(learner, opponent, n_games, base_seed, critic=None,
                 g = env.g
                 did = env.decision_id
                 if did != cache_id:                        # engine advanced -> fresh encode
-                    cache_id, cache_god, cache_pub = did, encode_god(g), encode_public(g)
+                    cache_id = did
+                    cache_god = encode_god(g) if critic_view == "god" else _ZERO_GOD
+                    cache_pub = encode_public(g)
                     god, pub = cache_god, cache_pub
                 else:                                      # frozen state (compound sub-step)
                     god, pub = cache_god.copy(), cache_pub.copy()
                 prev_in = prev[seat]
-                if use_belief:
+                if mode == "guesser":
                     guess = _belief_guess(learner.guesser, persp, prev_in, ldev)
                     prev[seat] = guess
+                elif mode == "bookkeeper":
+                    guess = bookkeeper_counts(g, seat)
                 else:
                     guess = zeros.copy()
                 x_act = np.concatenate([persp, guess]).astype(np.float32)
@@ -252,9 +303,11 @@ def collect_vs_opponent(learner, opponent, n_games, base_seed, critic=None,
             elif kind == "attacker":
                 action = attacker_action(env.g, seat, mask, rng)
             else:                                          # "self": frozen policy + own belief
-                if use_belief:
+                if mode == "guesser" and opp_guesser is not None:
                     guess = _belief_guess(opp_guesser, persp, prev[seat], opp_dev)
                     prev[seat] = guess
+                elif mode == "bookkeeper":
+                    guess = bookkeeper_counts(env.g, seat)
                 else:
                     guess = zeros
                 ox = torch.as_tensor(np.concatenate([persp, guess]), dtype=torch.float32).unsqueeze(0).to(opp_dev)
@@ -267,14 +320,15 @@ def collect_vs_opponent(learner, opponent, n_games, base_seed, critic=None,
         # mislabel a decided game as winner=None.
         winner = env.winner
         _stamp_game(buf, start, winner,
-                    truncated=winner is None and env.g.result.get("status") == "ongoing")
+                    truncated=winner is None and env.g.result.get("status") == "ongoing",
+                    deckout=_deckout_ended(env.g))
     if critic is not None:
-        fill_critic_values(buf, critic)
+        fill_critic_values(buf, critic, view=critic_view)
     return buf
 
 
 def collect_games(belief_env, act_fn, n_games, base_seed, critic=None,
-                  max_decisions=2000) -> RolloutBuffer:
+                  max_decisions=2000, critic_view="god") -> RolloutBuffer:
     buf = RolloutBuffer()
     for gi in range(n_games):
         belief_env.reset(seed=base_seed + gi)
@@ -293,7 +347,9 @@ def collect_games(belief_env, act_fn, n_games, base_seed, critic=None,
             g = belief_env.g
             did = belief_env.decision_id
             if did != cache_id:                       # engine advanced -> fresh encode
-                cache_id, cache_god, cache_pub = did, encode_god(g), encode_public(g)
+                cache_id = did
+                cache_god = encode_god(g) if critic_view == "god" else _ZERO_GOD
+                cache_pub = encode_public(g)
                 god, pub = cache_god, cache_pub
             else:                                     # same frozen state (compound sub-step)
                 god, pub = cache_god.copy(), cache_pub.copy()
@@ -310,7 +366,8 @@ def collect_games(belief_env, act_fn, n_games, base_seed, critic=None,
             belief_env.step(action)
         winner = belief_env.winner            # scenario terminator result, or engine winner
         _stamp_game(buf, start, winner,
-                    truncated=winner is None and belief_env.g.result.get("status") == "ongoing")
+                    truncated=winner is None and belief_env.g.result.get("status") == "ongoing",
+                    deckout=_deckout_ended(belief_env.g))
     if critic is not None:
-        fill_critic_values(buf, critic)            # batched, off the per-decision path
+        fill_critic_values(buf, critic, view=critic_view)  # batched, off the hot path
     return buf

@@ -17,16 +17,27 @@ from fishrl.obs import vocab as V
 
 
 class BeliefAugmentedEnv:
-    def __init__(self, guesser, belief: bool = True, env=None, **env_kwargs):
+    def __init__(self, guesser, belief: bool = True, env=None, mode: str | None = None,
+                 **env_kwargs):
         # `env` lets a caller inject a pre-built FishAEC subclass (e.g. a scenario env);
         # default constructs a plain FishAEC so existing callers are unchanged.
+        # `mode` (Config.belief_mode) is the source of truth when given:
+        #   "guesser"    -> the learned channel (legacy; requires `guesser`)
+        #   "bookkeeper" -> the analytic hand-bookkeeper vector (stateless, no net)
+        #   "none"       -> zeros
+        # The legacy (guesser, belief) pair maps onto it for existing callers.
         self.env = env if env is not None else FishAEC(**env_kwargs)
         self.guesser = guesser
-        self.belief = belief          # when False, feed zeros for the belief channel
+        if mode is None:
+            mode = "guesser" if (belief and guesser is not None) else "none"
+        assert mode in ("guesser", "bookkeeper", "none"), mode
+        self.mode = mode
+        self.belief = mode != "none"  # legacy readers
         self.last_guess: dict[str, np.ndarray] = {}
         # The input the guesser consumed at each seat's latest observe() — i.e. the
         # carried PREVIOUS guess. The collector buffers this as the training-time
         # guesser input so training conditions on exactly what inference fed.
+        # (bookkeeper mode is stateless: both dicts stay zeros.)
         self.last_prev: dict[str, np.ndarray] = {}
 
     # ── delegated state ──────────────────────────────────────────────────────
@@ -82,6 +93,12 @@ class BeliefAugmentedEnv:
     def observe(self, agent: str) -> dict:
         base = self.env.observe(agent)
         persp = base["observation"]
+        if self.mode == "bookkeeper":             # analytic vector; stateless, no net
+            from fishrl.data.features import bookkeeper_counts
+            bk = bookkeeper_counts(self.env.g, agent)
+            self.last_prev[agent] = np.zeros(V.N_NAMES, dtype=np.float32)
+            return {"observation": np.concatenate([persp, bk]).astype(np.float32),
+                    "action_mask": base["action_mask"]}
         if not self.belief:                       # ablation: no belief, no guesser forward
             z = np.zeros(V.N_NAMES, dtype=np.float32)
             self.last_prev[agent] = z

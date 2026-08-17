@@ -25,7 +25,7 @@ import torch
 
 from fishrl.data.buffer import RolloutBuffer
 from fishrl.models import device_of
-from fishrl.models.estimators import PrivilegedCritic, PublicEstimator
+from fishrl.models.estimators import PrivilegedCritic, PublicEstimator, make_critic
 from fishrl.models.guesser import HandGuesser
 from fishrl.models.policy import MaskedActor
 from fishrl.train import checkpoint as ckpt
@@ -47,22 +47,36 @@ from fishrl.train.ppo import aux_update, ppo_update
 @dataclass
 class Models:
     actor: MaskedActor
-    critic: PrivilegedCritic
-    guesser: HandGuesser
-    public: PublicEstimator
+    critic: PrivilegedCritic          # or PublicCritic when cfg.critic_view == "public"
+    guesser: HandGuesser | None = None    # None in belief_mode="bookkeeper"/"none" runs
+    public: PublicEstimator | None = None  # None when the critic IS the public head
 
 
 NETS = ("actor", "critic", "guesser", "public")
 
 
+def _present_nets(m: Models):
+    """(name, net) for the nets this run actually has — the iteration every
+    state/snapshot/encoder helper uses so 4-net (legacy) and 2-net (v3) Models
+    both work."""
+    return [(n, getattr(m, n)) for n in NETS if getattr(m, n) is not None]
+
+
 def build_models(cfg: Config) -> Models:
     torch.manual_seed(cfg.seed)
     dev = cfg.device
+    guesser = public = None
+    if getattr(cfg, "has_guesser", True):
+        guesser = HandGuesser(cfg.head_hidden("guesser"), cfg.enc_for("guesser"),
+                              cfg.card_dim).to(dev)
+    if getattr(cfg, "has_public", True):
+        public = PublicEstimator(cfg.head_hidden("public"), cfg.enc_for("public"),
+                                 cfg.card_dim).to(dev)
     return Models(
         MaskedActor(cfg.head_hidden("actor"), cfg.enc_for("actor"), cfg.card_dim).to(dev),
-        PrivilegedCritic(cfg.head_hidden("critic"), cfg.enc_for("critic"), cfg.card_dim).to(dev),
-        HandGuesser(cfg.head_hidden("guesser"), cfg.enc_for("guesser"), cfg.card_dim).to(dev),
-        PublicEstimator(cfg.head_hidden("public"), cfg.enc_for("public"), cfg.card_dim).to(dev),
+        make_critic(getattr(cfg, "critic_view", "god"), cfg.head_hidden("critic"),
+                    cfg.enc_for("critic"), cfg.card_dim).to(dev),
+        guesser, public,
     )
 
 
@@ -78,24 +92,39 @@ def config_from_checkpoint(cd: dict, **overrides) -> Config:
 
     `overrides` win over the saved values -- for the RUNTIME knobs (device, iters,
     pool_frac, ...) that are not part of the saved architecture."""
-    per_net = {f"{n}_encoder": cd["encoders"][n] for n in NETS}
+    # v3 payloads carry only the nets they built in `encoders`; .get(n) leaves the
+    # per-net encoder at None for absent nets (enc_for then falls back to the base,
+    # which is harmless -- the net is never constructed).
+    per_net = {f"{n}_encoder": cd["encoders"].get(n) for n in NETS}
     ah = cd.get("actor_hidden")
-    return Config(
+    # Architecture-defining v3 keys, with legacy defaults so every pre-v3 checkpoint
+    # reconstructs unchanged: belief_mode falls back to the old use_belief bool,
+    # critic_view to "god". critic_deckout_aux is a RUNTIME knob (resume-tunable),
+    # carried here only as the checkpoint's last value; CLI overrides win.
+    belief_mode = cd.get("belief_mode",
+                         "guesser" if cd.get("use_belief", True) else "none")
+    kw = dict(
         seed=cd.get("seed", 0),
         use_belief=cd.get("use_belief", True),
+        belief_mode=belief_mode,
+        critic_view=cd.get("critic_view", "god"),
+        critic_deckout_aux=float(cd.get("critic_deckout_aux", 0.0)),
+        text_change_mode=cd.get("text_change_mode", "full"),
         hidden=tuple(cd.get("hidden", (256, 256))),
         actor_hidden=tuple(ah) if ah is not None else None,
         critic_hidden=tuple(cd.get("critic_hidden", (512, 512, 256))),
         card_dim=int(cd.get("card_dim", 64)),
-        **per_net, **overrides,
+        **per_net,
     )
+    kw.update(overrides)          # runtime knobs (and explicit CLI values) win
+    return Config(**kw)
 
 
 def _snapshot(m: Models) -> Models:
     """Frozen (eval-mode, grad-free) deep copy of the policy + guesser used as the
     'vs frozen self' anchor. Critic/public are copied along but unused by the panel."""
     s = copy.deepcopy(m)
-    for net in (s.actor, s.critic, s.guesser, s.public):
+    for _n, net in _present_nets(s):
         net.eval()
         for p in net.parameters():
             p.requires_grad_(False)
@@ -103,16 +132,28 @@ def _snapshot(m: Models) -> Models:
 
 
 def _encoders(cfg: Config) -> dict:
-    return {n: cfg.enc_for(n) for n in ("actor", "critic", "guesser", "public")}
+    """The checkpoint's architecture record: encoder per BUILT net only (a v3
+    payload simply has no guesser/public keys — the discriminator legacy loaders
+    key on via .get())."""
+    nets = ["actor", "critic"]
+    if getattr(cfg, "has_guesser", True):
+        nets.append("guesser")
+    if getattr(cfg, "has_public", True):
+        nets.append("public")
+    return {n: cfg.enc_for(n) for n in nets}
 
 
 def _model_state(m: Models) -> dict:
-    return {n: getattr(m, n).state_dict() for n in ("actor", "critic", "guesser", "public")}
+    return {n: net.state_dict() for n, net in _present_nets(m)}
 
 
 def _load_model_state(m: Models, state: dict) -> None:
-    for n in ("actor", "critic", "guesser", "public"):
-        getattr(m, n).load_state_dict(state[n])
+    # Present-net ∩ payload keys: a legacy 4-net payload loads into a legacy Models,
+    # a v3 2-net payload into a v3 Models; a legacy payload loaded by a v3 Models
+    # (or vice versa) is an architecture mismatch the resume guard rejects upstream.
+    for n, net in _present_nets(m):
+        if n in state:
+            net.load_state_dict(state[n])
 
 
 def _harvest_count(entry: list, game_winners: list, lseat: str) -> None:
@@ -165,12 +206,19 @@ def train(cfg: Config, models: Models | None = None, log=print,
     from fishrl.eval.metrics import estimator_metrics, guesser_mae, panel_winrates
     from fishrl.train.warmup import warmup
     from fishrl.data import features
-    features.set_public_encoding(cfg.train_public)   # off -> skip per-decision encode_public
+    from fishrl.spaces import masking
+    # Public encoding is ON iff the diagnostic wants it OR the critic eats it — the
+    # v3 landmine: with critic_view="public" a train_public=False gate would zero the
+    # critic's own food (fill_critic_values also hard-asserts against this).
+    features.set_public_encoding(cfg.train_public or cfg.critic_view == "public")
+    masking.set_text_change_mode(getattr(cfg, "text_change_mode", "full"))
     m = models or build_models(cfg)
 
     opt_ppo = torch.optim.Adam(list(m.actor.parameters()) + list(m.critic.parameters()), lr=cfg.lr_ppo)
-    opt_g = torch.optim.Adam(m.guesser.parameters(), lr=cfg.lr_guesser)
-    opt_p = torch.optim.Adam(m.public.parameters(), lr=cfg.lr_public)
+    opt_g = (torch.optim.Adam(m.guesser.parameters(), lr=cfg.lr_guesser)
+             if m.guesser is not None else None)
+    opt_p = (torch.optim.Adam(m.public.parameters(), lr=cfg.lr_public)
+             if m.public is not None else None)
 
     # Mutable run state (the resume-vs-warmup branch below sets the initial values). The
     # 'frozen self' anchor is the post-warmup policy, re-snapshot at every status report, so
@@ -180,7 +228,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
     elapsed_offset = 0.0           # cumulative training seconds carried across restarts
     frozen: Models | None = None
     KEYS = ("policy_loss", "critic_loss", "entropy", "approx_kl", "clip_frac",
-            "guesser_loss", "public_loss")
+            "guesser_loss", "public_loss", "deckout_aux_loss")
     acc = {k: 0.0 for k in KEYS}
     win_iters = win_T = 0
     # Per-window game/health telemetry (reset each report alongside the loss means):
@@ -272,12 +320,16 @@ def train(cfg: Config, models: Models | None = None, log=print,
                        "hidden": list(cfg.hidden),
                        "actor_hidden": (list(cfg.actor_hidden)
                                         if cfg.actor_hidden is not None else None),
-                       "card_dim": cfg.card_dim},
+                       "card_dim": cfg.card_dim,
+                       "belief_mode": cfg.belief_mode, "critic_view": cfg.critic_view,
+                       "critic_deckout_aux": cfg.critic_deckout_aux,
+                       "text_change_mode": cfg.text_change_mode},
             "done": done, "elapsed": total_elapsed(), "frozen_it": frozen_it,
             "warmup_done": True,
             "models": _model_state(m), "frozen": _model_state(frozen),
-            "optim": {"ppo": opt_ppo.state_dict(), "g": opt_g.state_dict(),
-                      "p": opt_p.state_dict()},
+            "optim": {"ppo": opt_ppo.state_dict(),
+                      **({"g": opt_g.state_dict()} if opt_g is not None else {}),
+                      **({"p": opt_p.state_dict()} if opt_p is not None else {})},
             "rng": _rng_state(cfg.device),
             # League continuity across restarts: member EMAs + the past-self ring.
             # Absent in pre-persistence checkpoints (resume tolerates that).
@@ -310,7 +362,9 @@ def train(cfg: Config, models: Models | None = None, log=print,
         est = estimator_metrics(m, last_batch) if last_batch is not None else {}
         if not cfg.train_public:                         # pub head disabled -> its calib is meaningless
             est = {k: v for k, v in est.items() if not k.startswith("pub_")}
-        gmae = guesser_mae(m, last_batch) if last_batch is not None else float("nan")
+        gmae = (guesser_mae(m, last_batch)
+                if (last_batch is not None and m.guesser is not None) else float("nan"))
+        v3 = cfg.critic_view == "public"
         eval_s = time.perf_counter() - t0
         dt_h = max(now - last_report, 1e-9) / 3600.0
         nan = float("nan")
@@ -346,21 +400,34 @@ def train(cfg: Config, models: Models | None = None, log=print,
         fdec = (gwin["forced_steps"] / win_T) if win_T else nan
         wall = gwin["collect_s"] + gwin["update_s"]
         collect_frac = (gwin["collect_s"] / wall) if wall > 0 else nan
-        brier_gap = (est["pub_brier"] - est["priv_brier"]) if "priv_brier" in est else nan
+        brier_gap = (est["pub_brier"] - est["priv_brier"]) if "pub_brier" in est else nan
         game_str = (
             f" | games={games} len={len_full:.1f} slen={len_scen:.1f} "
             f"trunc={trunc_rate:.2f} draw={draw_rate:.2f} "
             f"seat_p1={seat_p1:.2f} fdec={fdec:.2f} | wall collect={collect_frac:.2f}"
         )
+        if v3:
+            # v3 status format: no guesser/public tokens; one critic calib group +
+            # the parity-aux loss. Parsed by backfill_stats' both-era regex.
+            calib_str = (
+                f"calib critic(acc={est.get('critic_acc', nan):.2f},"
+                f"brier={est.get('critic_brier', nan):.2f}) "
+                f"aux={mean.get('deckout_aux_loss', nan):.3f}"
+            )
+            head_str = ""
+        else:
+            calib_str = (
+                f"calib priv(acc={est.get('priv_acc', nan):.2f},brier={est.get('priv_brier', nan):.2f}) "
+                f"pub(acc={est.get('pub_acc', nan):.2f},brier={est.get('pub_brier', nan):.2f}) "
+                f"gap={brier_gap:.2f} gmae={gmae:.2f}"
+            )
+            head_str = f"guess={mean['guesser_loss']:.3f} pub={mean['public_loss']:.3f} "
         log(
             f"[status {tag} it={done} (+{win_iters}, {win_iters / dt_h:.1f}/h) T={win_T}] "
             f"pi={mean['policy_loss']:.3f} V={mean['critic_loss']:.3f} "
             f"H={mean['entropy']:.3f} kl={mean['approx_kl']:.4f} "
             f"clip={mean['clip_frac']:.2f} "
-            f"guess={mean['guesser_loss']:.3f} pub={mean['public_loss']:.3f} | "
-            f"calib priv(acc={est.get('priv_acc', nan):.2f},brier={est.get('priv_brier', nan):.2f}) "
-            f"pub(acc={est.get('pub_acc', nan):.2f},brier={est.get('pub_brier', nan):.2f}) "
-            f"gap={brier_gap:.2f} gmae={gmae:.2f}" + opp_str + game_str + wr_str
+            + head_str + "| " + calib_str + opp_str + game_str + wr_str
         )
         # Per-scenario curriculum members (carve-out league or the main league's
         # scenario anchors) — feeds both the stats.json report and the [scenario]
@@ -388,10 +455,15 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 "iters": win_iters, "iters_per_h": win_iters / dt_h, "transitions": win_T,
                 "policy_loss": mean["policy_loss"], "critic_loss": mean["critic_loss"],
                 "entropy": mean["entropy"], "approx_kl": mean["approx_kl"],
-                "guesser_loss": mean["guesser_loss"], "public_loss": mean["public_loss"],
-                "priv_acc": est.get("priv_acc"), "pub_acc": est.get("pub_acc"),
-                "priv_brier": est.get("priv_brier"), "pub_brier": est.get("pub_brier"),
-                "brier_gap": brier_gap, "gmae": gmae,
+                # Era-keyed calibration block: v3 rows carry critic_* (+ the parity-aux
+                # loss); legacy rows keep the historic guesser/priv/pub/gmae fields.
+                **({"critic_acc": est.get("critic_acc"),
+                    "critic_brier": est.get("critic_brier"),
+                    "deckout_aux_loss": mean.get("deckout_aux_loss")} if v3 else
+                   {"guesser_loss": mean["guesser_loss"], "public_loss": mean["public_loss"],
+                    "priv_acc": est.get("priv_acc"), "pub_acc": est.get("pub_acc"),
+                    "priv_brier": est.get("priv_brier"), "pub_brier": est.get("pub_brier"),
+                    "brier_gap": brier_gap, "gmae": gmae}),
                 "clip_frac": mean["clip_frac"],
                 # window game telemetry (NaN -> null via the sanitizer below)
                 "games": games, "dec_per_game": len_full, "scen_dec_per_game": len_scen,
@@ -555,11 +627,13 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     "rebuild models with the saved encoders before resuming")
             _load_model_state(m, payload["models"])
             opt_ppo.load_state_dict(payload["optim"]["ppo"])
-            opt_g.load_state_dict(payload["optim"]["g"])
-            opt_p.load_state_dict(payload["optim"]["p"])
+            if opt_g is not None and "g" in payload["optim"]:
+                opt_g.load_state_dict(payload["optim"]["g"])
+            if opt_p is not None and "p" in payload["optim"]:
+                opt_p.load_state_dict(payload["optim"]["p"])
             frozen = copy.deepcopy(m)
             _load_model_state(frozen, payload["frozen"])
-            for net in (frozen.actor, frozen.critic, frozen.guesser, frozen.public):
+            for _n, net in _present_nets(frozen):
                 net.eval()
                 for p in net.parameters():
                     p.requires_grad_(False)
@@ -571,11 +645,14 @@ def train(cfg: Config, models: Models | None = None, log=print,
             # checkpoints carry no league keys -> fresh leagues, the old behaviour.
             def _opponent_nets():
                 # Past-self opponents must match the LEARNER's actor/guesser shapes
-                # (head widths + card_dim), or their saved weights won't load.
+                # (head widths + card_dim), or their saved weights won't load. In
+                # bookkeeper/none belief modes there is no guesser to rebuild.
                 actor = MaskedActor(cfg.head_hidden("actor"), cfg.enc_for("actor"),
                                     cfg.card_dim).to(cfg.device)
-                guesser = HandGuesser(cfg.head_hidden("guesser"), cfg.enc_for("guesser"),
-                                      cfg.card_dim).to(cfg.device)
+                guesser = None
+                if cfg.has_guesser:
+                    guesser = HandGuesser(cfg.head_hidden("guesser"), cfg.enc_for("guesser"),
+                                          cfg.card_dim).to(cfg.device)
                 return actor, guesser
             if payload.get("league"):
                 league.load_state_dict(payload["league"], make_nets=_opponent_nets)
@@ -609,7 +686,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
             log(f"[handoff] actor FROZEN until it={cfg.freeze_actor_iters} "
                 f"(critic-only warmup)")
 
-        benv = BeliefAugmentedEnv(m.guesser, belief=cfg.use_belief, max_decisions=cfg.max_decisions)
+        benv = BeliefAugmentedEnv(m.guesser, mode=cfg.belief_mode,
+                                  max_decisions=cfg.max_decisions)
 
         def _split_games() -> tuple:
             """(n_self, n_pool, n_scen) for one iteration -- pure cfg, shared by the
@@ -750,7 +828,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     buf.merge(gbuf)
             else:
                 buf = collect_games(benv, actor_act_fn(m.actor), n_self, seed,
-                                    critic=None, max_decisions=cfg.max_decisions)
+                                    critic=None, max_decisions=cfg.max_decisions,
+                                    critic_view=cfg.critic_view)
                 opp_mix["self"] += n_self                       # mirror self-play games this iter
                 # Mirror seat balance: decided mirror games only (buf holds ONLY the
                 # self-play games at this point). Drift from 0.5 = seat exploitation.
@@ -763,7 +842,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     if member is None:                          # empty league -> mirror fallback
                         opp_mix["self"] += 1
                         gbuf = collect_games(benv, actor_act_fn(m.actor), 1, oseed,
-                                             critic=None, max_decisions=cfg.max_decisions)
+                                             critic=None, max_decisions=cfg.max_decisions,
+                                             critic_view=cfg.critic_view)
                         gwin["mirror_dec"] += sum(1 for w in gbuf.games if w in ("p1", "p2"))
                         gwin["mirror_p1"] += sum(1 for w in gbuf.games if w == "p1")
                         buf.merge(gbuf)
@@ -772,11 +852,12 @@ def train(cfg: Config, models: Models | None = None, log=print,
                         from fishrl.train.scenarios import ScenarioEnv, get_scenario
                         lseat = "p1"                            # learner is p1, p2 the engine bot
                         senv = BeliefAugmentedEnv(
-                            m.guesser, belief=cfg.use_belief,
+                            m.guesser, mode=cfg.belief_mode,
                             env=ScenarioEnv(get_scenario(member.name),
                                             max_decisions=cfg.max_decisions))
                         gbuf = collect_games(senv, actor_act_fn(m.actor), 1, oseed,
-                                             critic=None, max_decisions=cfg.max_decisions)
+                                             critic=None, max_decisions=cfg.max_decisions,
+                                             critic_view=cfg.critic_view)
                         # scenario accounting, NOT opp_mix: the [league] paren counts and
                         # mix_total stay scenario-free (same telemetry as carve-out mode)
                         scen_mix[member.name] = scen_mix.get(member.name, 0) + 1
@@ -790,15 +871,18 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     if member.kind.startswith("heuristic"):     # engine-driven -> learner is p1
                         lseat = "p1"                            # (kind doubles as the ai_profile)
                         gbuf = collect_heuristic_games(m.guesser, m.actor, 1, oseed,
-                                                       critic=None, use_belief=cfg.use_belief,
+                                                       critic=None,
+                                                       belief_mode=cfg.belief_mode,
                                                        max_decisions=cfg.max_decisions,
-                                                       profile=member.kind)
+                                                       profile=member.kind,
+                                                       critic_view=cfg.critic_view)
                     else:                                       # scripted / past-self, seat-balanced
                         lseat = "p1" if pidx % 2 == 0 else "p2"
                         gbuf = collect_vs_opponent(m, member, 1, oseed, critic=None,
-                                                   use_belief=cfg.use_belief,
+                                                   belief_mode=cfg.belief_mode,
                                                    max_decisions=cfg.max_decisions,
-                                                   learner_seat=lseat)
+                                                   learner_seat=lseat,
+                                                   critic_view=cfg.critic_view)
                     # Update the member's learner win-rate from the recorded game result —
                     # buf.games counts a game even when the learner never got a decision
                     # (losing before your first priority is still a loss; skipping those
@@ -818,11 +902,12 @@ def train(cfg: Config, models: Models | None = None, log=print,
                         member = scen_league.sample(scn_rng)    # PFSP over scenarios by difficulty
                         sname = member.name
                         senv = BeliefAugmentedEnv(
-                            m.guesser, belief=cfg.use_belief,
+                            m.guesser, mode=cfg.belief_mode,
                             env=ScenarioEnv(get_scenario(sname), max_decisions=cfg.max_decisions))
                         sseed = cfg.seed + 300_000 + done * cfg.games_per_iter + sidx * 31
                         sbuf = collect_games(senv, actor_act_fn(m.actor), 1, sseed,
-                                             critic=None, max_decisions=cfg.max_decisions)
+                                             critic=None, max_decisions=cfg.max_decisions,
+                                             critic_view=cfg.critic_view)
                         gwin["scen_games"] += 1
                         gwin["scen_T"] += len(sbuf.steps)       # scenario episode lengths
                         buf.merge(sbuf)
@@ -831,7 +916,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                         # the learner never got a decision before it ended
                         if sbuf.games and sbuf.games[-1] in ("p1", "p2"):
                             scen_league.update(member, sbuf.games[-1] == "p1")
-            fill_critic_values(buf, m.critic)
+            fill_critic_values(buf, m.critic, view=cfg.critic_view)
             # Window game telemetry from the merged buffer: how games ended (buf.meta),
             # forced-decision dilution (1-legal-action steps), collect wall-clock.
             gwin["games"] += len(buf.games)
@@ -859,11 +944,15 @@ def train(cfg: Config, models: Models | None = None, log=print,
             ppo_stats = ppo_update(batch, m.actor, m.critic, opt_ppo, cfg, ent, rng_seed=done,
                                    ref_actor=teacher_ref, kl_ref_coef=kl_now,
                                    train_actor=not freeze)
-            aux_stats = aux_update(batch, m.guesser, m.public, opt_g, opt_p, cfg.aux_steps,
-                                   train_public=cfg.train_public)
+            if m.guesser is not None or (m.public is not None and cfg.train_public):
+                aux_stats = aux_update(batch, m.guesser, m.public, opt_g, opt_p,
+                                       cfg.aux_steps, train_public=cfg.train_public)
+            else:                          # v3: no supervised aux heads exist
+                aux_stats = {"guesser_loss": 0.0, "public_loss": float("nan")}
             iter_update_s = time.perf_counter() - t_update
             gwin["update_s"] += iter_update_s
-            for k in ("policy_loss", "critic_loss", "entropy", "approx_kl", "clip_frac"):
+            for k in ("policy_loss", "critic_loss", "entropy", "approx_kl", "clip_frac",
+                      "deckout_aux_loss"):
                 acc[k] += ppo_stats[k]
             acc["guesser_loss"] += aux_stats["guesser_loss"]
             acc["public_loss"] += aux_stats["public_loss"]

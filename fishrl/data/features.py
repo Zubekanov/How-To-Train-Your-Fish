@@ -57,6 +57,71 @@ def opponent_hand_counts(g, viewer: str) -> np.ndarray:
     return counts
 
 
+def _name_counts_into(g, iids, out: np.ndarray) -> None:
+    obj = g.objects
+    for iid in iids:
+        o = obj.get(iid)
+        if o is None:
+            continue
+        idx = V.NAME_INDEX.get(o.name)
+        if idx is not None:
+            out[idx] += 1.0
+
+
+def bookkeeper_counts(g, viewer: str) -> np.ndarray:
+    """The analytic hand bookkeeper: per-name EXPECTED counts of the opponent's hand,
+    computed purely from what `viewer` can see (belief_mode="bookkeeper"'s fill for the
+    actor's 20-dim belief slot — the zero-parameter replacement for the HandGuesser).
+
+    Formula (the Guesser Deposition's "perfect bookkeeper"):
+        known + (handn - known_total) * remaining / remaining_total
+    where, per card name,
+      * known      = opponent hand cards the viewer has been shown (known_by),
+      * remaining  = deck copies - visible - known, with visible = every card whose
+                     identity the viewer can see AND that cannot be in the opponent's
+                     hand (own hand, both battlefields, graveyard, exile, stack
+                     sources, viewer-known library slots),
+      * handn      = the opponent's public hand size.
+    remaining is non-negative by construction (each physical card is counted once and
+    `visible` excludes the opponent's hand). If the viewer accounts for every unseen
+    card (remaining_total == 0) the proportional term is zero and the output is
+    exactly `known`."""
+    opp = "p2" if viewer == "p1" else "p1"
+    copies = getattr(g, "_bk_copies", None)
+    if copies is None:                      # per-game cache; plain attr, not serialized
+        copies = np.zeros(V.N_NAMES, dtype=np.float32)
+        for o in g.objects.values():
+            idx = V.NAME_INDEX.get(o.name)
+            if idx is not None:
+                copies[idx] += 1.0
+        g._bk_copies = copies
+    known = np.zeros(V.N_NAMES, dtype=np.float32)
+    visible = np.zeros(V.N_NAMES, dtype=np.float32)
+    obj = g.objects
+    for iid in g.players[opp].hand:
+        o = obj.get(iid)
+        if o is not None and viewer in (o.known_by or []):
+            idx = V.NAME_INDEX.get(o.name)
+            if idx is not None:
+                known[idx] += 1.0
+    _name_counts_into(g, g.players[viewer].hand, visible)
+    for pid in ("p1", "p2"):
+        _name_counts_into(g, g.players[pid].battlefield, visible)
+    _name_counts_into(g, g.graveyard, visible)
+    _name_counts_into(g, g.exile, visible)
+    _name_counts_into(g, (s.source_instance_id for s in g.stack), visible)
+    _name_counts_into(g, (s.instance_id for s in g.library
+                          if s.known_by.get(viewer)), visible)
+    fill = len(g.players[opp].hand) - float(known.sum())
+    if fill <= 0.0:
+        return known
+    remaining = np.maximum(copies - visible - known, 0.0)
+    rtot = float(remaining.sum())
+    if rtot <= 0.0:
+        return known
+    return (known + fill * remaining / rtot).astype(np.float32)
+
+
 def _player_scalars(life, hand_count, bf_cards, pool, mulligans, has_lost) -> list:
     lands = [c for c in bf_cards if "land" in (c.get("type_line") or "").lower()]
     out = [life / 20.0, hand_count / 12.0, len(lands) / 20.0,

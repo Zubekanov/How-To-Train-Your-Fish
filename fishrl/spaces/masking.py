@@ -23,6 +23,8 @@ refines play/cycle/ability timing for the viewer); decision legality is read fro
 """
 from __future__ import annotations
 
+import re
+
 import numpy as np
 
 from fishrl.forgetful_fish import engine as E
@@ -30,6 +32,27 @@ from fishrl.forgetful_fish.state import (
     CYCLING, PERMANENT_ABILITIES, MODAL_SPELLS, _is_land, current_view, land_mana_color,
 )
 from fishrl.spaces import action_space as A
+
+# ── choose_text_change action-space treatment (Config.text_change_mode) ──────────
+# "full"   -- the legacy 25-way from->to block (minus the no-op diagonal).
+# "guided" -- {EFFECT, NO-OP}: the type actually written on the targeted card ->
+#             a type absent from the target's controller's permanents, plus one
+#             provably-inert pair (decline). Collapses a 5x5 space the policy had
+#             to learn from +-1 terminal reward into the 2-way choice that is all
+#             the game semantics actually offer.
+# "auto"   -- {EFFECT} alone: a forced decision the collector's single-legal-action
+#             fast path plays with no policy forward (auto-resolve).
+# Process-global, set once from Config at trainer/worker/panel init (the
+# features.set_public_encoding pattern). Guided masking only ever SHRINKS the legal
+# set; on any state it cannot analyse it falls back to the full mask.
+_TEXT_CHANGE_MODE = "full"
+_BASIC_WORD = {b: re.compile(rf"\b{b}\b") for b in A.BASICS}
+
+
+def set_text_change_mode(mode: str) -> None:
+    global _TEXT_CHANGE_MODE
+    assert mode in ("full", "guided", "auto"), mode
+    _TEXT_CHANGE_MODE = mode
 
 
 def atomic_mask(g, viewer: str) -> np.ndarray:
@@ -55,10 +78,7 @@ def atomic_mask(g, viewer: str) -> np.ndarray:
         m[A.aid("FOF_CHOOSE", 0)] = 1
         m[A.aid("FOF_CHOOSE", 1)] = 1
     elif t == "choose_text_change":
-        for li in range(len(A.BASICS) * len(A.BASICS)):
-            frm, to = A.text_change_pair(li)
-            if frm != to:
-                m[A.aid("TEXT_CHANGE", li)] = 1
+        _text_change_mask(g, ctx, m)
     elif t == "choose_targets":
         legal = ctx.get("legal", [])
         for k in range(min(len(legal), A.PICK_K)):
@@ -83,6 +103,83 @@ def _single_pick_mask(items, m, *, allow_none: bool) -> None:
         m[A.aid("PICK_SINGLE", k)] = 1
     if allow_none:
         m[A.aid("PICK_NONE")] = 1
+
+
+def _full_text_change_mask(ctx: dict, m) -> None:
+    """The legacy mask: every from!=to pair the engine will accept."""
+    from_types = ctx.get("from_types") or list(A.BASICS)
+    to_types = ctx.get("to_types") or list(A.BASICS)
+    for li in range(len(A.BASICS) * len(A.BASICS)):
+        frm, to = A.text_change_pair(li)
+        if frm != to and frm in from_types and to in to_types:
+            m[A.aid("TEXT_CHANGE", li)] = 1
+
+
+def _guided_text_change(g, ctx: dict):
+    """(effect_id, noop_id) for the guided/auto modes, or (None, None) to fall back.
+
+    EFFECT = (frm, to) where `frm` is the basic-type word actually written on the
+    change targets (the pool's cards only ever carry one) and `to` is the first
+    canonical type ABSENT from the targets' controller's permanents — the pair that
+    severs the "control an Island" linkage (Dandân's sacrifice clause, islandwalk).
+    NO-OP = a from-type present in the engine's from_types but written on none of the
+    targets: the rewrite provably matches nothing. Both ids are ordinary
+    TEXT_CHANGE[5*frm+to] actions the engine accepts, so the mask contract holds."""
+    targets = [g.objects[iid] for iid in ctx.get("change_targets", []) if iid in g.objects]
+    if not targets:
+        return None, None
+    from_types = ctx.get("from_types") or list(A.BASICS)
+    to_types = ctx.get("to_types") or list(A.BASICS)
+
+    def written_on(o, b: str) -> bool:
+        pat = _BASIC_WORD[b]
+        return bool(pat.search(o.type_line or "") or pat.search(o.oracle_text or ""))
+
+    # frm: the basic type written on the most targets (ties break in canonical order)
+    frm = best_n = None
+    for b in A.BASICS:
+        if b not in from_types:
+            continue
+        n = sum(1 for o in targets if written_on(o, b))
+        if n > 0 and (best_n is None or n > best_n):
+            frm, best_n = b, n
+    if frm is None:
+        return None, None                       # nothing the rewrite could touch
+
+    controller = targets[0].controller or ""
+    if controller not in g.players:
+        return None, None
+    ctrl_bf = [g.objects[iid] for iid in g.players[controller].battlefield
+               if iid in g.objects]
+    to = next((b for b in A.BASICS
+               if b != frm and b in to_types
+               and not any(_BASIC_WORD[b].search(o.type_line or "") for o in ctrl_bf)),
+              None)
+    if to is None:
+        return None, None                       # controller covers all types (not this pool)
+    effect = A.aid("TEXT_CHANGE", A.BASICS.index(frm) * len(A.BASICS) + A.BASICS.index(to))
+
+    noop_frm = next((b for b in A.BASICS
+                     if b in from_types and not any(written_on(o, b) for o in targets)),
+                    None)
+    noop = None
+    if noop_frm is not None:
+        noop_to = next((b for b in A.BASICS if b != noop_frm and b in to_types), None)
+        if noop_to is not None:
+            noop = A.aid("TEXT_CHANGE",
+                         A.BASICS.index(noop_frm) * len(A.BASICS) + A.BASICS.index(noop_to))
+    return effect, noop
+
+
+def _text_change_mask(g, ctx: dict, m) -> None:
+    if _TEXT_CHANGE_MODE != "full":
+        effect, noop = _guided_text_change(g, ctx)
+        if effect is not None:
+            m[effect] = 1
+            if _TEXT_CHANGE_MODE == "guided" and noop is not None:
+                m[noop] = 1
+            return                              # guided/auto: the reduced set
+    _full_text_change_mask(ctx, m)              # legacy, and the guided fallback
 
 
 # ── mana availability ─────────────────────────────────────────────────────────

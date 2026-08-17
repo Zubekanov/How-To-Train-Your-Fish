@@ -46,3 +46,36 @@ class PrivilegedCritic(_OutcomeHead):
 class PublicEstimator(_OutcomeHead):
     def __init__(self, hidden=(256, 256), encoder: str = "flat", card_dim: int = 64):
         super().__init__(PUB_DIM, PUB_SLOTS, hidden, encoder, card_dim)
+
+
+class PublicCritic(_OutcomeHead):
+    """v3 PPO critic (critic_view="public"): the same outcome head over MUTUAL-KNOWLEDGE
+    features. Measured basis (2026-08-17 audits): the god head's Brier edge over public
+    has depreciated to ~0, so the asymmetric critic no longer buys lower-variance
+    advantages — while its god encode + wider input cost real collection time.
+
+    Carries a second 1-logit head over the same encoded features predicting the
+    DECKOUT winner (parity credit — both audits' #1 lever: the critic moved only
+    |ΔP|≈0.02 on a parity flip that near-decides deckout endgames, so GAE could not
+    credit the draws that flip the clock). The head ALWAYS exists in this class so the
+    loss weight (Config.critic_deckout_aux) is resume-tunable without state_dict
+    surgery; at weight 0 it contributes no gradient."""
+
+    def __init__(self, hidden=(512, 512, 256), encoder: str = "entity", card_dim: int = 64):
+        super().__init__(PUB_DIM, PUB_SLOTS, hidden, encoder, card_dim)
+        in_dim = self.enc.enc_dim if self.enc is not None else PUB_DIM
+        self.aux_head = nn.Linear(in_dim, 1)
+
+    def forward_with_aux(self, x: torch.Tensor):
+        if self.enc is not None:
+            x = self.enc(x)
+        return self.net(x).squeeze(-1), self.aux_head(x).squeeze(-1)
+
+
+def make_critic(view: str, hidden=(512, 512, 256), encoder: str = "flat",
+                card_dim: int = 64):
+    """The PPO critic for a Config.critic_view: "god" -> PrivilegedCritic (legacy),
+    "public" -> PublicCritic (+deckout aux head)."""
+    if view == "public":
+        return PublicCritic(hidden, encoder, card_dim)
+    return PrivilegedCritic(hidden, encoder, card_dim)

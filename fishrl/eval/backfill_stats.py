@@ -34,11 +34,16 @@ _STATUS = re.compile(
     r"(?P<iph>[\d.]+)/h\)\s+T=(?P<T>\d+)\]\s+"
     r"pi=(?P<pi>[-\d.naif]+)\s+V=(?P<V>[-\d.naif]+)\s+H=(?P<H>[-\d.naif]+)\s+kl=(?P<kl>[-\d.naif]+)\s+"
     r"(?:clip=(?P<clip>[-\d.naif]+)\s+)?"                       # newer lines only
-    r"guess=(?P<guess>[-\d.naif]+)\s+pub=(?P<pub>[-\d.naif]+)\s+\|\s+calib\s+"
-    r"priv\(acc=(?P<pacc>[-\d.naif]+),brier=(?P<pbri>[-\d.naif]+)\)\s+"
+    # ── legacy calib block (guesser + priv/pub estimators); every token optional so
+    #    the ONE regex parses both eras — a v3 line simply leaves these groups None ──
+    r"(?:guess=(?P<guess>[-\d.naif]+)\s+pub=(?P<pub>[-\d.naif]+)\s+)?\|\s+calib\s+"
+    r"(?:priv\(acc=(?P<pacc>[-\d.naif]+),brier=(?P<pbri>[-\d.naif]+)\)\s+"
     r"pub\(acc=(?P<uacc>[-\d.naif]+),brier=(?P<ubri>[-\d.naif]+)\)\s+"
-    r"(?:gap=(?P<gap>[-\d.naif]+)\s+)?"                         # newer lines only
-    r"gmae=(?P<gmae>[-\d.naif]+)")
+    r"(?:gap=(?P<gap>[-\d.naif]+)\s+)?"                         # newer legacy lines only
+    r"gmae=(?P<gmae>[-\d.naif]+)"
+    # ── v3 calib block: one critic + the parity-aux loss ──
+    r"|critic\(acc=(?P<cacc>[-\d.naif]+),brier=(?P<cbri>[-\d.naif]+)\)\s+"
+    r"aux=(?P<caux>[-\d.naif]+))")
 
 # Window game-telemetry tail of a newer `[status ...]` line:
 #   `| games=128 len=38.2 slen=14.1 trunc=0.05 draw=0.01
@@ -203,13 +208,20 @@ def parse_status(lines, league=None) -> tuple:
             "transitions": int(m.group("T")),
             "policy_loss": _f(m.group("pi")), "critic_loss": _f(m.group("V")),
             "entropy": _f(m.group("H")), "approx_kl": _f(m.group("kl")),
-            "guesser_loss": _f(m.group("guess")), "public_loss": _f(m.group("pub")),
-            "priv_acc": _f(m.group("pacc")), "pub_acc": _f(m.group("uacc")),
-            "priv_brier": _f(m.group("pbri")), "pub_brier": _f(m.group("ubri")),
-            "brier_gap": _f(m.group("gap")), "gmae": _f(m.group("gmae")),
             "clip_frac": _f(m.group("clip")),
             "opp_trained": _f(o.group("opp")) if o else None,
         }
+        if m.group("cacc") is not None:                  # v3-era line: one critic + aux
+            rec.update({"critic_acc": _f(m.group("cacc")),
+                        "critic_brier": _f(m.group("cbri")),
+                        "deckout_aux_loss": _f(m.group("caux"))})
+        else:                                            # legacy line: guesser + priv/pub
+            rec.update({
+                "guesser_loss": _f(m.group("guess")), "public_loss": _f(m.group("pub")),
+                "priv_acc": _f(m.group("pacc")), "pub_acc": _f(m.group("uacc")),
+                "priv_brier": _f(m.group("pbri")), "pub_brier": _f(m.group("ubri")),
+                "brier_gap": _f(m.group("gap")), "gmae": _f(m.group("gmae")),
+            })
         gt = _GAME_TELEM.search(line)
         if gt:                                           # newer lines: window game telemetry
             rec.update({

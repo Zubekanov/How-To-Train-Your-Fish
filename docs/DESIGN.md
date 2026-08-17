@@ -795,6 +795,45 @@ Read this section before plotting anything.
 <a name="part-5"></a>
 ## Part 5 — The current run
 
+> **v3 addendum (2026-08-17).** The run described below (`checkpoints-v2`) is now the
+> PRESERVED previous lineage; the active run is **`checkpoints-v3`**, restarted after two
+> independent audits ("The Dandân Audit", "The Guesser Deposition") measured both
+> privileged-information consumers as no longer paying for themselves. What changed:
+>
+> - **`belief_mode="bookkeeper"`** — the HandGuesser is GONE (no net). The actor's 20-dim
+>   belief slot carries the analytic hand bookkeeper (`features.bookkeeper_counts`): known
+>   opponent cards + unseen-pool proportions × public hand size. Measured: the guesser's
+>   learned edge over this was 0.026 nats (11% of headroom), decaying to ~0.005 by the
+>   endgame, while its forward cost ~32% of collection.
+> - **`critic_view="public"`** — the PPO critic (`PublicCritic`) reads the PUBLIC encoding;
+>   the god encode is off the hot path and the separate PublicEstimator no longer exists.
+>   §1.5's asymmetric-critic rationale and §3.2's `brier_gap` therefore describe the
+>   pre-v3 stack; measured 2026-08-17, the privileged head's Brier edge had depreciated
+>   to ~0 (0.202 vs 0.197 on fresh mirror play).
+> - **`critic_deckout_aux`** — the public critic carries a deckout-winner auxiliary head
+>   trained on empty-library-draw-ended games (the parity-credit lever; §2.4's PBRS
+>   proposal re-scoped: the 2026-08-17 ablation showed the ACTOR now uses the clock —
+>   deckout-scenario wr 0.380 with it / 0.164 zeroed / 0.080 inverted — while the critic
+>   still underweighted parity).
+> - **`text_change_mode="guided"`** — the 5×5 `choose_text_change` block is masked down to
+>   {EFFECT, NO-OP} (`spaces.masking`): the type written on the targeted card → a type
+>   absent from its controller's permanents, plus one provably-inert pair. `auto` masks to
+>   {EFFECT} alone (played by the forced-decision fast path). `A.N` is unchanged.
+> - **Warm start** — the v3 actor initializes from `checkpoints-v2/best.pt` via
+>   `fishrl.train.bootstrap_v3` (shapes identical; the belief slot keeps its width), with
+>   a freeze-actor phase + KL-to-teacher anneal + lowered `--ent-start` in `train.args`.
+> - **Telemetry**: v3 report rows carry `critic_acc`/`critic_brier`/`deckout_aux_loss`
+>   instead of `guesser_loss`/`public_loss`/`priv_*`/`pub_*`/`brier_gap`/`gmae`; the
+>   `[status]` line prints `calib critic(acc=…,brier=…) aux=…`; `backfill_stats` parses
+>   both eras. Historical NOTE: `gmae` was never anchored (an all-zeros predictor scores
+>   0.203 vs the guesser's 0.207) and `choose_first_frac` was pinned at 0.0 by a bug
+>   until 2026-08-17 (`fc3d9eb`).
+>
+> Legacy checkpoints (v1/v2/bc) load everywhere via `config_from_checkpoint`'s
+> era-defaulting; `critic_watch`/`ab_encoder`/`guesser_eval`/`belief_sensitivity`/
+> `actor_headtohead`/`probe_knowledge` are legacy-only tools and refuse v3 payloads with
+> a clear error.
+
 `checkpoints-v2`, launched from `deploy/train.args`:
 
 ```

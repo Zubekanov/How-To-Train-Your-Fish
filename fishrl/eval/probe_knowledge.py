@@ -230,6 +230,10 @@ def main():
     cfg = config_from_checkpoint(cd)
     m = build_models(cfg)
     _load_model_state(m, pl["models"])
+    if m.guesser is None or m.public is None:
+        raise SystemExit("this tool interrogates the legacy guesser/public nets; "
+                         "the given checkpoint is a v3 (bookkeeper/public-critic) "
+                         "payload -- point it at a v1/v2 lineage instead")
     for net in (m.actor, m.guesser):
         net.eval()
     print(f"[probe] {args.ckpt}: iter={pl.get('done')} elapsed={pl.get('elapsed', 0)/3600:.0f}h "

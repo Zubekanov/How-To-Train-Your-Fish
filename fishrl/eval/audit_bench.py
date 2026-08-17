@@ -37,6 +37,10 @@ def build(ckpt_path: str):
     cfg = config_from_checkpoint(pl["config"])
     m = build_models(cfg)
     _load_model_state(m, pl["models"])
+    if m.guesser is None or m.public is None:
+        raise SystemExit("this tool interrogates the legacy guesser/public nets; "
+                         "the given checkpoint is a v3 (bookkeeper/public-critic) "
+                         "payload -- point it at a v1/v2 lineage instead")
     return m, pl
 
 

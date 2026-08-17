@@ -29,9 +29,19 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0,
         critic warms up against a freshly-cloned policy.
       * ``ref_actor`` + ``kl_ref_coef`` — adds ``kl_ref_coef * KL(ref || pi)``
         to the loss, anchoring early fine-tuning to the frozen teacher clone;
-        the trainer anneals the coefficient to zero."""
+        the trainer anneals the coefficient to zero.
+
+    v3 (Config.critic_view="public"): the critic reads the PUBLIC features and, when
+    ``cfg.critic_deckout_aux > 0``, its deckout-winner aux head adds
+    ``w * BCE(aux_logit, y_p1)`` over the deckout-ended rows (the parity-credit
+    lever). At w=0 the head exists but contributes nothing."""
     dev = device_of(actor)
-    keys = ("x_act", "mask", "action", "old_logp", "adv", "god", "y_p1", "valid")
+    critic_view = getattr(cfg, "critic_view", "god")
+    feat_key = "pub" if critic_view == "public" else "god"
+    aux_w = float(getattr(cfg, "critic_deckout_aux", 0.0)) if critic_view == "public" else 0.0
+    keys = ("x_act", "mask", "action", "old_logp", "adv", feat_key, "y_p1", "valid")
+    if aux_w > 0.0:
+        keys = keys + ("deckout_valid",)
     b = {k: batch[k].to(dev, non_blocking=True) for k in keys}
     M = b["x_act"].shape[0]
     idx = np.arange(M)
@@ -46,12 +56,19 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0,
             logp_all = actor.log_probs(b["x_act"][mb], b["mask"][mb])
             ploss, ent, kl, cf = ppo_actor_loss(
                 logp_all, b["action"][mb], b["old_logp"][mb], b["adv"][mb], cfg.clip)
-            critic_logit = critic(b["god"][mb])
+            if aux_w > 0.0:
+                critic_logit, aux_logit = critic.forward_with_aux(b[feat_key][mb])
+                aux_loss = outcome_bce(aux_logit, b["y_p1"][mb], b["deckout_valid"][mb])
+            else:
+                critic_logit = critic(b[feat_key][mb])
+                aux_loss = None
             closs = outcome_bce(critic_logit, b["y_p1"][mb], b["valid"][mb])
             if train_actor:
                 loss = ploss - ent_coef * ent + cfg.critic_coef * closs
             else:                                  # handoff warmup: critic-only gradient
                 loss = cfg.critic_coef * closs
+            if aux_loss is not None and torch.isfinite(aux_loss):
+                loss = loss + aux_w * aux_loss
             kl_ref = zero
             if train_actor and ref_actor is not None and kl_ref_coef > 0.0:
                 with torch.no_grad():
@@ -68,13 +85,16 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0,
             opt.step()
             # kl/cf come back as detached device tensors (losses.py) -- stack
             # everything device-side; the ONLY host sync is the .tolist() below.
+            aux_stat = (aux_loss.detach() if aux_loss is not None
+                        and torch.isfinite(aux_loss) else zero)
             step_stats = torch.stack([ploss.detach(), closs.detach(), ent.detach(), kl, cf,
-                                      kl_ref.detach()])
+                                      kl_ref.detach(), aux_stat])
             acc = step_stats if acc is None else acc + step_stats
             n += 1
-    vals = (acc / max(n, 1)).tolist() if acc is not None else [0.0] * 6
+    vals = (acc / max(n, 1)).tolist() if acc is not None else [0.0] * 7
     return {"policy_loss": vals[0], "critic_loss": vals[1], "entropy": vals[2],
-            "approx_kl": vals[3], "clip_frac": vals[4], "kl_teacher": vals[5], "n": n}
+            "approx_kl": vals[3], "clip_frac": vals[4], "kl_teacher": vals[5],
+            "deckout_aux_loss": vals[6], "n": n}
 
 
 def aux_update(batch, guesser, public_est, opt_g, opt_p, steps: int,
@@ -87,17 +107,21 @@ def aux_update(batch, guesser, public_est, opt_g, opt_p, steps: int,
     (it is not the critic — only the privileged critic computes advantages). When
     `train_public` is False the public head is skipped entirely (its buffered features
     are zeros; see features.set_public_encoding) and public_loss is NaN."""
-    import math
-    dev = device_of(guesser)
-    persp, prev, cnt = batch["persp"].to(dev), batch["prev_guess"].to(dev), batch["cnt"].to(dev)
+    train_g = guesser is not None
+    train_p = train_public and public_est is not None
+    dev = device_of(guesser if train_g else public_est)
+    if train_g:
+        persp, prev, cnt = (batch["persp"].to(dev), batch["prev_guess"].to(dev),
+                            batch["cnt"].to(dev))
     g_loss, p_loss = 0.0, float("nan")
-    if train_public:
+    if train_p:
         pub, y_p1, valid = batch["pub"].to(dev), batch["y_p1"].to(dev), batch["valid"].to(dev)
     for _ in range(max(steps, 1)):
-        gl = guesser_poisson(guesser(persp, prev), cnt)
-        opt_g.zero_grad(); gl.backward(); opt_g.step()
-        g_loss = gl.detach().item()
-        if train_public:
+        if train_g:
+            gl = guesser_poisson(guesser(persp, prev), cnt)
+            opt_g.zero_grad(); gl.backward(); opt_g.step()
+            g_loss = gl.detach().item()
+        if train_p:
             pl = outcome_bce(public_est(pub), y_p1, valid)
             opt_p.zero_grad(); pl.backward(); opt_p.step()
             p_loss = pl.detach().item()

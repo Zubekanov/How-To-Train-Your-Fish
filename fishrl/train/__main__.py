@@ -141,6 +141,28 @@ def main():
                     help="train the DIAGNOSTIC public estimator (default on). --no-train-public "
                          "skips its per-decision encode + aux training for a small collection "
                          "speedup, dropping the pub calibration telemetry.")
+    # v3 architecture knobs. FRESH-only like --encoder*: on --resume they come
+    # exclusively from the checkpoint, so a shared train.args can't corrupt a
+    # legacy resume (the ODROID/v2 safety rule).
+    ap.add_argument("--belief", choices=["guesser", "bookkeeper", "none"], default=None,
+                    help="what fills the actor's 20-dim belief slot: the learned guesser "
+                         "(legacy), the zero-parameter analytic bookkeeper (v3), or zeros. "
+                         "FRESH-only; a resume reads the checkpoint's mode.")
+    ap.add_argument("--critic-view", choices=["god", "public"], default=None,
+                    help="the PPO critic's input: privileged god features (legacy) or the "
+                         "public mutual-knowledge features (v3; drops the separate public "
+                         "estimator). FRESH-only; a resume reads the checkpoint's view.")
+    ap.add_argument("--text-change", choices=["full", "guided", "auto"], default=None,
+                    help="choose_text_change action space: full 25-way (legacy), guided "
+                         "{EFFECT, NO-OP}, or auto (EFFECT forced). FRESH-only.")
+    # runtime v3 knobs (resume-tunable)
+    ap.add_argument("--critic-deckout-aux", type=float, default=None,
+                    help="weight of the public critic's deckout-winner auxiliary loss "
+                         "(parity credit; 0 disables the gradient, the head remains). "
+                         "Resume-tunable; default = the checkpoint's value (fresh: 0).")
+    ap.add_argument("--ent-start", type=float, default=Config.ent_start,
+                    help="entropy coefficient at the START of the anneal (default 0.02). "
+                         "Lower it for a warm-started policy that must not be re-inflated.")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--ckpt-dir", default="checkpoints")
     ap.add_argument("--resume", action="store_true",
@@ -241,9 +263,13 @@ def main():
                   freeze_actor_iters=args.freeze_actor_iters,
                   kl_teacher_coef=args.kl_teacher_coef,
                   kl_teacher_iters=args.kl_teacher_iters,
+                  ent_start=args.ent_start,
                   ent_end=args.ent_end, ent_anneal_iters=args.ent_anneal_iters,
                   ent_reheat_period=args.ent_reheat_period, ent_reheat_peak=args.ent_reheat_peak,
                   train_public=args.train_public,
+                  # resume-tunable v3 runtime knob; None = keep the checkpoint's value
+                  **({"critic_deckout_aux": args.critic_deckout_aux}
+                     if args.critic_deckout_aux is not None else {}),
                   ckpt_dir=args.ckpt_dir, report_every_seconds=args.report_every_seconds,
                   report_winrate_games=args.report_winrate_games,
                   checkpoint_every_seconds=args.checkpoint_every_seconds,
@@ -257,14 +283,24 @@ def main():
     else:
         per_net = {f"{n}_encoder": getattr(args, f"{n}_encoder")
                    for n in NETS if getattr(args, f"{n}_encoder") is not None}
+        # FRESH-only v3 architecture flags (a resume takes these from the checkpoint)
+        v3 = {}
+        if args.belief is not None:
+            v3["belief_mode"] = args.belief
+        if args.critic_view is not None:
+            v3["critic_view"] = args.critic_view
+        if args.text_change is not None:
+            v3["text_change_mode"] = args.text_change
         cfg = Config(encoder=args.encoder, seed=args.seed,
                      actor_hidden=_parse_hidden(args.actor_hidden),
-                     card_dim=args.card_dim, **per_net, **common)
+                     card_dim=args.card_dim, **per_net, **v3, **common)
 
     encs = {n: cfg.enc_for(n) for n in NETS}
     cap = "unbounded" if cfg.iters <= 0 else cfg.iters
     print(f"device: {cfg.device} | encoders: {encs} | iters: {cap} | "
           f"actor_hidden={cfg.head_hidden('actor')} card_dim={cfg.card_dim} | "
+          f"belief={cfg.belief_mode} critic_view={cfg.critic_view} "
+          f"deckout_aux={cfg.critic_deckout_aux} text_change={cfg.text_change_mode} | "
           f"pool: {cfg.pool_frac:.2f} (pfsp={cfg.pfsp_mode}, league={cfg.league_size}) | "
           f"p1_adv={cfg.p1_adv_weight:.2f} ent_end={cfg.ent_end:.3f} | "
           f"resume: {resume} | ckpt: {latest}", flush=True)

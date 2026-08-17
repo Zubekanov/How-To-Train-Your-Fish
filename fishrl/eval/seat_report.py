@@ -27,7 +27,8 @@ def load_models(ckpt_path: str):
     m = build_models(cfg)
     _load_model_state(m, pl["models"])
     for net in (m.actor, m.critic, m.guesser, m.public):
-        net.eval()
+        if net is not None:
+            net.eval()
     return m, cfg, int(pl.get("done", 0))
 
 

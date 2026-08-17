@@ -56,6 +56,8 @@ def _init(cfg_dict: dict, models_state: dict, frozen_state: dict, max_decisions:
     torch.set_num_threads(1)
     _apply_affinity(affinity or [])
     cfg = config_from_checkpoint(cfg_dict)      # full architecture: encoders + head widths + card_dim
+    from fishrl.spaces import masking
+    masking.set_text_change_mode(cfg.text_change_mode)   # evaluate under the trained action space
     m = build_models(cfg)
     _load_model_state(m, models_state)
     frozen = build_models(cfg)

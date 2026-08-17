@@ -34,7 +34,7 @@ import time
 import numpy as np
 import torch
 
-from fishrl.data.features import GOD_DIM, encode_god
+from fishrl.data.features import GOD_DIM, PUB_DIM, encode_god, encode_public
 from fishrl.obs.encoder import OBS_DIM
 from fishrl.train.belief_env import BeliefAugmentedEnv
 from fishrl.train.checkpoint import load_checkpoint
@@ -42,21 +42,37 @@ from fishrl.train.scenarios import ScenarioEnv, get_scenario
 from fishrl.train.train_loop import build_models, config_from_checkpoint, _load_model_state
 
 C0 = OBS_DIM - 3          # clock = last 3 dims of the perspective block (belief rides after)
-G0 = GOD_DIM - 3          # clock = last 3 dims of the god vector (p1-oriented)
 LIB_BINS = ((41, 80), (21, 40), (11, 20), (0, 10))
+# The critic's clock sits in the last 3 dims of ITS view (god or public — both
+# encodings append the same p1-oriented triple). Set per checkpoint in load_models.
+_VIEW = {"view": "god", "dim": GOD_DIM}
+
+
+def _critic_feat(g):
+    return encode_god(g) if _VIEW["view"] == "god" else encode_public(g)
 
 
 def load_models(ckpt: str):
     pl = load_checkpoint(ckpt, map_location="cpu")
     cfg = config_from_checkpoint(pl["config"])
+    from fishrl.spaces import masking
+    masking.set_text_change_mode(cfg.text_change_mode)   # probe under the trained space
+    _VIEW["view"] = cfg.critic_view
+    _VIEW["dim"] = PUB_DIM if cfg.critic_view == "public" else GOD_DIM
+    if cfg.critic_view == "public":
+        from fishrl.data import features
+        features.set_public_encoding(True)
     m = build_models(cfg)
     _load_model_state(m, pl["models"])
     for net in (m.actor, m.guesser, m.critic):
+        if net is None:
+            continue
         net.eval()
         for p in net.parameters():
             p.requires_grad_(False)
     print(f"[clock_usage] {ckpt}: iter={pl.get('done')} elapsed={pl.get('elapsed', 0) / 3600:.0f}h "
-          f"actor={pl['config']['encoders']['actor']}", flush=True)
+          f"actor={pl['config']['encoders']['actor']} critic_view={cfg.critic_view} "
+          f"belief={cfg.belief_mode}", flush=True)
     return m
 
 
@@ -80,6 +96,13 @@ def _sample(actor, obs, mask):
     return int(torch.multinomial(logp.exp(), 1))
 
 
+def _benv(m, **kw):
+    """Belief env matching the checkpoint's mode: guesser when the net exists,
+    the analytic bookkeeper otherwise (a v3 checkpoint)."""
+    mode = "guesser" if m.guesser is not None else "bookkeeper"
+    return BeliefAugmentedEnv(m.guesser, mode=mode, **kw)
+
+
 # ── 1. state-level sensitivity probe ─────────────────────────────────────────
 
 def collect_states(m, source: str, n_games: int, seed: int, max_decisions=2000):
@@ -88,11 +111,10 @@ def collect_states(m, source: str, n_games: int, seed: int, max_decisions=2000):
     obs_l, mask_l, lib_l, def_l, god_l = [], [], [], [], []
     for i in range(n_games):
         if source == "mirror":
-            senv = BeliefAugmentedEnv(m.guesser, belief=True, max_decisions=max_decisions)
+            senv = _benv(m, max_decisions=max_decisions)
         else:
-            senv = BeliefAugmentedEnv(m.guesser, belief=True,
-                                      env=ScenarioEnv(get_scenario(source),
-                                                      max_decisions=max_decisions))
+            senv = _benv(m, env=ScenarioEnv(get_scenario(source),
+                                            max_decisions=max_decisions))
         senv.reset(seed=seed + i)
         torch.manual_seed(seed + i)
         for agent in senv.agent_iter(max_iter=max_decisions * 6):
@@ -105,7 +127,7 @@ def collect_states(m, source: str, n_games: int, seed: int, max_decisions=2000):
             mask_l.append(o["action_mask"].astype(np.int8))
             lib_l.append(len(g.library))
             def_l.append(g.active_player in ("p1", "p2"))
-            god_l.append(encode_god(g).astype(np.float16))
+            god_l.append(_critic_feat(g).astype(np.float16))
             senv.step(_sample(m.actor, o["observation"], o["action_mask"]))
     print(f"  [collect] {source}: {len(lib_l)} states / {n_games} games", flush=True)
     return (np.stack(obs_l), np.stack(mask_l), np.asarray(lib_l),
@@ -138,8 +160,8 @@ def probe(m, args):
                 gvec = god[i:i + 1024].astype(np.float32)
                 v_on.append(m.critic.p1_winprob(torch.from_numpy(gvec)).numpy())
                 gflip = gvec.copy()
-                gflip[:, G0] = 1.0 - gflip[:, G0]
-                gflip[:, G0 + 2] = 1.0 - gflip[:, G0 + 2]
+                g0 = _VIEW["dim"] - 3; gflip[:, g0] = 1.0 - gflip[:, g0]
+                gflip[:, g0 + 2] = 1.0 - gflip[:, g0 + 2]
                 v_flip.append(m.critic.p1_winprob(torch.from_numpy(gflip)).numpy())
         v_on, v_flip = np.concatenate(v_on), np.concatenate(v_flip)
 
@@ -149,7 +171,7 @@ def probe(m, args):
         am_flip = (p_on.argmax(1) != p_flip.argmax(1))
         dv = v_flip - v_on
         # direction: flipping sends decks_first 1->0 (good for p1) or 0->1 (bad)
-        was_df = god[:, G0 + 2].astype(np.float32) > 0.5
+        was_df = god[:, _VIEW["dim"] - 1].astype(np.float32) > 0.5
 
         print(f"\n[{source}] actor sensitivity (n={len(lib)}; flip rows are "
               f"clock-defined states only):")
@@ -188,9 +210,8 @@ def play_arm(m, mode: str, args) -> dict:
         t0 = time.time()
         outcomes = []
         for i in range(args.wr_games):
-            senv = BeliefAugmentedEnv(m.guesser, belief=True,
-                                      env=ScenarioEnv(get_scenario(source),
-                                                      max_decisions=2000))
+            senv = _benv(m, env=ScenarioEnv(get_scenario(source),
+                                            max_decisions=2000))
             senv.reset(seed=args.seed + i)
             torch.manual_seed(args.seed + i)
             for agent in senv.agent_iter(max_iter=2000 * 6):

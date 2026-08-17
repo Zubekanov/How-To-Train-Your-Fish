@@ -185,6 +185,31 @@ class Config:
     # and a wider pooled block feeding the head. Ignored by flat nets.
     card_dim: int = 64
 
+    def __post_init__(self):
+        # Reconcile the legacy bool with belief_mode. Rule: an explicit
+        # use_belief=False with belief_mode left at its default means the caller is
+        # using the old API -> "none". Afterwards use_belief mirrors belief_mode
+        # (guesser OR bookkeeper both feed the channel), so old call sites that read
+        # cfg.use_belief keep meaning "the belief slot carries information".
+        if not self.use_belief and self.belief_mode == "guesser":
+            self.belief_mode = "none"
+        self.use_belief = self.belief_mode != "none"
+
+    @property
+    def has_guesser(self) -> bool:
+        # The guesser NET is absent only in bookkeeper mode. Legacy "none"
+        # (use_belief=False) keeps the net — historically it was still built and
+        # aux-trained with the channel zeroed (the ablation arms and BC checkpoints
+        # depend on that), and dropping it would orphan their saved weights.
+        return self.belief_mode != "bookkeeper"
+
+    @property
+    def has_public(self) -> bool:
+        # Legacy runs ALWAYS build the public net (train_public only gates its
+        # encode + training, matching the historic behaviour so v2 resumes are
+        # unchanged); in critic_view="public" the critic IS the public head.
+        return self.critic_view == "god"
+
     def head_hidden(self, net: str) -> tuple:
         """Resolve a net's head-MLP widths: the actor honours `actor_hidden`; the
         critic uses `critic_hidden`; everything else uses `hidden`."""
@@ -237,7 +262,40 @@ class Config:
     encoder: str = "flat"
     # when False, the actor's belief channel is fed zeros (guesser skipped) -- the
     # controlled "is the belief worth anything?" ablation. Architecture is unchanged.
+    # LEGACY BOOL: `belief_mode` below is the source of truth; this field survives for
+    # constructor/call-site compat and is reconciled in __post_init__.
     use_belief: bool = True
+    # ── v3 knobs (all persisted in the checkpoint config; legacy checkpoints default
+    #    to the pre-v3 behaviour via config_from_checkpoint) ────────────────────────
+    # What fills the actor's 20-dim belief slot:
+    #   "guesser"    -- the learned HandGuesser (legacy; net built + trained)
+    #   "bookkeeper" -- the analytic hand-bookkeeper vector (zero-parameter, computed
+    #                   from the viewer's own observation; no guesser net exists).
+    #                   Measured (Guesser Deposition, 2026-08-17): captures 77% of the
+    #                   channel's information at none of its ~32%-of-collection cost.
+    #   "none"       -- zeros (the ablation; equivalent to legacy use_belief=False)
+    belief_mode: str = "guesser"
+    # Which encoding feeds the PPO critic:
+    #   "god"    -- privileged full-hidden-state features (legacy)
+    #   "public" -- mutual-knowledge features; the PublicEstimator diagnostic is NOT
+    #               built (it would duplicate the critic), and encode_public is forced
+    #               on regardless of train_public. Measured basis: the privileged
+    #               head's Brier edge over public has depreciated to ~0 (audits
+    #               2026-08-17).
+    critic_view: str = "god"
+    # Weight of the critic's deckout-winner auxiliary loss (the parity-credit lever —
+    # both audits' #1 recommendation). The aux head EXISTS whenever critic_view ==
+    # "public" (so this knob is resume-tunable without state_dict surgery); the weight
+    # only scales the loss term. 0.0 = head present, no gradient contribution.
+    critic_deckout_aux: float = 0.0
+    # choose_text_change action-space treatment (fishrl.spaces.masking):
+    #   "full"   -- the legacy 25-way from->to block
+    #   "guided" -- mask down to {EFFECT, NO-OP}: the type written on the targeted
+    #               card -> a type absent from the targeted player's permanents, plus
+    #               one provably-inert pair (decline)
+    #   "auto"   -- mask to {EFFECT} alone; the collector's single-legal-action fast
+    #               path plays it with no policy forward (auto-resolve)
+    text_change_mode: str = "full"
     actor_encoder: str | None = None
     # critic defaults to entity: it's the measured on-policy calibration winner
     # (Brier 0.261 vs flat 0.342), off the deployment path, and ~free now that the

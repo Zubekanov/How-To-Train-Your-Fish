@@ -504,6 +504,10 @@ def main() -> int:
     import torch
     pl = torch.load(args.ckpt, map_location="cpu", weights_only=False)
     cd = pl["config"]
+    if "public" not in pl["models"] or cd.get("critic_view", "god") != "god":
+        raise SystemExit("critic_watch is a legacy tool: it ledgers the SEPARATE "
+                         "privileged/public heads, which a v3 (public-critic) "
+                         "checkpoint doesn't have -- point it at a v1/v2 lineage")
     weights = {n: {k: v.cpu().numpy() for k, v in pl["models"][n].items()}
                for n in ("critic", "public")}
     print(f"[watch] {args.ckpt}: iter={pl.get('done')} elapsed={pl.get('elapsed', 0) / 3600:.0f}h "

@@ -63,6 +63,10 @@ def _load(ckpt_dir: str, device: str):
     cfg = config_from_checkpoint(pl["config"], device=device)
     m = build_models(cfg)
     _load_model_state(m, pl["models"])
+    if m.guesser is None or m.public is None:
+        raise SystemExit("this tool interrogates the legacy guesser/public nets; "
+                         "the given checkpoint is a v3 (bookkeeper/public-critic) "
+                         "payload -- point it at a v1/v2 lineage instead")
     for net in (m.actor, m.critic, m.guesser, m.public):
         net.eval()
     return cfg, m, int(pl.get("done", 0))

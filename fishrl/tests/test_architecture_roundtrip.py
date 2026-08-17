@@ -18,7 +18,10 @@ def _saved_config(cfg: Config) -> dict:
     return {"seed": cfg.seed, "encoders": _encoders(cfg), "use_belief": cfg.use_belief,
             "critic_hidden": list(cfg.critic_hidden), "hidden": list(cfg.hidden),
             "actor_hidden": (list(cfg.actor_hidden) if cfg.actor_hidden is not None else None),
-            "card_dim": cfg.card_dim}
+            "card_dim": cfg.card_dim,
+            "belief_mode": cfg.belief_mode, "critic_view": cfg.critic_view,
+            "critic_deckout_aux": cfg.critic_deckout_aux,
+            "text_change_mode": cfg.text_change_mode}
 
 
 def test_bigger_entity_model_roundtrips_through_the_saved_config():
@@ -55,6 +58,39 @@ def test_pre_resize_checkpoint_reconstructs_the_old_flat_architecture():
     m = build_models(cfg)
     assert m.actor.enc is None                          # flat actor (no entity encoder)
     assert tuple(m.actor.net[0].weight.shape)[1] == 6517  # ACTOR_IN, the flat input width
+
+
+def test_v3_two_net_checkpoint_roundtrips():
+    # A v3 run: bookkeeper belief (no guesser net), public critic (no separate
+    # public estimator), guided text-change. The saved encoders dict carries only
+    # the two built nets — the era discriminator legacy loaders key on.
+    from fishrl.models.estimators import PublicCritic
+    cfg = Config(device="cpu", belief_mode="bookkeeper", critic_view="public",
+                 critic_deckout_aux=0.1, text_change_mode="guided",
+                 actor_encoder="entity", critic_encoder="entity",
+                 actor_hidden=(64, 64), critic_hidden=(64, 64), card_dim=16)
+    m = build_models(cfg)
+    assert m.guesser is None and m.public is None
+    saved = _saved_config(cfg)
+    assert set(saved["encoders"]) == {"actor", "critic"}
+    cfg2 = config_from_checkpoint(saved, device="cpu")
+    assert (cfg2.belief_mode, cfg2.critic_view) == ("bookkeeper", "public")
+    assert cfg2.text_change_mode == "guided" and cfg2.critic_deckout_aux == 0.1
+    m2 = build_models(cfg2)
+    assert isinstance(m2.critic, PublicCritic) and hasattr(m2.critic, "aux_head")
+    _load_model_state(m2, _model_state(m))            # raises on any shape mismatch
+
+
+def test_legacy_use_belief_false_still_builds_the_guesser():
+    # Historic ablation semantics: use_belief=False zeroed the channel but the
+    # guesser NET existed and was trained — its checkpoints carry guesser weights.
+    old = {"seed": 0,
+           "encoders": {"actor": "flat", "critic": "entity", "guesser": "flat", "public": "flat"},
+           "use_belief": False, "critic_hidden": [64, 64]}
+    cfg = config_from_checkpoint(old, device="cpu", hidden=(32, 32), card_dim=16)
+    assert cfg.belief_mode == "none" and cfg.use_belief is False
+    m = build_models(cfg)
+    assert m.guesser is not None and m.public is not None
 
 
 def test_overrides_win_over_saved_runtime_knobs_but_not_architecture():

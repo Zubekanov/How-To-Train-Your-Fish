@@ -44,6 +44,14 @@ _STATUS_V3 = (
     "calib priv(acc=0.78,brier=0.15) pub(acc=0.63,brier=0.22) gap=0.07 gmae=0.18 | "
     "opp trained=0.92 | games=128 len=38.2 slen=14.1 trunc=0.05 draw=0.01 "
     "fatk_p1=1 fatk_p2=0 seat_p1=0.52 fdec=0.24 | wall collect=0.91 | WR via eval timer")
+# The v3-era (bookkeeper + public-critic) status format: no guesser/public tokens,
+# one critic calib group plus the parity-aux loss.
+_STATUS_ERA3 = (
+    "2026-08-18T10:00:00+10:00 [status 2.50h it=1800 (+120, 48.0/h) T=520000] "
+    "pi=-0.015 V=0.610 H=0.470 kl=0.0180 clip=0.07 | "
+    "calib critic(acc=0.61,brier=0.23) aux=0.693 | "
+    "opp trained=0.55 | games=96 len=41.0 slen=13.2 trunc=0.00 draw=0.00 "
+    "seat_p1=0.49 fdec=0.22 | wall collect=0.85 | WR via eval timer")
 
 
 def test_parse_league_shares_sum_to_one():
@@ -150,6 +158,21 @@ def test_parse_status_v3_game_telemetry_and_old_lines_still_parse():
         r = parse_status([old_line])[0][0]
         assert r["clip_frac"] is None and r["brier_gap"] is None
         assert "games" not in r
+
+
+def test_parse_status_v3_era_critic_line():
+    # The bookkeeper/public-critic era: one regex parses both eras. A v3 line
+    # yields critic_* keys and carries NO legacy guesser/priv/pub fields.
+    r = parse_status([_STATUS_ERA3])[0][0]
+    assert r["it"] == 1800 and r["transitions"] == 520000
+    assert r["critic_acc"] == 0.61 and r["critic_brier"] == 0.23
+    assert r["deckout_aux_loss"] == 0.693
+    assert r["clip_frac"] == 0.07
+    assert "gmae" not in r and "priv_brier" not in r and "guesser_loss" not in r
+    assert r["games"] == 96 and r["collect_frac"] == 0.85
+    # and the legacy fixtures carry no v3 keys
+    r_old = parse_status([_STATUS])[0][0]
+    assert "critic_acc" not in r_old and r_old["gmae"] == 0.18
 
 
 def test_parse_status_merges_league_mix():

@@ -60,11 +60,15 @@ class _FrozenSelf:
 
 
 def _freeze_self(models, it: int) -> LeagueMember:
-    """Deep-copy the learner's actor + guesser into a frozen (eval, grad-free)
-    league member tagged with the iteration it was taken at."""
+    """Deep-copy the learner's actor (+ guesser, when the run has one) into a
+    frozen (eval, grad-free) league member tagged with the iteration it was taken
+    at. A bookkeeper-mode past-self is actor-only — its belief channel is a pure
+    state function with nothing to freeze."""
     actor = copy.deepcopy(models.actor)
-    guesser = copy.deepcopy(models.guesser)
+    guesser = copy.deepcopy(models.guesser) if getattr(models, "guesser", None) is not None else None
     for net in (actor, guesser):
+        if net is None:
+            continue
         net.eval()
         for p in net.parameters():
             p.requires_grad_(False)
@@ -169,7 +173,8 @@ class PFSPLeague:
                         for a in self.anchors],
             "selves": [{"name": s.name, "wr": s.wr, "games": s.games,
                         "actor": s.models.actor.state_dict(),
-                        "guesser": s.models.guesser.state_dict()}
+                        **({"guesser": s.models.guesser.state_dict()}
+                           if s.models.guesser is not None else {})}
                        for s in self.selves],
         }
 
@@ -190,8 +195,11 @@ class PFSPLeague:
         for s in state.get("selves", []):
             actor, guesser = make_nets()
             actor.load_state_dict(s["actor"])
-            guesser.load_state_dict(s["guesser"])
+            if guesser is not None and "guesser" in s:
+                guesser.load_state_dict(s["guesser"])
             for net in (actor, guesser):
+                if net is None:
+                    continue
                 net.eval()
                 for p in net.parameters():
                     p.requires_grad_(False)

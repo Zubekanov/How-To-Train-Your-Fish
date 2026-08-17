@@ -28,6 +28,8 @@ class Step:
     game_id: int = 0         # buffer-local game index (renumbered by `merge`) so GAE
                              # never crosses a game boundary
     truncated: bool = False  # decision-cap cut (winner None but the game wasn't decided)
+    deckout_end: bool = False  # the game ended by an empty-library draw (engine reason) —
+                               # the label domain of the public critic's parity aux head
 
 
 @dataclass
@@ -99,5 +101,10 @@ class RolloutBuffer:
             "cnt": torch.as_tensor(np.stack([s.cnt_target for s in self.steps]), dtype=torch.float32),
             "y_p1": torch.as_tensor([1.0 if s.winner == "p1" else 0.0 for s in self.steps], dtype=torch.float32),
             "valid": torch.as_tensor([1.0 if s.winner is not None else 0.0 for s in self.steps], dtype=torch.float32),
+            # parity-aux label domain: decided games that ended by decking. y is the
+            # same p1-win bit, but the aux loss only reads rows where valid is set.
+            "deckout_valid": torch.as_tensor(
+                [1.0 if (s.deckout_end and s.winner is not None) else 0.0
+                 for s in self.steps], dtype=torch.float32),
         }
         return out

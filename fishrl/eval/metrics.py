@@ -22,21 +22,37 @@ from fishrl.train.belief_env import BeliefAugmentedEnv
 from fishrl.train.collector import actor_act_fn, collect_games
 
 
+def _belief_mode_of(models, use_belief: bool) -> str:
+    """Derive the belief mode from the Models holder: a guesser-less holder with
+    belief ON is a bookkeeper-mode (v3) checkpoint — its actor was trained on the
+    analytic vector, so eval must feed the same thing."""
+    if not use_belief:
+        return "none"
+    return "guesser" if getattr(models, "guesser", None) is not None else "bookkeeper"
+
+
+def _critic_view_of(models) -> str:
+    from fishrl.models.estimators import PublicCritic
+    return "public" if isinstance(models.critic, PublicCritic) else "god"
+
+
 def collect_eval_batch(models, n_games=8, seed=10_000, max_decisions=2000):
-    benv = BeliefAugmentedEnv(models.guesser, max_decisions=max_decisions)
+    benv = BeliefAugmentedEnv(models.guesser, mode=_belief_mode_of(models, True),
+                              max_decisions=max_decisions)
     buf = collect_games(benv, actor_act_fn(models.actor), n_games, seed,
-                        critic=models.critic, max_decisions=max_decisions)
+                        critic=models.critic, max_decisions=max_decisions,
+                        critic_view=_critic_view_of(models))
     return buf.compute(0.997, 0.95)
 
 
 def estimator_metrics(models, batch) -> dict:
+    """Calibration of the outcome heads on a batch. Legacy holders (god critic +
+    public estimator) report priv_*/pub_*; a v3 holder (public critic, no separate
+    estimator) reports critic_acc/critic_brier."""
     keep = batch["valid"] > 0
     y = batch["y_p1"][keep]
     if y.numel() == 0:
         return {"n": 0}
-    with torch.no_grad():
-        priv = models.critic.p1_winprob(batch["god"][keep].to(device_of(models.critic))).cpu()
-        pub = models.public.p1_winprob(batch["pub"][keep].to(device_of(models.public))).cpu()
 
     def acc(p):
         return float(((p > 0.5).float() == y).float().mean())
@@ -44,12 +60,21 @@ def estimator_metrics(models, batch) -> dict:
     def brier(p):
         return float(((p - y) ** 2).mean())
 
+    view = _critic_view_of(models)
+    feat = batch["pub" if view == "public" else "god"]
+    with torch.no_grad():
+        cp = models.critic.p1_winprob(feat[keep].to(device_of(models.critic))).cpu()
+        if models.public is None:
+            return {"n": int(y.numel()), "critic_acc": acc(cp), "critic_brier": brier(cp)}
+        pub = models.public.p1_winprob(batch["pub"][keep].to(device_of(models.public))).cpu()
     return {"n": int(y.numel()),
-            "priv_acc": acc(priv), "pub_acc": acc(pub),
-            "priv_brier": brier(priv), "pub_brier": brier(pub)}
+            "priv_acc": acc(cp), "pub_acc": acc(pub),
+            "priv_brier": brier(cp), "pub_brier": brier(pub)}
 
 
 def guesser_mae(models, batch) -> float:
+    if getattr(models, "guesser", None) is None:
+        return float("nan")
     dev = device_of(models.guesser)
     with torch.no_grad():
         pred = models.guesser(batch["persp"].to(dev), batch["prev_guess"].to(dev)).cpu()
@@ -73,7 +98,8 @@ def act_from_actor(actor, obs, greedy: bool = False) -> int:
 def winrate_vs_random(models, n_games=20, seed=0, max_decisions=2000,
                       use_belief=True) -> float:
     rng = np.random.default_rng(seed)
-    benv = BeliefAugmentedEnv(models.guesser, belief=use_belief, max_decisions=max_decisions)
+    benv = BeliefAugmentedEnv(models.guesser, mode=_belief_mode_of(models, use_belief),
+                              max_decisions=max_decisions)
     wins = 0
     for i in range(n_games):
         benv.reset(seed=seed + i)
@@ -98,8 +124,9 @@ def winrate_vs_attacker(models, n_games=40, seed=0, max_decisions=2000,
     bias). A fixed, transitive anchor in the agents' own skill band."""
     from fishrl.env.aec_env import FishAEC
     from fishrl.opponents.attacker import attacker_action
+    mode = _belief_mode_of(models, use_belief)
     z = np.zeros(V.N_NAMES, dtype=np.float32)
-    dev = device_of(models.guesser)
+    dev = device_of(models.guesser) if mode == "guesser" else None
     rng = np.random.default_rng(seed)
     wins = 0
     for i in range(n_games):
@@ -117,12 +144,15 @@ def winrate_vs_attacker(models, n_games=40, seed=0, max_decisions=2000,
             base = env.observe(seat)
             if seat == agent_seat:
                 persp = base["observation"]
-                if use_belief:
+                if mode == "guesser":
                     with torch.no_grad():
                         guess = models.guesser(
                             torch.as_tensor(persp).unsqueeze(0).to(dev),
                             torch.as_tensor(prev).unsqueeze(0).to(dev)).squeeze(0).cpu().numpy().astype(np.float32)
                     prev = guess
+                elif mode == "bookkeeper":
+                    from fishrl.data.features import bookkeeper_counts
+                    guess = bookkeeper_counts(env.g, seat)
                 else:
                     guess = z
                 aug = {"observation": np.concatenate([persp, guess]).astype(np.float32),
@@ -135,16 +165,22 @@ def winrate_vs_attacker(models, n_games=40, seed=0, max_decisions=2000,
     return wins / n_games
 
 
-def _aug_obs(models, use_belief, base, prev, z):
-    """A seat's belief-augmented obs from ITS OWN guesser ⊕ carried previous guess."""
+def _aug_obs(models, use_belief, base, prev, z, g=None, seat=None):
+    """A seat's belief-augmented obs from ITS OWN belief channel ⊕ carried previous
+    guess (guesser mode) or the analytic bookkeeper (v3; needs the game `g` and the
+    viewing `seat`)."""
     persp = base["observation"]
-    if use_belief:
+    mode = _belief_mode_of(models, use_belief)
+    if mode == "guesser":
         gdev = device_of(models.guesser)
         with torch.no_grad():
             guess = models.guesser(
                 torch.as_tensor(persp, dtype=torch.float32).unsqueeze(0).to(gdev),
                 torch.as_tensor(prev, dtype=torch.float32).unsqueeze(0).to(gdev),
             ).squeeze(0).cpu().numpy().astype(np.float32)
+    elif mode == "bookkeeper" and g is not None and seat is not None:
+        from fishrl.data.features import bookkeeper_counts
+        guess = bookkeeper_counts(g, seat)
     else:
         guess = z
     return ({"observation": np.concatenate([persp, guess]).astype(np.float32),
@@ -168,8 +204,9 @@ def _match_models(mA, ubA, mB, ubB, n_games, base_seed, max_decisions=2000):
                 env.step(None)
                 continue
             mm, ub = (mA, ubA) if seat == "p1" else (mB, ubB)
-            aug, g = _aug_obs(mm, ub, env.observe(seat), prev[seat], z)
-            prev[seat] = g
+            aug, gout = _aug_obs(mm, ub, env.observe(seat), prev[seat], z,
+                                 g=env.g, seat=seat)
+            prev[seat] = gout
             env.step(act_from_actor(mm.actor, aug))
         w = env.g.result.get("winner")
         aw += int(w == "p1")
@@ -245,7 +282,8 @@ def seat_diag_counts(models, n_games=100, seed=100, max_decisions=2000,
                 continue
             base = env.observe(seat)
             pend = env.g.pending
-            aug, guess = _aug_obs(models, use_belief, base, prev[seat], z)
+            aug, guess = _aug_obs(models, use_belief, base, prev[seat], z,
+                                  g=env.g, seat=seat)
             prev[seat] = guess
             a = act_from_actor(models.actor, aug)
             if pend is not None and pend.type == "choose_play_order":
@@ -318,6 +356,7 @@ def winrate_vs_heuristic(models, n_games=20, seed=0, max_decisions=2000,
     belief-off-trained actor. `profile` picks the AI version: "heuristic" (v1.0,
     the standard anchor) or "heuristic_1_1" (the stronger testbench line)."""
     from fishrl.opponents.heuristic import HeuristicMatch
+    mode = _belief_mode_of(models, use_belief)
     z = np.zeros(V.N_NAMES, dtype=np.float32)
     wins = 0
     for i in range(n_games):
@@ -328,13 +367,16 @@ def winrate_vs_heuristic(models, n_games=20, seed=0, max_decisions=2000,
         while not done and guard < max_decisions * 6:
             guard += 1
             persp = obs["observation"]
-            if use_belief:
+            if mode == "guesser":
                 gdev = device_of(models.guesser)
                 with torch.no_grad():
                     guess = models.guesser(
                         torch.as_tensor(persp).unsqueeze(0).to(gdev),
                         torch.as_tensor(prev).unsqueeze(0).to(gdev)).squeeze(0).cpu().numpy().astype(np.float32)
                 prev = guess
+            elif mode == "bookkeeper":
+                from fishrl.data.features import bookkeeper_counts
+                guess = bookkeeper_counts(m.g, "p1")
             else:
                 guess = z
             aug = {"observation": np.concatenate([persp, guess]).astype(np.float32),

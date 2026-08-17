@@ -281,17 +281,21 @@ def _serve_main(shm_name: str, nslots: int, conn, lite: dict) -> None:
                              or torch.cuda.is_available()) else "cpu"
     ah = tuple(lite.get("actor_hidden") or lite["hidden"])
     actor = MaskedActor(ah, lite["enc_actor"], int(lite.get("card_dim", 64))).to(dev)
-    guesser = HandGuesser(tuple(lite["hidden"]), lite["enc_guesser"],
-                          int(lite.get("card_dim", 64))).to(dev)
+    has_guesser = lite.get("belief_mode", "guesser") == "guesser"
+    guesser = None
+    if has_guesser:
+        guesser = HandGuesser(tuple(lite["hidden"]), lite["enc_guesser"],
+                              int(lite.get("card_dim", 64))).to(dev)
+        guesser.eval()
     actor.eval()
-    guesser.eval()
     have_weights = False
 
     ACTOR_IN, OBS_DIM, N_NAMES, A_N, *_ = _dims()
     graphed_a = graphed_g = None
     if str(dev).startswith("cuda"):
         graphed_a = _Graphed(actor.log_probs, (ACTOR_IN, A_N), A_N, dev)
-        graphed_g = _Graphed(guesser, (OBS_DIM, N_NAMES), N_NAMES, dev)
+        if guesser is not None:
+            graphed_g = _Graphed(guesser, (OBS_DIM, N_NAMES), N_NAMES, dev)
     shm = shared_memory.SharedMemory(name=shm_name)
     hdr, req, rsp = _views(shm, nslots)
     states = None
@@ -305,7 +309,8 @@ def _serve_main(shm_name: str, nslots: int, conn, lite: dict) -> None:
                 if msg[0] == "weights":
                     state = pickle.loads(msg[1])            # numpy arrays only (see np_state)
                     load_np_state(actor, state["actor"])
-                    load_np_state(guesser, state["guesser"])
+                    if guesser is not None and "guesser" in state:
+                        load_np_state(guesser, state["guesser"])
                     have_weights = True
                     conn.send(("ok",))
             states = hdr[:, 1]
@@ -332,7 +337,7 @@ def _serve_main(shm_name: str, nslots: int, conn, lite: dict) -> None:
                     for j, s in enumerate(a_idx):
                         rsp[s, :A_N] = out[j]
                         hdr[s, 1] = _RESP                   # payload first, state last
-                if g_idx.size:
+                if g_idx.size and guesser is not None:
                     pa = req[g_idx, :OBS_DIM].copy()
                     pga = req[g_idx, OBS_DIM:OBS_DIM + N_NAMES].copy()
                     if graphed_g is not None:
@@ -342,6 +347,10 @@ def _serve_main(shm_name: str, nslots: int, conn, lite: dict) -> None:
                                       torch.from_numpy(pga).to(dev)).cpu().numpy()
                     for j, s in enumerate(g_idx):
                         rsp[s, :N_NAMES] = out[j]
+                        hdr[s, 1] = _RESP
+                elif g_idx.size:                            # no guesser in this run: zeros
+                    for s in g_idx:
+                        rsp[s, :N_NAMES] = 0.0
                         hdr[s, 1] = _RESP
     finally:
         del hdr, req, rsp, states                # views must die before the unmap

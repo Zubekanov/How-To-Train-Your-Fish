@@ -434,7 +434,8 @@ function tfetch(url, opts){
   return fetch(url, {...(opts||{}), signal: c.signal}).finally(() => clearTimeout(t));
 }
 async function poll(){
-  try { S.summary = await (await tfetch("/api/summary")).json(); header(S.summary); }
+  let s = null;
+  try { s = await (await tfetch("/api/summary")).json(); }
   catch(e){
     if (sessionEnding){
       // "End training session" tears down the whole session, this server
@@ -445,7 +446,19 @@ async function poll(){
       $("actions").innerHTML = "";
       return;
     }
-    set("stale","server unreachable","bad");
+    // Name the failure: an AbortError is a request that hit tfetch's 4s
+    // deadline (a dead address / hung socket); anything else is a real
+    // network/HTTP error. Both retry on the next tick.
+    console.error("summary poll failed:", e);
+    set("stale", "poll failed: " + ((e && (e.name || e.message)) || e), "bad");
+    return;
+  }
+  // header() failures are OUR bug, not the server's — say so instead of the
+  // misleading "server unreachable" (this distinction cost a debugging session).
+  try { S.summary = s; header(s); }
+  catch(e){
+    console.error("header render failed:", e, s);
+    set("stale", "header bug: " + ((e && e.message) || e), "bad");
   }
 }
 loadAll(); poll(); refreshActions();

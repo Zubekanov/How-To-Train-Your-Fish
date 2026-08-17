@@ -17,6 +17,7 @@ import torch
 
 from fishrl.models import device_of
 from fishrl.obs import vocab as V
+from fishrl.spaces import action_space as A
 from fishrl.train.belief_env import BeliefAugmentedEnv
 from fishrl.train.collector import actor_act_fn, collect_games
 
@@ -249,7 +250,12 @@ def seat_diag_counts(models, n_games=100, seed=100, max_decisions=2000,
             a = act_from_actor(models.actor, aug)
             if pend is not None and pend.type == "choose_play_order":
                 c["choose_total"] += 1
-                c["choose_first"] += int(a == 0)      # i==0 -> play first (apply.py:52)
+                # "play first" is LOCAL index 0 of the PLAY_ORDER block (apply.py:52),
+                # not flat action id 0. The old `a == 0` compared against the flat id,
+                # which is never a PLAY_ORDER action — choose_first_frac was structurally
+                # pinned at 0.0 in every eval row written before 2026-08-17 (historical
+                # values are unusable; found by the independent audit).
+                c["choose_first"] += int(a == A.aid("PLAY_ORDER", 0))
             env.step(a)
         winner = env.winner
         c["games"] += 1
@@ -293,9 +299,12 @@ def selfplay_seat_diagnostics(models, n_games=200, seed=100, max_decisions=2000,
       * play_wr / draw_wr        — win-rate on the play vs on the draw (a SEPARATE axis;
                                    first_player is decided by a fair d20 roll + the winner's
                                    choose_play_order choice, so it is seat-independent)
-      * choose_first_frac        — how often the roll winner chooses to play FIRST (i==0);
-                                   the current policy pathologically picks 'draw' ~always
-                                   even though on-the-play wins more
+      * choose_first_frac        — how often the roll winner chooses to play FIRST.
+                                   NOTE: before 2026-08-17 this counter had a bug (flat
+                                   action id compared to 0) that pinned it at 0.0 — the
+                                   old "policy pathologically picks draw" reading was the
+                                   bug, not the policy: measured fresh, it picks play-first
+                                   ~99.95% of the time. Ignore historical values.
       * first_player_p1_frac     — sanity check: should be ~0.5 (the roll is seat-neutral)
     """
     return seat_diag_rates(seat_diag_counts(

@@ -3,8 +3,9 @@ __pycache__/
 *.py[codz]
 *$py.class
 
-# C extensions
+# C extensions (built in place by python -m fishrl._speed.build)
 *.so
+*.pyd
 
 # Distribution / packaging
 .Python

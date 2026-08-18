@@ -321,18 +321,27 @@ def _encode_obj_into(o, viewer: str, v: np.ndarray) -> None:
            bool(o.tapped), bool(o.entered_this_turn), o.controller == viewer)
     row = _ROW_CACHE.get(key)
     if row is None:
-        row = _static_template(key[0], key[1] or "", key[2] or "", key[3]).copy()
-        off = _STATIC_END
-        row[off + 0] = (o.power or 0) / 10.0
-        row[off + 1] = (o.toughness or 0) / 10.0
-        row[off + 2] = (o.damage_marked or 0) / 10.0
-        row[off + 3] = key[7] / 10.0
-        row[off + 4] = float(key[8])
-        row[off + 5] = float(key[9])
-        row[off + 6] = float(key[10])
-        if len(_ROW_CACHE) < _ROW_CACHE_MAX:
-            _ROW_CACHE[key] = row
+        row = _build_row(o, key)
     np.copyto(v, row)
+
+
+def _build_row(o, key) -> np.ndarray:
+    """Cache-miss row builder: static template + the 7 dynamic floats, inserted into
+    `_ROW_CACHE` under the cap. The ONLY writer of the cache -- the C fast path
+    (`fishrl._speed._fastenc`) calls back into this same function on a miss, so both
+    paths build and insert identically by construction."""
+    row = _static_template(key[0], key[1] or "", key[2] or "", key[3]).copy()
+    off = _STATIC_END
+    row[off + 0] = (o.power or 0) / 10.0
+    row[off + 1] = (o.toughness or 0) / 10.0
+    row[off + 2] = (o.damage_marked or 0) / 10.0
+    row[off + 3] = key[7] / 10.0
+    row[off + 4] = float(key[8])
+    row[off + 5] = float(key[9])
+    row[off + 6] = float(key[10])
+    if len(_ROW_CACHE) < _ROW_CACHE_MAX:
+        _ROW_CACHE[key] = row
+    return row
 
 
 def _zone_obj(objs: list, n: int, viewer: str) -> np.ndarray:
@@ -342,7 +351,7 @@ def _zone_obj(objs: list, n: int, viewer: str) -> np.ndarray:
     return rows.reshape(-1)
 
 
-def _fill_zone(rows: np.ndarray, base: int, objs: list, n: int, viewer: str) -> int:
+def _fill_zone_py(rows: np.ndarray, base: int, objs: list, n: int, viewer: str) -> int:
     """Write a zone's rows into `rows[base:base+n]` (assumed zeroed) and return the
     next base. The in-place twin of `_zone_obj`: encoding straight into ONE
     preallocated output vector saves the per-zone allocation + the final
@@ -350,6 +359,27 @@ def _fill_zone(rows: np.ndarray, base: int, objs: list, n: int, viewer: str) -> 
     for i, o in enumerate(objs[:n]):
         _encode_obj_into(o, viewer, rows[base + i])
     return base + n
+
+
+def _sum_values(d) -> int:
+    return sum(d.values())
+
+
+# The C fast path (fishrl/_speed/_fastenc.c) replicates _fill_zone_py's loop --
+# attribute reads, the row-cache key, the shared-cache lookup, one memcpy per row --
+# calling back into Python only for text_variant / counters-sum / _build_row (all
+# rare or miss-only). It shares _ROW_CACHE with the Python path and never inserts
+# itself (_build_row is the only writer), so the two paths cannot diverge on cache
+# content. Optional by design: unbuilt checkouts (Linux deploy, ODROID) fall back
+# to the pure-Python loop with identical output -- guarded by
+# test_fastenc_equivalence when the module is present.
+try:
+    from fishrl._speed import _fastenc as _C
+
+    _C.setup(_ROW_CACHE, _build_row, text_variant, _sum_values, CARD_F, V.N_NAMES)
+    _fill_zone = _C.fill_zone
+except ImportError:
+    _fill_zone = _fill_zone_py
 
 
 def encode_observation(g, viewer: str, builder_progress: float = 0.0,

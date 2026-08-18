@@ -238,7 +238,9 @@ def encode_observation_ref(g, viewer: str, builder_progress: float = 0.0) -> np.
     k += _CLOCK
 
     parts.append(g_vec)
-    return np.concatenate(parts).astype(np.float32)
+    # parts are all float32, so concatenate already yields float32 -- copy=False makes
+    # the astype the dtype ASSERTION it was meant to be instead of a full-vector copy.
+    return np.concatenate(parts).astype(np.float32, copy=False)
 
 
 # ── fast object-native path ───────────────────────────────────────────────────
@@ -269,6 +271,8 @@ def encode_observation_ref(g, viewer: str, builder_progress: float = 0.0) -> np.
 # while the variant bit fires.
 _STATIC_END = V.N_NAMES + 1 + 4 + 5 + 5 + 1
 _TEMPLATES: dict = {}
+_ROW_CACHE: dict = {}
+_ROW_CACHE_MAX = 200_000
 
 
 def _static_template(name: str, tl: str, ot: str, tv) -> np.ndarray:
@@ -298,21 +302,37 @@ def _static_template(name: str, tl: str, ot: str, tv) -> np.ndarray:
 def _encode_obj_into(o, viewer: str, v: np.ndarray) -> None:
     """Object-native twin of `_encode_card_into`: write a CardInstance's CARD_F-wide row from
     its attributes. `o is None` encodes the hidden/unknown slot (opp's unseen hand, empty stack
-    source). Field-for-field identical to `_encode_card_into` (the equivalence oracle), via a
-    cached static template + the 7 dynamic floats."""
+    source). Field-for-field identical to `_encode_card_into` (the equivalence oracle).
+
+    The FULL row is cached, keyed on everything that feeds it -- the static-template
+    key plus the 7 dynamic values (stats normalize many-to-one, e.g. power None and 0
+    encode alike, so near-duplicate keys just share a row's worth of memory). This was
+    the hottest function in collection: the 7 per-call numpy scalar writes cost more
+    than the key build + single row copy that replaces them, and distinct keys number
+    a few hundred against ~60 calls per decision. The cap is a leak guard, far above
+    any real key population; past it, rows are built per call and not stored."""
     if o is None:
         v[V.N_NAMES] = 1.0          # "unknown/hidden" bit
         return
-    np.copyto(v, _static_template(o.name, o.type_line or "", o.oracle_text or "",
-                                  text_variant(o)))
-    off = _STATIC_END
-    v[off + 0] = (o.power or 0) / 10.0
-    v[off + 1] = (o.toughness or 0) / 10.0
-    v[off + 2] = (o.damage_marked or 0) / 10.0
-    v[off + 3] = sum((o.counters or {}).values()) / 10.0
-    v[off + 4] = float(bool(o.tapped))
-    v[off + 5] = float(bool(o.entered_this_turn))
-    v[off + 6] = float(o.controller == viewer)
+    cnt = o.counters
+    key = (o.name, o.type_line, o.oracle_text,
+           text_variant(o) if o.text_changes else None,
+           o.power, o.toughness, o.damage_marked, sum(cnt.values()) if cnt else 0,
+           bool(o.tapped), bool(o.entered_this_turn), o.controller == viewer)
+    row = _ROW_CACHE.get(key)
+    if row is None:
+        row = _static_template(key[0], key[1] or "", key[2] or "", key[3]).copy()
+        off = _STATIC_END
+        row[off + 0] = (o.power or 0) / 10.0
+        row[off + 1] = (o.toughness or 0) / 10.0
+        row[off + 2] = (o.damage_marked or 0) / 10.0
+        row[off + 3] = key[7] / 10.0
+        row[off + 4] = float(key[8])
+        row[off + 5] = float(key[9])
+        row[off + 6] = float(key[10])
+        if len(_ROW_CACHE) < _ROW_CACHE_MAX:
+            _ROW_CACHE[key] = row
+    np.copyto(v, row)
 
 
 def _zone_obj(objs: list, n: int, viewer: str) -> np.ndarray:
@@ -322,30 +342,50 @@ def _zone_obj(objs: list, n: int, viewer: str) -> np.ndarray:
     return rows.reshape(-1)
 
 
-def encode_observation(g, viewer: str, builder_progress: float = 0.0) -> np.ndarray:
+def _fill_zone(rows: np.ndarray, base: int, objs: list, n: int, viewer: str) -> int:
+    """Write a zone's rows into `rows[base:base+n]` (assumed zeroed) and return the
+    next base. The in-place twin of `_zone_obj`: encoding straight into ONE
+    preallocated output vector saves the per-zone allocation + the final
+    concatenate + astype copies of the old parts-list assembly."""
+    for i, o in enumerate(objs[:n]):
+        _encode_obj_into(o, viewer, rows[base + i])
+    return base + n
+
+
+def encode_observation(g, viewer: str, builder_progress: float = 0.0,
+                       out: np.ndarray | None = None) -> np.ndarray:
     """Fast path used in collection: bit-identical to `encode_observation_ref` (guarded by
     tests/test_encoder_equivalence.py) but reads engine objects directly instead of the UI view.
 
     Visibility filter (mirrors `current_view`): own hand + both battlefields + graveyard + exile
     are fully visible; the opponent's hand is per-card known-or-hidden; the library shows only the
-    slots this viewer knows. A hidden card / missing stack source is encoded as the unknown slot."""
+    slots this viewer knows. A hidden card / missing stack source is encoded as the unknown slot.
+
+    `out`, when given, must be a ZEROED float32 vector whose first OBS_DIM entries this
+    encode fills in place (also returned). It lets belief_env compose obs-plus-belief in
+    one buffer instead of paying a concatenate + copy per observe."""
     opp = "p2" if viewer == "p1" else "p1"
     obj = g.objects
+    if out is None:
+        out = np.zeros(OBS_DIM, dtype=np.float32)
+    rows = out[:_ZONE_ROWS * CARD_F].reshape(_ZONE_ROWS, CARD_F)
 
-    parts = [
-        _zone_obj([obj[iid] for iid in g.players[viewer].hand], SLOTS["own_hand"], viewer),
-        _zone_obj([obj[iid] if viewer in (obj[iid].known_by or []) else None
-                   for iid in g.players[opp].hand], SLOTS["opp_hand"], viewer),
-        _zone_obj([obj[iid] for iid in g.players[viewer].battlefield], SLOTS["own_bf"], viewer),
-        _zone_obj([obj[iid] for iid in g.players[opp].battlefield], SLOTS["opp_bf"], viewer),
-        _zone_obj([obj[iid] for iid in g.graveyard], SLOTS["graveyard"], viewer),
-        _zone_obj([obj[iid] for iid in g.exile], SLOTS["exile"], viewer),
-        _zone_obj([obj.get(s.source_instance_id) for s in g.stack], SLOTS["stack"], viewer),
-        _zone_obj([obj[s.instance_id] for s in g.library if s.known_by.get(viewer)],
-                  SLOTS["library"], viewer),
-    ]
+    b = _fill_zone(rows, 0, [obj[iid] for iid in g.players[viewer].hand],
+                   SLOTS["own_hand"], viewer)
+    b = _fill_zone(rows, b, [obj[iid] if viewer in (obj[iid].known_by or []) else None
+                             for iid in g.players[opp].hand], SLOTS["opp_hand"], viewer)
+    b = _fill_zone(rows, b, [obj[iid] for iid in g.players[viewer].battlefield],
+                   SLOTS["own_bf"], viewer)
+    b = _fill_zone(rows, b, [obj[iid] for iid in g.players[opp].battlefield],
+                   SLOTS["opp_bf"], viewer)
+    b = _fill_zone(rows, b, [obj[iid] for iid in g.graveyard], SLOTS["graveyard"], viewer)
+    b = _fill_zone(rows, b, [obj[iid] for iid in g.exile], SLOTS["exile"], viewer)
+    b = _fill_zone(rows, b, [obj.get(s.source_instance_id) for s in g.stack],
+                   SLOTS["stack"], viewer)
+    _fill_zone(rows, b, [obj[s.instance_id] for s in g.library if s.known_by.get(viewer)],
+               SLOTS["library"], viewer)
 
-    g_vec = np.zeros(_GLOBALS, dtype=np.float32)
+    g_vec = out[_ZONE_ROWS * CARD_F:_ZONE_ROWS * CARD_F + _GLOBALS]
     k = 0
     for pid in (viewer, opp):
         p = g.players[pid]
@@ -397,5 +437,4 @@ def encode_observation(g, viewer: str, builder_progress: float = 0.0) -> np.ndar
     g_vec[k], g_vec[k + 1], g_vec[k + 2] = deckout_clock(g, viewer)   # viewer-oriented
     k += _CLOCK
 
-    parts.append(g_vec)
-    return np.concatenate(parts).astype(np.float32)
+    return out

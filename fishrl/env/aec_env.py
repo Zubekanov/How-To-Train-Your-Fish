@@ -94,12 +94,17 @@ class FishAEC(AECEnv):
         self._accumulate_rewards()
 
     # ── observation ──────────────────────────────────────────────────────────
-    def observe(self, agent):
+    def observe(self, agent, out=None):
+        """`out`, when given, is a zeroed float32 buffer whose first OBS_DIM entries the
+        encode fills in place (see encode_observation) -- lets the belief wrapper compose
+        obs+belief without a concatenate+copy. The mask is fresh from every source
+        (atomic_mask / builder.mask / zeros all allocate), so copy=False only asserts
+        the dtype instead of paying a defensive copy."""
         acting = agent == self.agent_selection and not self.terminations[agent]
         mask = self._current_mask() if acting else np.zeros(A.N, dtype=np.int8)
         prog = self._builder.progress() if (acting and self._builder is not None) else 0.0
-        return {"observation": encode_observation(self.g, agent, prog),
-                "action_mask": mask.astype(np.int8)}
+        return {"observation": encode_observation(self.g, agent, prog, out=out),
+                "action_mask": mask.astype(np.int8, copy=False)}
 
     def _current_mask(self) -> np.ndarray:
         if self._builder is not None:

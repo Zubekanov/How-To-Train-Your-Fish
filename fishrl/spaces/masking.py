@@ -29,9 +29,37 @@ import numpy as np
 
 from fishrl.forgetful_fish import engine as E
 from fishrl.forgetful_fish.state import (
-    CYCLING, PERMANENT_ABILITIES, MODAL_SPELLS, _is_land, current_view, land_mana_color,
+    CYCLING, PERMANENT_ABILITIES, MODAL_SPELLS, _available_mana, _can_play_now,
+    _is_land, current_view, land_mana_color,
 )
 from fishrl.spaces import action_space as A
+
+# ── memoized text-pure engine helpers ────────────────────────────────────────────
+# `land_mana_color` (regex over type_line/oracle_text) and `_is_land` (str.lower +
+# substring) are pure functions of a card's EFFECTIVE text -- which text-change
+# effects rewrite, so the cache keys on the strings themselves, never the instance.
+# `_mana_options` runs them per untapped permanent per affordability probe, which
+# made module-level `re.search` a measurable slice of collection. fishrl-side only:
+# the vendored engine keeps calling its own copies.
+_LAND_COLOR_CACHE: dict = {}
+_IS_LAND_CACHE: dict = {}
+
+
+def _land_color(o) -> str:
+    key = (o.type_line, o.oracle_text)
+    c = _LAND_COLOR_CACHE.get(key)
+    if c is None:
+        c = land_mana_color(o)
+        _LAND_COLOR_CACHE[key] = c
+    return c
+
+
+def _is_land_tl(tl) -> bool:
+    v = _IS_LAND_CACHE.get(tl)
+    if v is None:
+        v = _is_land(tl)
+        _IS_LAND_CACHE[tl] = v
+    return v
 
 # ── choose_text_change action-space treatment (Config.text_change_mode) ──────────
 # "full"   -- the legacy 25-way from->to block (minus the no-op diagonal).
@@ -209,8 +237,8 @@ def _mana_options(g, viewer: str, exclude_iid):
         o = g.objects.get(iid)
         if o is None or o.tapped:
             continue
-        if _is_land(o.type_line):
-            opts.append((iid, ("tap_land", None), land_mana_color(o), 1))
+        if _is_land_tl(o.type_line):
+            opts.append((iid, ("tap_land", None), _land_color(o), 1))
         for idx, ab in enumerate(PERMANENT_ABILITIES.get(o.name, [])):
             if idx >= A.ABIL_SLOTS:           # ability id the action space can't reach
                 continue
@@ -243,6 +271,64 @@ def _affordable(g, viewer: str, colored: dict, generic: int, *, exclude_iid=None
 
 
 def _priority_mask(g, viewer: str, m) -> None:
+    """Object-native priority mask: re-derives the view's can_play / can_cycle /
+    modes / ability-availability annotations straight from engine objects and the
+    same engine helpers `current_view` uses (`_can_play_now`, `_available_mana`),
+    skipping the full UI-view build (which was ~8% of collection wall). MUST stay
+    identical to `_priority_mask_ref` -- guarded by test_priority_mask_equivalence."""
+    m[A.aid("PASS")] = 1
+    if g.active_player == viewer and not g.stack:
+        m[A.aid("END_TURN")] = 1
+    obj = g.objects
+    pend = g.pending
+    # current_view's timing refinement (CR 605.3a): mana abilities at your priority
+    # OR during your payment; everything else only at your priority.
+    your_priority = pend is not None and pend.type == "priority" and pend.player == viewer
+    in_your_pay = pend is not None and pend.type == "pay" and pend.player == viewer
+    for i, iid in enumerate(g.players[viewer].hand[:A.HAND]):
+        o = obj[iid]
+        if _can_play_now(g, viewer, o):
+            playable = True
+            if not _is_land_tl(o.type_line):            # spells: need mana + legal targets
+                colored, generic = E._parse_cost(o.mana_cost)
+                if not _affordable(g, viewer, colored, generic):
+                    playable = False
+                spec = E._TARGETS.get(o.name)
+                if spec is not None and len(spec["legal"](g, viewer)) < spec["count"]:
+                    playable = False
+            if playable:
+                m[A.aid("PLAY_HAND", i)] = 1
+                if o.name in MODAL_SPELLS:              # modal spell: alternate mode
+                    m[A.aid("PLAY_HAND_ALT", i)] = 1
+        # cycling costs {U} (always blue, even if the card's land type was changed);
+        # gate it so the agent can't commit to a cost it can't pay (there is no cancel).
+        cyc = CYCLING.get(o.name)
+        if (cyc is not None and your_priority and _available_mana(g, viewer) >= cyc
+                and _affordable(g, viewer, {"U": cyc}, 0)):
+            m[A.aid("CYCLE_HAND", i)] = 1
+    for i, iid in enumerate(g.players[viewer].battlefield[:A.BF]):
+        o = obj[iid]
+        specs = PERMANENT_ABILITIES.get(o.name)
+        if not specs:
+            continue
+        for idx, spec in enumerate(specs):
+            if idx >= A.ABIL_SLOTS:
+                continue
+            avail = not (spec["tap"] and o.tapped)      # _ability_view's base availability
+            if avail:
+                avail = (your_priority or in_your_pay) if spec["adds"] else your_priority
+            if not avail:
+                continue
+            # mana abilities cost no mana (they ARE mana); a non-mana ability must be
+            # payable (colour-aware) from OTHER sources, since this one taps/sacs itself.
+            if spec["adds"] or _affordable(g, viewer, *E._parse_cost(spec["cost"]), exclude_iid=iid):
+                m[A.aid("ACTIVATE", i * A.ABIL_SLOTS + idx)] = 1
+
+
+def _priority_mask_ref(g, viewer: str, m) -> None:
+    """REFERENCE priority mask (the original current_view path) -- the behavioural
+    contract `_priority_mask` must stay identical to. Kept as the equivalence oracle
+    (test_priority_mask_equivalence), like the *_ref encoders."""
     m[A.aid("PASS")] = 1
     if g.active_player == viewer and not g.stack:
         m[A.aid("END_TURN")] = 1

@@ -91,18 +91,23 @@ class BeliefAugmentedEnv:
         self.env.step(action)
 
     def observe(self, agent: str) -> dict:
-        base = self.env.observe(agent)
-        persp = base["observation"]
         if self.mode == "bookkeeper":             # analytic vector; stateless, no net
             from fishrl.data.features import bookkeeper_counts
-            bk = bookkeeper_counts(self.env.g, agent)
+            from fishrl.obs.encoder import OBS_DIM
+            # One buffer for obs ⊕ belief: the env encodes into the head in place and
+            # the bookkeeper tail is a 20-float assignment -- no concatenate, no copy.
+            full = np.zeros(OBS_DIM + V.N_NAMES, dtype=np.float32)
+            base = self.env.observe(agent, out=full[:OBS_DIM])
+            full[OBS_DIM:] = bookkeeper_counts(self.env.g, agent)
             self.last_prev[agent] = np.zeros(V.N_NAMES, dtype=np.float32)
-            return {"observation": np.concatenate([persp, bk]).astype(np.float32),
-                    "action_mask": base["action_mask"]}
+            return {"observation": full, "action_mask": base["action_mask"]}
+        base = self.env.observe(agent)
+        persp = base["observation"]
         if not self.belief:                       # ablation: no belief, no guesser forward
             z = np.zeros(V.N_NAMES, dtype=np.float32)
             self.last_prev[agent] = z
-            return {"observation": np.concatenate([persp, z]).astype(np.float32),
+            # both halves are float32, so concatenate is already float32 (no astype copy)
+            return {"observation": np.concatenate([persp, z]),
                     "action_mask": base["action_mask"]}
         prev = self.last_guess.get(agent, np.zeros(V.N_NAMES, dtype=np.float32))
         self.last_prev[agent] = prev
@@ -113,5 +118,5 @@ class BeliefAugmentedEnv:
                 torch.as_tensor(prev, dtype=torch.float32).unsqueeze(0).to(dev),
             ).squeeze(0).cpu().numpy().astype(np.float32)
         self.last_guess[agent] = guess
-        return {"observation": np.concatenate([persp, guess]).astype(np.float32),
+        return {"observation": np.concatenate([persp, guess]),
                 "action_mask": base["action_mask"]}

@@ -23,6 +23,7 @@ from fishrl.train.advantages import SEAT_SIGN
 # skipped entirely (throughput), but Step.god_feat keeps its shape so the batch
 # stacks unchanged. Read-only by contract (steps only ever np.stack it).
 _ZERO_GOD = np.zeros(GOD_DIM, dtype=np.float32)
+_ZERO_NAMES = np.zeros(V.N_NAMES, dtype=np.float32)   # shared read-only (np.stack copies)
 
 
 def _resolve_belief_mode(belief_mode, guesser, use_belief) -> str:
@@ -178,14 +179,15 @@ def collect_heuristic_games(guesser, actor, n_games, base_seed, critic=None,
                 guess = bookkeeper_counts(g, SEAT)
             else:
                 guess = zeros.copy()
-            x_act = np.concatenate([persp, guess]).astype(np.float32)
+            x_act = np.concatenate([persp, guess]).astype(np.float32, copy=False)
             action, logp = act({"observation": x_act, "action_mask": mask})
             buf.add(Step(
                 seat=SEAT, x_act=x_act,
-                mask=mask.astype(np.int8), action=action, logp=logp,
+                mask=mask.astype(np.int8, copy=False), action=action, logp=logp,
                 value=0.0, god_feat=god, pub_feat=pub,
-                guess_in=prev_guess.astype(np.float32),   # the guesser's INPUT (carried prev)
-                cnt_target=opponent_hand_counts(g, SEAT),
+                guess_in=prev_guess.astype(np.float32, copy=False),   # the guesser's INPUT (carried prev)
+                cnt_target=(_ZERO_NAMES if mode == "bookkeeper"
+                            else opponent_hand_counts(g, SEAT)),
             ))
             prev_guess = guess
             obs, _reward, done, _info = match.step(action)
@@ -289,14 +291,15 @@ def collect_vs_opponent(learner, opponent, n_games, base_seed, critic=None,
                     guess = bookkeeper_counts(g, seat)
                 else:
                     guess = zeros.copy()
-                x_act = np.concatenate([persp, guess]).astype(np.float32)
+                x_act = np.concatenate([persp, guess]).astype(np.float32, copy=False)
                 action, logp = learn_act({"observation": x_act, "action_mask": mask})
                 buf.add(Step(
                     seat=seat, x_act=x_act,
-                    mask=mask.astype(np.int8), action=action, logp=logp,
+                    mask=mask.astype(np.int8, copy=False), action=action, logp=logp,
                     value=0.0, god_feat=god, pub_feat=pub,
-                    guess_in=prev_in.astype(np.float32),   # the guesser's INPUT (carried prev)
-                    cnt_target=opponent_hand_counts(g, seat),
+                    guess_in=prev_in.astype(np.float32, copy=False),   # the guesser's INPUT (carried prev)
+                    cnt_target=(_ZERO_NAMES if mode == "bookkeeper"
+                                else opponent_hand_counts(g, seat)),
                 ))
             elif kind == "random":
                 action = int(rng.choice(np.flatnonzero(mask)))
@@ -354,14 +357,19 @@ def collect_games(belief_env, act_fn, n_games, base_seed, critic=None,
             else:                                     # same frozen state (compound sub-step)
                 god, pub = cache_god.copy(), cache_pub.copy()
             action, logp = act_fn(obs)
+            # x / mask are fresh arrays every observe and last_prev is reassigned (never
+            # mutated in place), so copy=False astypes assert dtype without the defensive
+            # copies. cnt_target is the GUESSER's supervised target -- in bookkeeper mode
+            # there is no guesser and aux_update is skipped, so buffer a shared zero.
             buf.add(Step(
-                seat=agent, x_act=x.astype(np.float32),
-                mask=obs["action_mask"].astype(np.int8), action=action, logp=logp,
+                seat=agent, x_act=x.astype(np.float32, copy=False),
+                mask=obs["action_mask"].astype(np.int8, copy=False), action=action, logp=logp,
                 value=0.0, god_feat=god, pub_feat=pub,
                 # the guesser's INPUT at this observe (the seat's carried previous
                 # guess) — its output is x[OBS_DIM:], already inside x_act
-                guess_in=belief_env.last_prev[agent].astype(np.float32),
-                cnt_target=opponent_hand_counts(g, agent),
+                guess_in=belief_env.last_prev[agent].astype(np.float32, copy=False),
+                cnt_target=(_ZERO_NAMES if belief_env.mode == "bookkeeper"
+                            else opponent_hand_counts(g, agent)),
             ))
             belief_env.step(action)
         winner = belief_env.winner            # scenario terminator result, or engine winner

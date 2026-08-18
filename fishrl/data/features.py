@@ -18,7 +18,8 @@ from __future__ import annotations
 import numpy as np
 
 from fishrl.forgetful_fish.state import _public_object, _is_land, spectator_view
-from fishrl.obs.encoder import CARD_F, _encode_card, _zone, _zone_obj, deckout_clock
+from fishrl.obs.encoder import (CARD_F, _encode_card, _fill_zone, _zone, _zone_obj,
+                                deckout_clock)
 from fishrl.obs import vocab as V
 
 # ── god (privileged) layout ───────────────────────────────────────────────────
@@ -57,14 +58,28 @@ def opponent_hand_counts(g, viewer: str) -> np.ndarray:
     return counts
 
 
+def _name_idx_of(g) -> dict:
+    """Per-game iid -> vocab name-index cache (lazy; -2 marks no-index/missing).
+    A card's NAME never changes (text changes rewrite type/oracle text only), so the
+    mapping is stable for the instance's lifetime. Plain attr, not serialized --
+    same pattern as `_bk_copies`."""
+    ni = getattr(g, "_bk_nameidx", None)
+    if ni is None:
+        ni = {}
+        g._bk_nameidx = ni
+    return ni
+
+
 def _name_counts_into(g, iids, out: np.ndarray) -> None:
+    ni = _name_idx_of(g)
     obj = g.objects
     for iid in iids:
-        o = obj.get(iid)
-        if o is None:
-            continue
-        idx = V.NAME_INDEX.get(o.name)
-        if idx is not None:
+        idx = ni.get(iid, -1)
+        if idx == -1:                       # not cached yet (-2 caches a definite miss)
+            o = obj.get(iid)
+            idx = -2 if o is None else V.NAME_INDEX.get(o.name, -2)
+            ni[iid] = idx
+        if idx >= 0:
             out[idx] += 1.0
 
 
@@ -177,26 +192,29 @@ def _player_scalars_obj(life, hand_count, bf_objs, pool, mulligans, has_lost) ->
 def encode_god(g) -> np.ndarray:
     """Privileged, fully-observed, p1-oriented feature vector (GOD_DIM). Fast object-native path:
     god sees full identity in every zone (no visibility filter), so it reads CardInstance objects
-    directly and skips the _public_object/_ability_view dict build. Bit-identical to
+    directly and skips the _public_object/_ability_view dict build. Encodes into ONE
+    preallocated vector (no per-zone alloc / concatenate / astype). Bit-identical to
     `encode_god_ref` -- guarded by test_encoder_equivalence."""
     obj = g.objects
     bf = {pid: [obj[iid] for iid in g.players[pid].battlefield if iid in obj] for pid in ("p1", "p2")}
+    out = np.zeros(GOD_DIM, dtype=np.float32)
+    rows = out[:_GOD_ROWS * CARD_F].reshape(_GOD_ROWS, CARD_F)
 
-    def zone(ids, slots):
-        return _zone_obj([obj[iid] for iid in ids if iid in obj], slots, "p1")
+    b = _fill_zone(rows, 0, [obj[iid] for iid in g.players["p1"].hand if iid in obj],
+                   GOD_SLOTS["p1_hand"], "p1")
+    b = _fill_zone(rows, b, [obj[iid] for iid in g.players["p2"].hand if iid in obj],
+                   GOD_SLOTS["p2_hand"], "p1")
+    b = _fill_zone(rows, b, bf["p1"], GOD_SLOTS["p1_bf"], "p1")
+    b = _fill_zone(rows, b, bf["p2"], GOD_SLOTS["p2_bf"], "p1")
+    b = _fill_zone(rows, b, [obj[iid] for iid in g.graveyard if iid in obj],
+                   GOD_SLOTS["graveyard"], "p1")
+    b = _fill_zone(rows, b, [obj[iid] for iid in g.exile if iid in obj],
+                   GOD_SLOTS["exile"], "p1")
+    b = _fill_zone(rows, b, [obj[s.source_instance_id] for s in g.stack
+                             if s.source_instance_id in obj], GOD_SLOTS["stack"], "p1")
+    _fill_zone(rows, b, [obj[s.instance_id] for s in g.library if s.instance_id in obj],
+               GOD_SLOTS["library"], "p1")
 
-    parts = [
-        zone(g.players["p1"].hand, GOD_SLOTS["p1_hand"]),
-        zone(g.players["p2"].hand, GOD_SLOTS["p2_hand"]),
-        _zone_obj(bf["p1"], GOD_SLOTS["p1_bf"], "p1"),
-        _zone_obj(bf["p2"], GOD_SLOTS["p2_bf"], "p1"),
-        zone(g.graveyard, GOD_SLOTS["graveyard"]),
-        zone(g.exile, GOD_SLOTS["exile"]),
-        _zone_obj([obj[s.source_instance_id] for s in g.stack if s.source_instance_id in obj],
-                  GOD_SLOTS["stack"], "p1"),
-        _zone_obj([obj[s.instance_id] for s in g.library if s.instance_id in obj],
-                  GOD_SLOTS["library"], "p1"),
-    ]
     gv = []
     for pid in ("p1", "p2"):
         p = g.players[pid]
@@ -204,8 +222,8 @@ def encode_god(g) -> np.ndarray:
     gv += [g.turn_number / 40.0, float(g.active_player == "p1"),
            float(g.priority_player == "p1"), len(g.library) / 80.0, len(g.stack) / 6.0]
     gv += list(deckout_clock(g, "p1"))                # deckout clock (p1-oriented)
-    parts.append(np.asarray(gv, dtype=np.float32))
-    return np.concatenate(parts).astype(np.float32)
+    out[_GOD_ROWS * CARD_F:] = gv
+    return out
 
 
 def encode_public_ref(g) -> np.ndarray:
@@ -272,20 +290,23 @@ def encode_public(g) -> np.ndarray:
 
     bf = {pid: [obj[iid] for iid in g.players[pid].battlefield if iid in obj]
           for pid in ("p1", "p2")}
-    parts = [
-        _zone_obj(hand_objs("p1", "p2"), PUB_SLOTS["p1_hand"], "p1"),
-        _zone_obj(hand_objs("p2", "p1"), PUB_SLOTS["p2_hand"], "p1"),
-        _zone_obj(bf["p1"], PUB_SLOTS["p1_bf"], "p1"),
-        _zone_obj(bf["p2"], PUB_SLOTS["p2_bf"], "p1"),
-        _zone_obj([obj[iid] for iid in g.graveyard if iid in obj],
-                  PUB_SLOTS["graveyard"], "p1"),
-        _zone_obj([obj[iid] for iid in g.exile if iid in obj], PUB_SLOTS["exile"], "p1"),
-        _zone_obj([obj.get(s.source_instance_id) for s in g.stack],
-                  PUB_SLOTS["stack"], "p1"),
-        _zone_obj([obj[s.instance_id] for s in g.library
-                   if s.known_by.get("p1") and s.known_by.get("p2")],
-                  PUB_SLOTS["library"], "p1"),
-    ]
+    out = np.zeros(PUB_DIM, dtype=np.float32)
+    rows = out[:_PUB_ROWS * CARD_F].reshape(_PUB_ROWS, CARD_F)
+
+    b = _fill_zone(rows, 0, hand_objs("p1", "p2"), PUB_SLOTS["p1_hand"], "p1")
+    b = _fill_zone(rows, b, hand_objs("p2", "p1"), PUB_SLOTS["p2_hand"], "p1")
+    b = _fill_zone(rows, b, bf["p1"], PUB_SLOTS["p1_bf"], "p1")
+    b = _fill_zone(rows, b, bf["p2"], PUB_SLOTS["p2_bf"], "p1")
+    b = _fill_zone(rows, b, [obj[iid] for iid in g.graveyard if iid in obj],
+                   PUB_SLOTS["graveyard"], "p1")
+    b = _fill_zone(rows, b, [obj[iid] for iid in g.exile if iid in obj],
+                   PUB_SLOTS["exile"], "p1")
+    b = _fill_zone(rows, b, [obj.get(s.source_instance_id) for s in g.stack],
+                   PUB_SLOTS["stack"], "p1")
+    _fill_zone(rows, b, [obj[s.instance_id] for s in g.library
+                         if s.known_by.get("p1") and s.known_by.get("p2")],
+               PUB_SLOTS["library"], "p1")
+
     gv = []
     for pid in ("p1", "p2"):
         p = g.players[pid]
@@ -294,5 +315,5 @@ def encode_public(g) -> np.ndarray:
     gv += [g.turn_number / 40.0, float(g.active_player == "p1"),
            float(g.priority_player == "p1"), len(g.library) / 80.0, len(g.stack) / 6.0]
     gv += list(deckout_clock(g, "p1"))                # deckout clock (p1-oriented)
-    parts.append(np.asarray(gv, dtype=np.float32))
-    return np.concatenate(parts).astype(np.float32)
+    out[_PUB_ROWS * CARD_F:] = gv
+    return out

@@ -55,7 +55,8 @@ if not "%NLOCAL%"=="0" if not "%NLOCAL%"=="" (
 rem -- optional graceful remote stop -------------------------------------------
 if /i "%~1"=="/stop" (
     echo [sync] stopping the cloud trainer gracefully ^(STOP marker^)...
-    ssh -p %VAST_PORT% %SSHOPTS% %VAST_HOST% "touch %RCKPT%/STOP; for i in $(seq 1 60); do pgrep -f 'python -m fishrl.train' >/dev/null || { echo '[remote] trainer exited cleanly'; exit 0; }; sleep 5; done; echo '[remote] WARNING: trainer still running after 5 min'; exit 2"
+    rem the [f] bracket keeps pgrep from matching THIS remote shell's own command line
+    ssh -p %VAST_PORT% %SSHOPTS% %VAST_HOST% "touch %RCKPT%/STOP; for i in $(seq 1 60); do pgrep -f 'python -m [f]ishrl.train' >/dev/null || { echo '[remote] trainer exited cleanly'; exit 0; }; sleep 5; done; echo '[remote] WARNING: trainer still running after 5 min'; exit 2"
     if errorlevel 3 (
         echo [sync] ERROR: could not reach the cloud box; aborting.
         exit /b 1

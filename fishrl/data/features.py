@@ -18,8 +18,8 @@ from __future__ import annotations
 import numpy as np
 
 from fishrl.forgetful_fish.state import _public_object, _is_land, spectator_view
-from fishrl.obs.encoder import (CARD_F, _encode_card, _fill_zone, _zone, _zone_obj,
-                                deckout_clock)
+from fishrl.obs.encoder import (CARD_F, _encode_card, _fill_zone, _gy_dicts, _gy_objs, _zone,
+                                _zone_obj, deckout_clock)
 from fishrl.obs import vocab as V
 
 # ── god (privileged) layout ───────────────────────────────────────────────────
@@ -177,7 +177,7 @@ def encode_god_ref(g) -> np.ndarray:
         _zone(_obj_dicts(g, g.players["p2"].hand), GOD_SLOTS["p2_hand"], "p1"),
         _zone(bf["p1"], GOD_SLOTS["p1_bf"], "p1"),
         _zone(bf["p2"], GOD_SLOTS["p2_bf"], "p1"),
-        _zone(_obj_dicts(g, g.graveyard), GOD_SLOTS["graveyard"], "p1"),
+        _zone(_gy_dicts(_obj_dicts(g, g.graveyard), GOD_SLOTS["graveyard"]), GOD_SLOTS["graveyard"], "p1"),
         _zone(_obj_dicts(g, g.exile), GOD_SLOTS["exile"], "p1"),
         _zone([_public_object(g.objects[s.source_instance_id])
                for s in g.stack if s.source_instance_id in g.objects],
@@ -223,8 +223,8 @@ def encode_god(g) -> np.ndarray:
                    GOD_SLOTS["p2_hand"], "p1")
     b = _fill_zone(rows, b, bf["p1"], GOD_SLOTS["p1_bf"], "p1")
     b = _fill_zone(rows, b, bf["p2"], GOD_SLOTS["p2_bf"], "p1")
-    b = _fill_zone(rows, b, [obj[iid] for iid in g.graveyard if iid in obj],
-                   GOD_SLOTS["graveyard"], "p1")
+    b = _fill_zone(rows, b, _gy_objs([obj[iid] for iid in g.graveyard if iid in obj],
+                                     GOD_SLOTS["graveyard"]), GOD_SLOTS["graveyard"], "p1")
     b = _fill_zone(rows, b, [obj[iid] for iid in g.exile if iid in obj],
                    GOD_SLOTS["exile"], "p1")
     b = _fill_zone(rows, b, [obj[s.source_instance_id] for s in g.stack
@@ -257,7 +257,7 @@ def encode_public_ref(g) -> np.ndarray:
         _zone(pl["p2"].get("hand", []), PUB_SLOTS["p2_hand"], "p1"),
         _zone(pl["p1"].get("battlefield", []), PUB_SLOTS["p1_bf"], "p1"),
         _zone(pl["p2"].get("battlefield", []), PUB_SLOTS["p2_bf"], "p1"),
-        _zone(view.get("graveyard", []), PUB_SLOTS["graveyard"], "p1"),
+        _zone(_gy_dicts(view.get("graveyard", []), PUB_SLOTS["graveyard"]), PUB_SLOTS["graveyard"], "p1"),
         _zone(view.get("exile", []), PUB_SLOTS["exile"], "p1"),
         _zone([s.get("card") for s in view.get("stack", [])], PUB_SLOTS["stack"], "p1"),
         _zone(known_only(view.get("library", [])), PUB_SLOTS["library"], "p1"),
@@ -322,8 +322,8 @@ def encode_hands(g) -> np.ndarray:
                    HANDS_SLOTS["p2_hand"], "p1")
     b = _fill_zone(rows, b, bf["p1"], HANDS_SLOTS["p1_bf"], "p1")
     b = _fill_zone(rows, b, bf["p2"], HANDS_SLOTS["p2_bf"], "p1")
-    b = _fill_zone(rows, b, [obj[iid] for iid in g.graveyard if iid in obj],
-                   HANDS_SLOTS["graveyard"], "p1")
+    b = _fill_zone(rows, b, _gy_objs([obj[iid] for iid in g.graveyard if iid in obj],
+                                     HANDS_SLOTS["graveyard"]), HANDS_SLOTS["graveyard"], "p1")
     b = _fill_zone(rows, b, [obj[iid] for iid in g.exile if iid in obj],
                    HANDS_SLOTS["exile"], "p1")
     _fill_zone(rows, b, [obj.get(s.source_instance_id) for s in g.stack],
@@ -371,8 +371,8 @@ def encode_public(g) -> np.ndarray:
     b = _fill_zone(rows, b, hand_objs("p2", "p1"), PUB_SLOTS["p2_hand"], "p1")
     b = _fill_zone(rows, b, bf["p1"], PUB_SLOTS["p1_bf"], "p1")
     b = _fill_zone(rows, b, bf["p2"], PUB_SLOTS["p2_bf"], "p1")
-    b = _fill_zone(rows, b, [obj[iid] for iid in g.graveyard if iid in obj],
-                   PUB_SLOTS["graveyard"], "p1")
+    b = _fill_zone(rows, b, _gy_objs([obj[iid] for iid in g.graveyard if iid in obj],
+                                     PUB_SLOTS["graveyard"]), PUB_SLOTS["graveyard"], "p1")
     b = _fill_zone(rows, b, [obj[iid] for iid in g.exile if iid in obj],
                    PUB_SLOTS["exile"], "p1")
     b = _fill_zone(rows, b, [obj.get(s.source_instance_id) for s in g.stack],

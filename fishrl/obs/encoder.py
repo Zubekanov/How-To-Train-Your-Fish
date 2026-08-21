@@ -58,6 +58,46 @@ SLOTS = {
 }
 _ZONE_ROWS = sum(SLOTS.values())
 
+
+# ── graveyard overflow ordering (2026-08-22) ─────────────────────────────────
+# The graveyard is the one zone that outgrows its slots (v1.3-mirror audit: >32 cards at
+# 13% of decisions, 46% of games -- the deckout window). A plain `objs[:n]` kept the OLDEST
+# 32 and silently dropped the newest Dandâns / Lapses. On overflow ONLY, the slots are filled
+# by value instead: every Accumulated Knowledge (its draw counts AKs in graveyards), then one
+# of each distinct instant / sorcery name (Mystic Sanctuary's menu), then the rest in
+# chronological order keeping the NEWEST. At <= n cards the fill is bit-identical to before,
+# so a trained v3 actor/critic sees no change on 87% of decisions; on the rest the entity
+# encoder's mean-pool half is exactly order-invariant and only the max-pool half shifts.
+# Shared by every view (actor ref + fast, god / public / hands) -- the C fast path only
+# truncates the list it is handed, so the selection lives here, once.
+_AK = "Accumulated Knowledge"
+
+
+def graveyard_order(items: list, n: int, name_of, type_of) -> list:
+    """Return the <= n graveyard entries to encode, in slot order (see above)."""
+    if len(items) <= n:
+        return items
+    ak, distinct, rest, seen = [], [], [], set()
+    for x in items:
+        nm = name_of(x)
+        if nm == _AK:
+            ak.append(x); continue
+        tl = (type_of(x) or "").lower()
+        if ("instant" in tl or "sorcery" in tl) and nm not in seen:
+            seen.add(nm); distinct.append(x); continue
+        rest.append(x)
+    keep = n - len(ak) - len(distinct)
+    rest = rest[-keep:] if keep > 0 else []
+    return (ak + distinct + rest)[:n]
+
+
+def _gy_objs(objs: list, n: int) -> list:
+    return graveyard_order(objs, n, lambda o: o.name, lambda o: o.type_line)
+
+
+def _gy_dicts(cards: list, n: int) -> list:
+    return graveyard_order(cards, n, lambda c: c.get("name", ""), lambda c: c.get("type_line"))
+
 # ── global / decision scalar block ────────────────────────────────────────────
 _PER_PLAYER = 12          # life, hand_count, lands, untapped, pool_total, pool×5, mulligans, has_lost
 _GAME = 5                 # turn, active_is_self, priority_is_self, library_count, stack_depth
@@ -176,7 +216,7 @@ def encode_observation_ref(g, viewer: str, builder_progress: float = 0.0) -> np.
         _zone(op_v.get("hand", []), SLOTS["opp_hand"], viewer),
         _zone(me_v.get("battlefield", []), SLOTS["own_bf"], viewer),
         _zone(op_v.get("battlefield", []), SLOTS["opp_bf"], viewer),
-        _zone(view.get("graveyard", []), SLOTS["graveyard"], viewer),
+        _zone(_gy_dicts(view.get("graveyard", []), SLOTS["graveyard"]), SLOTS["graveyard"], viewer),
         _zone(view.get("exile", []), SLOTS["exile"], viewer),
         _zone([s.get("card") for s in view.get("stack", [])], SLOTS["stack"], viewer),
         _zone([s for s in view.get("library", []) if s.get("known")],
@@ -408,7 +448,8 @@ def encode_observation(g, viewer: str, builder_progress: float = 0.0,
                    SLOTS["own_bf"], viewer)
     b = _fill_zone(rows, b, [obj[iid] for iid in g.players[opp].battlefield],
                    SLOTS["opp_bf"], viewer)
-    b = _fill_zone(rows, b, [obj[iid] for iid in g.graveyard], SLOTS["graveyard"], viewer)
+    b = _fill_zone(rows, b, _gy_objs([obj[iid] for iid in g.graveyard], SLOTS["graveyard"]),
+                   SLOTS["graveyard"], viewer)
     b = _fill_zone(rows, b, [obj[iid] for iid in g.exile], SLOTS["exile"], viewer)
     b = _fill_zone(rows, b, [obj.get(s.source_instance_id) for s in g.stack],
                    SLOTS["stack"], viewer)

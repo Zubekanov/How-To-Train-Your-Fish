@@ -117,7 +117,13 @@ class Config:
         default_factory=lambda: {"known_threat": 1.0, "known_threat_random": 1.0,
                                  "board_presence": 1.0, "deckout": 1.0,
                                  "survive_lethal": 1.0, "survive_lethal_vision": 1.0,
-                                 "survive_lethal_single": 1.0})
+                                 "survive_lethal_single": 1.0,
+                                 # envelope-constructed set (2026-08-21, scenarios/constructed.py)
+                                 "fish_war": 1.0, "response_window": 1.0,
+                                 "response_window_bend": 1.0, "protect_the_fish": 1.0,
+                                 "removal_in_hand": 1.0, "deckout_short": 1.0,
+                                 "deckout_with_fish": 1.0, "lethal_on_board": 1.0,
+                                 "steer_the_top": 1.0, "undoing_call": 1.0})
     # scenarios_in_pool only: a flat multiplier on every scenario member's PFSP
     # sampling weight (composes with the per-scenario scenario_weights prior).
     # Scenario episodes are far shorter than full games (~1/4 the decisions), so

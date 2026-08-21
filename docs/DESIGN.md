@@ -310,6 +310,20 @@ member's weight: scenario episodes are far shorter than full games, so boosting 
 play-count share costs sub-proportional wall-clock, and `pool_frac` still caps the whole
 pool slice (mirror self-play keeps the rest). `B=1` restores the unboosted behaviour.
 
+**2026-08-21 — envelope-constructed curriculum** (`scenarios/envelope.py`, `scenarios/constructed.py`).
+The seven original scenarios were *complete manufactures from hand constants* (both players at
+4 life, every other Dandân exiled, ten lands on turn 2) — legal states in corners no real game
+visits, four of them ending on proxy terminators. They stay registered at weight 0. The
+replacement set is built by one shared sampler, `envelope_sample`, which randomises inside a
+measured envelope of real game states (per-turn-bucket bands of life / lands / Island-typed lands
+/ hand / fish / library / graveyard, the graveyard drawn from the real cast mix, exile = resolved
+Undoings, zone conservation) and each scenario adds only a few `Overrides`. All end by the
+natural game result. Members: `fish_war`, `response_window` (+`_bend`), `protect_the_fish`,
+`removal_in_hand`, `deckout_short`, `deckout_with_fish`, `lethal_on_board`, `steer_the_top`,
+`undoing_call` — each aimed at a gap measured by the 13k-game trace / 700-game critic ledger
+(first-blood race, passing with an instant up, removal aimed at lands, the parity endgame).
+v3-best starting win rates 0.15–0.57.
+
 **Scenario win-rates are a curriculum signal, never a success metric** (`config.py:90-91`). Judge
 progress on the full-game vs-heuristic eval only.
 

@@ -487,9 +487,10 @@ def test_sample_scenario_name_respects_weights():
     only = {"known_threat": 1.0, "board_presence": 0.0, "deckout": 0.0}
     picks = {sample_scenario_name(only, rng) for _ in range(50)}
     assert picks == {"known_threat"}
-    assert set(scenario_names()) == {"known_threat", "known_threat_random",
-                                     "board_presence", "deckout", "survive_lethal",
-                                     "survive_lethal_vision", "survive_lethal_single"}
+    from fishrl.train.scenarios.constructed import CONSTRUCTED
+    legacy = {"known_threat", "known_threat_random", "board_presence", "deckout",
+              "survive_lethal", "survive_lethal_vision", "survive_lethal_single"}
+    assert set(scenario_names()) == legacy | {c.name for c in CONSTRUCTED}
 
 
 def test_config_default_weights_cover_every_registered_scenario():

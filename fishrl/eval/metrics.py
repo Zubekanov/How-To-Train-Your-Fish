@@ -67,7 +67,18 @@ def estimator_metrics(models, batch) -> dict:
     with torch.no_grad():
         cp = models.critic.p1_winprob(feat[keep].to(device_of(models.critic))).cpu()
         if models.public is None:
-            return {"n": int(y.numel()), "critic_acc": acc(cp), "critic_brier": brier(cp)}
+            out = {"n": int(y.numel()), "critic_acc": acc(cp), "critic_brier": brier(cp)}
+            # per-turn buckets: the turn is in the feature tail (turn/40), so this is a
+            # group-by on the forward already done -- no extra collection or compute
+            from fishrl.data.features import TURN_BUCKETS, turn_index_for
+            turn = torch.round(feat[keep][:, turn_index_for(view)] * 40.0)
+            for label, lo, hi in TURN_BUCKETS:
+                s = (turn >= lo) & (turn <= hi)
+                n_b = int(s.sum())
+                out[f"critic_n_{label}"] = n_b
+                out[f"critic_brier_{label}"] = float(((cp[s] - y[s]) ** 2).mean()) if n_b else float("nan")
+                out[f"critic_acc_{label}"] = float(((cp[s] > 0.5).float() == y[s]).float().mean()) if n_b else float("nan")
+            return out
         pub = models.public.p1_winprob(batch["pub"][keep].to(device_of(models.public))).cpu()
     return {"n": int(y.numel()),
             "priv_acc": acc(cp), "pub_acc": acc(pub),

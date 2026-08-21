@@ -101,6 +101,20 @@ def pub_dim_for(view: str) -> int:
     return hands_dim() if view == "hands" else PUB_DIM
 
 
+# Index of `turn_number / 40` in a critic feature vector: the game block follows the
+# per-player block (12 x 2) right after the card rows, for every view.
+_TURN_OFF = 12 * 2
+
+
+def turn_index_for(view: str) -> int:
+    rows = {"god": _GOD_ROWS, "public": _PUB_ROWS, "hands": _HANDS_ROWS}[view]
+    return rows * CARD_F + _TURN_OFF
+
+
+# Per-turn calibration buckets (telemetry): (label, lo, hi) inclusive turn ranges.
+TURN_BUCKETS = (("t1_10", 1, 10), ("t11_20", 11, 20), ("t21_30", 21, 30), ("t31p", 31, 999))
+
+
 def _zone_counts_tail(g) -> list:
     return [len(g.graveyard) / 40.0, len(g.exile) / 8.0]
 

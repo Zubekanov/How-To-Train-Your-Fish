@@ -436,10 +436,14 @@ def train(cfg: Config, models: Models | None = None, log=print,
         if v3:
             # v3 status format: no guesser/public tokens; one critic calib group +
             # the parity-aux loss. Parsed by backfill_stats' both-era regex.
+            # per-turn Brier (t1-10/11-20/21-30/31+) rides after aux=; backfill's regex
+            # stops at aux= so the token is tolerated by both eras' parsers
+            by_turn = "/".join(f"{est.get(f'critic_brier_{lbl}', nan):.2f}"
+                               for lbl, _lo, _hi in features.TURN_BUCKETS)
             calib_str = (
                 f"calib critic(acc={est.get('critic_acc', nan):.2f},"
                 f"brier={est.get('critic_brier', nan):.2f}) "
-                f"aux={mean.get('deckout_aux_loss', nan):.3f}"
+                f"aux={mean.get('deckout_aux_loss', nan):.3f} brier/t={by_turn}"
             )
             head_str = ""
         else:
@@ -486,7 +490,11 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 # loss); legacy rows keep the historic guesser/priv/pub/gmae fields.
                 **({"critic_acc": est.get("critic_acc"),
                     "critic_brier": est.get("critic_brier"),
-                    "deckout_aux_loss": mean.get("deckout_aux_loss")} if v3 else
+                    "deckout_aux_loss": mean.get("deckout_aux_loss"),
+                    # per-turn calibration buckets (pre-update, same forward)
+                    **{k: est.get(k) for lbl, _lo, _hi in features.TURN_BUCKETS
+                       for k in (f"critic_brier_{lbl}", f"critic_acc_{lbl}", f"critic_n_{lbl}")}}
+                   if v3 else
                    {"guesser_loss": mean["guesser_loss"], "public_loss": mean["public_loss"],
                     "priv_acc": est.get("priv_acc"), "pub_acc": est.get("pub_acc"),
                     "priv_brier": est.get("priv_brier"), "pub_brier": est.get("pub_brier"),

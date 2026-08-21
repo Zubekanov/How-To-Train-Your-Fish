@@ -61,3 +61,22 @@ def test_critic_untouched_after_its_epochs():
 
 def test_default_is_legacy_behaviour():
     assert Config().critic_epochs == 0
+
+
+def test_estimator_metrics_per_turn_buckets():
+    """Per-turn calibration buckets come off the same pre-update forward, keyed on the
+    turn/40 float in the feature tail."""
+    from fishrl.data.features import HANDS_DIM, TURN_BUCKETS, turn_index_for
+    from fishrl.eval.metrics import estimator_metrics
+    torch.manual_seed(0)
+    m = build_models(_cfg())
+    n = 40
+    pub = torch.zeros(n, HANDS_DIM)
+    turns = torch.tensor([1, 5, 12, 25, 40] * 8, dtype=torch.float32)
+    pub[:, turn_index_for("hands")] = turns / 40.0
+    batch = {"valid": torch.ones(n, dtype=torch.bool), "y_p1": (torch.rand(n) > 0.5).float(), "pub": pub,
+             "god": torch.zeros(n, 1)}
+    est = estimator_metrics(m, batch)
+    assert est["critic_n_t1_10"] == 16 and est["critic_n_t11_20"] == 8 and est["critic_n_t21_30"] == 8 and est["critic_n_t31p"] == 8
+    tot = sum(est[f"critic_n_{lbl}"] * est[f"critic_brier_{lbl}"] for lbl, _, _ in TURN_BUCKETS) / n
+    assert abs(tot - est["critic_brier"]) < 1e-5

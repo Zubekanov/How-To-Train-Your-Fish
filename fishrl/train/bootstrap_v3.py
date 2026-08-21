@@ -1,4 +1,5 @@
-"""Write the v3 seed checkpoint: v2's actor warm-started into the v3 architecture.
+"""Write a seed checkpoint: a source checkpoint's actor warm-started into a new
+critic architecture (v3: v2 actor + public critic; 2026-08-21: v3 actor + hands critic).
 
 The v3 restart (bookkeeper belief + public critic + parity aux + guided text-change)
 keeps the actor's shapes bit-identical — the 20-dim belief slot keeps its width, so
@@ -10,6 +11,7 @@ with no new trainer logic. The handoff schedule (freeze-actor phase, KL-to-teach
 lowered ent_start) rides in train.args, not here.
 
     python -m fishrl.train.bootstrap_v3 --src checkpoints-v2/best.pt --out checkpoints-v3
+    python -m fishrl.train.bootstrap_v3 --src checkpoints-v3/latest.pt --out checkpoints-v4 --critic-view hands
 """
 from __future__ import annotations
 
@@ -31,7 +33,9 @@ def main() -> int:
     ap.add_argument("--src", default="checkpoints-v2/best.pt",
                     help="legacy checkpoint whose ACTOR seeds the run")
     ap.add_argument("--out", default="checkpoints-v3", help="target checkpoint dir")
-    ap.add_argument("--text-change", choices=["full", "guided", "auto"], default="guided")
+    ap.add_argument("--critic-view", choices=["public", "hands"], default="public")
+    ap.add_argument("--text-change", choices=["full", "guided", "auto"], default=None,
+                    help="default: the source's mode if it has one, else guided")
     ap.add_argument("--deckout-aux", type=float, default=0.1)
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
@@ -40,8 +44,9 @@ def main() -> int:
     src_cfg = pl["config"]
     cfg = config_from_checkpoint(
         src_cfg,                              # arch fields (encoders/hidden/card_dim) from v2
-        belief_mode="bookkeeper", critic_view="public",
-        critic_deckout_aux=args.deckout_aux, text_change_mode=args.text_change,
+        belief_mode="bookkeeper", critic_view=args.critic_view,
+        critic_deckout_aux=args.deckout_aux,
+        text_change_mode=args.text_change or src_cfg.get("text_change_mode", "guided"),
         guesser_encoder=None, public_encoder=None,   # nets that no longer exist
         seed=args.seed, device="cpu",
     )
@@ -87,7 +92,7 @@ def main() -> int:
     ckpt.save_checkpoint(dst, payload)
     print(f"[bootstrap] {dst}: actor <- {args.src} (it={pl.get('done')}, "
           f"{float(pl.get('elapsed', 0.0)) / 3600.0:.0f}h), critic fresh "
-          f"(public view, aux={cfg.critic_deckout_aux}), text_change={cfg.text_change_mode}",
+          f"({cfg.critic_view} view, aux={cfg.critic_deckout_aux}), text_change={cfg.text_change_mode}",
           flush=True)
     # round-trip sanity: the seed must load through the standard resume machinery
     back = ckpt.load_checkpoint(dst, map_location="cpu")

@@ -17,7 +17,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from fishrl.data.features import GOD_DIM, GOD_SLOTS, PUB_DIM, PUB_SLOTS
+from fishrl.data.features import GOD_DIM, GOD_SLOTS, HANDS_DIM, HANDS_SLOTS, PUB_DIM, PUB_SLOTS
 from fishrl.models.entity_encoder import build_entity_encoder, layout_from_slots
 from fishrl.models.mlp import make_mlp
 
@@ -61,9 +61,11 @@ class PublicCritic(_OutcomeHead):
     loss weight (Config.critic_deckout_aux) is resume-tunable without state_dict
     surgery; at weight 0 it contributes no gradient."""
 
+    DIM, SLOTS = PUB_DIM, PUB_SLOTS
+
     def __init__(self, hidden=(512, 512, 256), encoder: str = "entity", card_dim: int = 64):
-        super().__init__(PUB_DIM, PUB_SLOTS, hidden, encoder, card_dim)
-        in_dim = self.enc.enc_dim if self.enc is not None else PUB_DIM
+        super().__init__(self.DIM, self.SLOTS, hidden, encoder, card_dim)
+        in_dim = self.enc.enc_dim if self.enc is not None else self.DIM
         self.aux_head = nn.Linear(in_dim, 1)
 
     def forward_with_aux(self, x: torch.Tensor):
@@ -72,10 +74,18 @@ class PublicCritic(_OutcomeHead):
         return self.net(x).squeeze(-1), self.aux_head(x).squeeze(-1)
 
 
+class HandsCritic(PublicCritic):
+    """critic_view="hands" (2026-08-21): the PublicCritic head over the HANDS layout --
+    both hands fully visible, no library rows. Same aux head, same contract."""
+    DIM, SLOTS = HANDS_DIM, HANDS_SLOTS
+
+
 def make_critic(view: str, hidden=(512, 512, 256), encoder: str = "flat",
                 card_dim: int = 64):
     """The PPO critic for a Config.critic_view: "god" -> PrivilegedCritic (legacy),
-    "public" -> PublicCritic (+deckout aux head)."""
+    "public" -> PublicCritic, "hands" -> HandsCritic (both + deckout aux head)."""
+    if view == "hands":
+        return HandsCritic(hidden, encoder, card_dim)
     if view == "public":
         return PublicCritic(hidden, encoder, card_dim)
     return PrivilegedCritic(hidden, encoder, card_dim)

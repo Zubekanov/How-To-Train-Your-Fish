@@ -32,7 +32,9 @@ def _belief_mode_of(models, use_belief: bool) -> str:
 
 
 def _critic_view_of(models) -> str:
-    from fishrl.models.estimators import PublicCritic
+    from fishrl.models.estimators import HandsCritic, PublicCritic
+    if isinstance(models.critic, HandsCritic):
+        return "hands"
     return "public" if isinstance(models.critic, PublicCritic) else "god"
 
 
@@ -61,7 +63,7 @@ def estimator_metrics(models, batch) -> dict:
         return float(((p - y) ** 2).mean())
 
     view = _critic_view_of(models)
-    feat = batch["pub" if view == "public" else "god"]
+    feat = batch["pub" if view in ("public", "hands") else "god"]
     with torch.no_grad():
         cp = models.critic.p1_winprob(feat[keep].to(device_of(models.critic))).cpu()
         if models.public is None:

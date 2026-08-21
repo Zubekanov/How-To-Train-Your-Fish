@@ -34,7 +34,7 @@ import time
 import numpy as np
 import torch
 
-from fishrl.data.features import GOD_DIM, PUB_DIM, encode_god, encode_public
+from fishrl.data.features import GOD_DIM, PUB_DIM, encode_critic_pub, encode_god, pub_dim_for
 from fishrl.obs.encoder import OBS_DIM
 from fishrl.train.belief_env import BeliefAugmentedEnv
 from fishrl.train.checkpoint import load_checkpoint
@@ -49,7 +49,7 @@ _VIEW = {"view": "god", "dim": GOD_DIM}
 
 
 def _critic_feat(g):
-    return encode_god(g) if _VIEW["view"] == "god" else encode_public(g)
+    return encode_god(g) if _VIEW["view"] == "god" else encode_critic_pub(g)
 
 
 def load_models(ckpt: str):
@@ -58,10 +58,11 @@ def load_models(ckpt: str):
     from fishrl.spaces import masking
     masking.set_text_change_mode(cfg.text_change_mode)   # probe under the trained space
     _VIEW["view"] = cfg.critic_view
-    _VIEW["dim"] = PUB_DIM if cfg.critic_view == "public" else GOD_DIM
-    if cfg.critic_view == "public":
+    _VIEW["dim"] = pub_dim_for(cfg.critic_view) if cfg.critic_view != "god" else GOD_DIM
+    if cfg.critic_view != "god":
         from fishrl.data import features
         features.set_public_encoding(True)
+        features.set_public_view(cfg.critic_view)
     m = build_models(cfg)
     _load_model_state(m, pl["models"])
     for net in (m.actor, m.guesser, m.critic):

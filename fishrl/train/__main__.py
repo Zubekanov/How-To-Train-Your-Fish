@@ -148,7 +148,7 @@ def main():
                     help="what fills the actor's 20-dim belief slot: the learned guesser "
                          "(legacy), the zero-parameter analytic bookkeeper (v3), or zeros. "
                          "FRESH-only; a resume reads the checkpoint's mode.")
-    ap.add_argument("--critic-view", choices=["god", "public"], default=None,
+    ap.add_argument("--critic-view", choices=["god", "public", "hands"], default=None,
                     help="the PPO critic's input: privileged god features (legacy) or the "
                          "public mutual-knowledge features (v3; drops the separate public "
                          "estimator). FRESH-only; a resume reads the checkpoint's view.")

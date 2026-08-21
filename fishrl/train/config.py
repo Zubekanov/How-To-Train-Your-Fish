@@ -288,6 +288,10 @@ class Config:
     #               on regardless of train_public. Measured basis: the privileged
     #               head's Brier edge over public has depreciated to ~0 (audits
     #               2026-08-17).
+    #   "hands"  -- public + BOTH hands fully visible, no library rows (2026-08-21):
+    #               benchmarked Brier .183 vs public .190 vs god .188 on 88.7k v1.3
+    #               states; the hands carry the value the library order drowned.
+    #               Rides the same pub_feat slot / aux head / gates as "public".
     critic_view: str = "god"
     # Weight of the critic's deckout-winner auxiliary loss (the parity-credit lever —
     # both audits' #1 recommendation). The aux head EXISTS whenever critic_view ==

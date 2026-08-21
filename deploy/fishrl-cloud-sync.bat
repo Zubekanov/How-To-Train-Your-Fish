@@ -2,7 +2,7 @@
 rem ============================================================================
 rem  fishrl-cloud-sync.bat -- pull the CLOUD mainline (Vast.ai box) back onto
 rem  this machine: model checkpoints + telemetry, staged then swapped, so the
-rem  local checkpoints-v3 inherits the cloud run and is --resume'able from the
+rem  local checkpoints-v4 inherits the cloud run and is --resume'able from the
 rem  sync point (fishrl-pc.bat just works afterwards).
 rem
 rem    fishrl-cloud-sync.bat          sync only; the cloud trainer keeps running
@@ -18,7 +18,7 @@ rem
 rem  Pulled: latest.pt best.pt best.json stats.json ticks.json
 rem  (step_/archive_ snapshots stay on the box; add them to the scp line below
 rem  if you want them). The pre-sync local files are kept in
-rem  checkpoints-v3\presync-<stamp>\ -- delete those folders when satisfied.
+rem  checkpoints-v4\presync-<stamp>\ -- delete those folders when satisfied.
 rem
 rem  Safety rails:
 rem    * refuses to run while a LOCAL trainer holds the lineage (process check);
@@ -34,19 +34,19 @@ rem ============================================================================
 setlocal EnableDelayedExpansion
 for %%i in ("%~dp0..") do set "REPO=%%~fi"
 set "PY=%REPO%\.venv\Scripts\python.exe"
-set "CKPT=%REPO%\checkpoints-v3"
+set "CKPT=%REPO%\checkpoints-v4"
 if defined FISHRL_SYNC_DEST set "CKPT=%FISHRL_SYNC_DEST%"
 
 set "VAST_HOST=root@175.28.230.22"
 set "VAST_PORT=50380"
 rem proxy alternative:  set "VAST_HOST=root@ssh9.vast.ai"  set "VAST_PORT=21177"
-set "RCKPT=/workspace/fishrl-repo/checkpoints-v3"
+set "RCKPT=/workspace/fishrl-repo/checkpoints-v4"
 set "SSHOPTS=-o BatchMode=yes -o ConnectTimeout=15"
 
 rem -- refuse while a local trainer is live on this lineage ---------------------
-for /f %%c in ('powershell -NoProfile -Command "(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*fishrl.train*' -and $_.CommandLine -like '*checkpoints-v3*' }).Count"') do set "NLOCAL=%%c"
+for /f %%c in ('powershell -NoProfile -Command "(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*fishrl.train*' -and $_.CommandLine -like '*checkpoints-v4*' }).Count"') do set "NLOCAL=%%c"
 if not "%NLOCAL%"=="0" if not "%NLOCAL%"=="" (
-    echo [sync] REFUSING: a local trainer is running on checkpoints-v3 ^(%NLOCAL% process^).
+    echo [sync] REFUSING: a local trainer is running on checkpoints-v4 ^(%NLOCAL% process^).
     echo        End the local session first -- syncing under it would fight its
     echo        checkpoint writes and fork the lineage.
     exit /b 1

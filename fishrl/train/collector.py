@@ -12,7 +12,8 @@ import torch
 
 from fishrl.data.buffer import RolloutBuffer, Step
 from fishrl.data.features import (
-    GOD_DIM, bookkeeper_counts, encode_god, encode_public, opponent_hand_counts,
+    GOD_DIM, PUBLIC_FAMILY, bookkeeper_counts, encode_critic_pub, encode_god,
+    opponent_hand_counts,
 )
 from fishrl.models import device_of
 from fishrl.obs import vocab as V
@@ -107,8 +108,8 @@ def fill_critic_values(buf: RolloutBuffer, critic, batch: int = 8192,
     if not buf.steps:
         return
     dev = device_of(critic)
-    feat = np.stack([s.pub_feat if view == "public" else s.god_feat for s in buf.steps])
-    if view == "public":
+    feat = np.stack([s.pub_feat if view in PUBLIC_FAMILY else s.god_feat for s in buf.steps])
+    if view in PUBLIC_FAMILY:
         # Landmine guard: encode_public is gated by set_public_encoding — if the gate
         # zeroed it the critic would silently train on nothing. A genuine pub row
         # always carries a nonzero globals tail (life/20 etc.).
@@ -168,7 +169,7 @@ def collect_heuristic_games(guesser, actor, n_games, base_seed, critic=None,
             # are p1-oriented like the self-play path; recomputed per decision (the pool is
             # a minority of games, so the self-play decision_id dedupe isn't worth the coupling).
             god = encode_god(g) if critic_view == "god" else _ZERO_GOD
-            pub = encode_public(g)
+            pub = encode_critic_pub(g)
             if mode == "guesser":
                 with torch.no_grad():
                     guess = guesser(
@@ -279,7 +280,7 @@ def collect_vs_opponent(learner, opponent, n_games, base_seed, critic=None,
                 if did != cache_id:                        # engine advanced -> fresh encode
                     cache_id = did
                     cache_god = encode_god(g) if critic_view == "god" else _ZERO_GOD
-                    cache_pub = encode_public(g)
+                    cache_pub = encode_critic_pub(g)
                     god, pub = cache_god, cache_pub
                 else:                                      # frozen state (compound sub-step)
                     god, pub = cache_god.copy(), cache_pub.copy()
@@ -352,7 +353,7 @@ def collect_games(belief_env, act_fn, n_games, base_seed, critic=None,
             if did != cache_id:                       # engine advanced -> fresh encode
                 cache_id = did
                 cache_god = encode_god(g) if critic_view == "god" else _ZERO_GOD
-                cache_pub = encode_public(g)
+                cache_pub = encode_critic_pub(g)
                 god, pub = cache_god, cache_pub
             else:                                     # same frozen state (compound sub-step)
                 god, pub = cache_god.copy(), cache_pub.copy()

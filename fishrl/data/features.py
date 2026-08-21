@@ -46,6 +46,23 @@ _PUB_PER_PLAYER = 12
 _PUB_GAME = 5
 PUB_DIM = _PUB_ROWS * CARD_F + _PUB_PER_PLAYER * 2 + _PUB_GAME + _CLOCK
 
+# ── hands (critic_view="hands", 2026-08-21) layout ────────────────────────────
+# The public layout with BOTH hands fully visible and the mutual-knowledge library
+# rows dropped. Benchmarked on 88.7k v1.3-mirror states (3 seeds): Brier .183 vs
+# public .190 vs god .188 -- hands carry the value the library order drowned; the
+# known-top slots added nothing. Same per-player / game / clock tail as public.
+HANDS_SLOTS = {
+    "p1_hand": 12, "p2_hand": 12, "p1_bf": 34, "p2_bf": 34,
+    "graveyard": 32, "exile": 8, "stack": 6,
+}
+_HANDS_ROWS = sum(HANDS_SLOTS.values())
+HANDS_DIM = _HANDS_ROWS * CARD_F + _PUB_PER_PLAYER * 2 + _PUB_GAME + _CLOCK
+PUBLIC_FAMILY = ("public", "hands")     # critic views that ride the pub_feat slot
+
+
+def pub_dim_for(view: str) -> int:
+    return HANDS_DIM if view == "hands" else PUB_DIM
+
 
 def opponent_hand_counts(g, viewer: str) -> np.ndarray:
     """Per-name count of the opponent's hand (the guesser's supervised target)."""
@@ -264,6 +281,63 @@ def encode_public_ref(g) -> np.ndarray:
 # of the pub calibration telemetry. Toggled once per process (main + each pcollect worker).
 _PUBLIC_ENCODING = True
 _ZERO_PUB = np.zeros(PUB_DIM, dtype=np.float32)
+_ZERO_HANDS = np.zeros(HANDS_DIM, dtype=np.float32)
+_PUB_VIEW = "public"
+
+
+def set_public_view(view: str) -> None:
+    """Which public-family encoding `encode_critic_pub` produces: "public" (mutual
+    knowledge, legacy PublicEstimator / v3 critic) or "hands" (both hands visible).
+    Set from cfg.critic_view at trainer init, in the collector workers and by the
+    eval loaders; defaults to "public" so legacy checkpoints need no call."""
+    global _PUB_VIEW
+    if view not in PUBLIC_FAMILY:
+        raise ValueError(f"public view must be one of {PUBLIC_FAMILY}, got {view!r}")
+    _PUB_VIEW = view
+
+
+def public_view() -> str:
+    return _PUB_VIEW
+
+
+def encode_critic_pub(g) -> np.ndarray:
+    """The pub_feat row for the configured public-family view."""
+    return encode_hands(g) if _PUB_VIEW == "hands" else encode_public(g)
+
+
+def encode_hands(g) -> np.ndarray:
+    """p1-oriented feature vector (HANDS_DIM): both hands in full, both
+    battlefields, graveyard, exile and the stack; no library rows. Gated by the
+    same set_public_encoding switch as encode_public."""
+    if not _PUBLIC_ENCODING:
+        return _ZERO_HANDS
+    obj = g.objects
+    bf = {pid: [obj[iid] for iid in g.players[pid].battlefield if iid in obj]
+          for pid in ("p1", "p2")}
+    out = np.zeros(HANDS_DIM, dtype=np.float32)
+    rows = out[:_HANDS_ROWS * CARD_F].reshape(_HANDS_ROWS, CARD_F)
+    b = _fill_zone(rows, 0, [obj[iid] for iid in g.players["p1"].hand if iid in obj],
+                   HANDS_SLOTS["p1_hand"], "p1")
+    b = _fill_zone(rows, b, [obj[iid] for iid in g.players["p2"].hand if iid in obj],
+                   HANDS_SLOTS["p2_hand"], "p1")
+    b = _fill_zone(rows, b, bf["p1"], HANDS_SLOTS["p1_bf"], "p1")
+    b = _fill_zone(rows, b, bf["p2"], HANDS_SLOTS["p2_bf"], "p1")
+    b = _fill_zone(rows, b, [obj[iid] for iid in g.graveyard if iid in obj],
+                   HANDS_SLOTS["graveyard"], "p1")
+    b = _fill_zone(rows, b, [obj[iid] for iid in g.exile if iid in obj],
+                   HANDS_SLOTS["exile"], "p1")
+    _fill_zone(rows, b, [obj.get(s.source_instance_id) for s in g.stack],
+               HANDS_SLOTS["stack"], "p1")
+    gv = []
+    for pid in ("p1", "p2"):
+        p = g.players[pid]
+        gv += _player_scalars_obj(p.life, len(p.hand), bf[pid], p.mana_pool,
+                                  p.mulligans, p.has_lost)
+    gv += [g.turn_number / 40.0, float(g.active_player == "p1"),
+           float(g.priority_player == "p1"), len(g.library) / 80.0, len(g.stack) / 6.0]
+    gv += list(deckout_clock(g, "p1"))
+    out[_HANDS_ROWS * CARD_F:] = gv
+    return out
 
 
 def set_public_encoding(enabled: bool) -> None:

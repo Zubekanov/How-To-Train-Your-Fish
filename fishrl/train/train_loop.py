@@ -210,7 +210,9 @@ def train(cfg: Config, models: Models | None = None, log=print,
     # Public encoding is ON iff the diagnostic wants it OR the critic eats it — the
     # v3 landmine: with critic_view="public" a train_public=False gate would zero the
     # critic's own food (fill_critic_values also hard-asserts against this).
-    features.set_public_encoding(cfg.train_public or cfg.critic_view == "public")
+    features.set_public_encoding(cfg.train_public or cfg.critic_view in features.PUBLIC_FAMILY)
+    if cfg.critic_view in features.PUBLIC_FAMILY:
+        features.set_public_view(cfg.critic_view)
     masking.set_text_change_mode(getattr(cfg, "text_change_mode", "full"))
     m = models or build_models(cfg)
 
@@ -364,7 +366,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
             est = {k: v for k, v in est.items() if not k.startswith("pub_")}
         gmae = (guesser_mae(m, last_batch)
                 if (last_batch is not None and m.guesser is not None) else float("nan"))
-        v3 = cfg.critic_view == "public"
+        v3 = cfg.critic_view in features.PUBLIC_FAMILY
         eval_s = time.perf_counter() - t0
         dt_h = max(now - last_report, 1e-9) / 3600.0
         nan = float("nan")
@@ -972,7 +974,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     "guesser_loss": aux_stats["guesser_loss"],
                     "public_loss": aux_stats["public_loss"],
                     **({"deckout_aux_loss": ppo_stats["deckout_aux_loss"]}
-                       if cfg.critic_view == "public" else {}),
+                       if cfg.critic_view in features.PUBLIC_FAMILY else {}),
                     "collect_s": round(iter_collect_s, 3), "update_s": round(iter_update_s, 3),
                     # machine utilization at the last sampler beat (%; None = unknown) --
                     # the dashboard's system panel plots these over iteration

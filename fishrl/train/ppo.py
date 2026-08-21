@@ -37,8 +37,9 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0,
     lever). At w=0 the head exists but contributes nothing."""
     dev = device_of(actor)
     critic_view = getattr(cfg, "critic_view", "god")
-    feat_key = "pub" if critic_view == "public" else "god"
-    aux_w = float(getattr(cfg, "critic_deckout_aux", 0.0)) if critic_view == "public" else 0.0
+    public_family = critic_view in ("public", "hands")
+    feat_key = "pub" if public_family else "god"
+    aux_w = float(getattr(cfg, "critic_deckout_aux", 0.0)) if public_family else 0.0
     keys = ("x_act", "mask", "action", "old_logp", "adv", feat_key, "y_p1", "valid")
     if aux_w > 0.0:
         keys = keys + ("deckout_valid",)

@@ -105,7 +105,9 @@ def _winit(lite: dict) -> None:
     # Match the trainer's gates exactly: public encoding is on iff the diagnostic
     # wants it OR the critic eats it; the text-change mask mode mirrors the run's.
     features.set_public_encoding(lite.get("train_public", True)
-                                 or lite.get("critic_view", "god") == "public")
+                                 or lite.get("critic_view", "god") in features.PUBLIC_FAMILY)
+    if lite.get("critic_view", "god") in features.PUBLIC_FAMILY:
+        features.set_public_view(lite["critic_view"])
     masking.set_text_change_mode(lite.get("text_change_mode", "full"))
     hidden = tuple(lite["hidden"])                        # guesser head width
     ah = tuple(lite.get("actor_hidden", hidden))          # actor head width (may differ)

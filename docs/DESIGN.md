@@ -310,6 +310,17 @@ member's weight: scenario episodes are far shorter than full games, so boosting 
 play-count share costs sub-proportional wall-clock, and `pool_frac` still caps the whole
 pool slice (mirror self-play keeps the rest). `B=1` restores the unboosted behaviour.
 
+**2026-08-21 — the hands critic (`critic_view="hands"`, lineage `checkpoints-v4`).** A supervised
+benchmark on 88.7k v1.3-mirror states (same MLP head, 3 split seeds) ranked the critic's
+possible inputs: public Brier .190, **public + both hands .183**, + each player's known top-8
+.184, god .188. The hands carry the value the full library order drowns (god is *worse* than
+hands with strictly more information), and known-top slots add nothing. Encode cost is 18–33 µs
+for every view with the C fast path, so the old omniscient-critic throughput argument no longer
+applies. `HANDS_SLOTS` = the public layout minus the library rows, both hands fully visible
+(`features.encode_hands`, `HandsCritic`, same aux head and gates as public; `set_public_view`
+selects the pub_feat encoding). Bootstrapped as v3 was: actor bit-identical from
+checkpoints-v3/latest.pt (it 46,561), fresh critic, freeze 1500 iters, KL-to-teacher.
+
 **2026-08-21 — envelope-constructed curriculum** (`scenarios/envelope.py`, `scenarios/constructed.py`).
 The seven original scenarios were *complete manufactures from hand constants* (both players at
 4 life, every other Dandân exiled, ten lands on turn 2) — legal states in corners no real game

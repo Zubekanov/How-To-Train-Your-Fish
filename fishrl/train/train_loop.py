@@ -227,6 +227,12 @@ def train(cfg: Config, models: Models | None = None, log=print,
     # 'vs frozen' reads as improvement over the previous report's self (>0.5 still improving).
     done = 0
     frozen_it = 0
+    # Handoff origin: the iteration a critic swap / bootstrap happened at. The
+    # freeze-actor phase and the KL-to-teacher anneal count from HERE, so an in-place
+    # critic replacement (swap_critic) gets its warmup without resetting `done`.
+    # 0 for every checkpoint written before 2026-08-21 -> the absolute-iteration
+    # behaviour those runs were launched with.
+    handoff_start = 0
     elapsed_offset = 0.0           # cumulative training seconds carried across restarts
     frozen: Models | None = None
     KEYS = ("policy_loss", "critic_loss", "entropy", "approx_kl", "clip_frac",
@@ -327,6 +333,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                        "critic_deckout_aux": cfg.critic_deckout_aux,
                        "text_change_mode": cfg.text_change_mode},
             "done": done, "elapsed": total_elapsed(), "frozen_it": frozen_it,
+            "handoff_start": handoff_start,
             "warmup_done": True,
             "models": _model_state(m), "frozen": _model_state(frozen),
             "optim": {"ppo": opt_ppo.state_dict(),
@@ -641,6 +648,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     p.requires_grad_(False)
             done = int(payload["done"])
             frozen_it = int(payload.get("frozen_it", done))
+            handoff_start = int(payload.get("handoff_start", 0))
             elapsed_offset = float(payload.get("elapsed", 0.0))
             _set_rng_state(payload["rng"])
             # Restore league continuity (EMA win-rates + past-self ring). Older
@@ -677,16 +685,19 @@ def train(cfg: Config, models: Models | None = None, log=print,
         # fishrl.imitate.bc checkpoint this is the teacher clone) before any PPO
         # update moves it. Frozen for the whole run; the coefficient anneals to zero.
         teacher_ref = None
-        if cfg.kl_teacher_coef > 0.0 and cfg.kl_teacher_iters > 0:
+        kl_until = handoff_start + cfg.kl_teacher_iters
+        freeze_until = handoff_start + cfg.freeze_actor_iters
+        if cfg.kl_teacher_coef > 0.0 and cfg.kl_teacher_iters > 0 and done < kl_until:
             teacher_ref = copy.deepcopy(m.actor)
             teacher_ref.eval()
             for p in teacher_ref.parameters():
                 p.requires_grad_(False)
             log(f"[handoff] KL-to-teacher anchor snapshotted at it={done} "
-                f"(coef={cfg.kl_teacher_coef}, anneal={cfg.kl_teacher_iters} iters)")
-        if cfg.freeze_actor_iters > done:
-            log(f"[handoff] actor FROZEN until it={cfg.freeze_actor_iters} "
-                f"(critic-only warmup)")
+                f"(coef={cfg.kl_teacher_coef}, anneal to it={kl_until}"
+                f"{f', handoff_start={handoff_start}' if handoff_start else ''})")
+        if freeze_until > done:
+            log(f"[handoff] actor FROZEN until it={freeze_until} "
+                f"(critic-only warmup{f', handoff_start={handoff_start}' if handoff_start else ''})")
 
         benv = BeliefAugmentedEnv(m.guesser, mode=cfg.belief_mode,
                                   max_decisions=cfg.max_decisions)
@@ -937,12 +948,12 @@ def train(cfg: Config, models: Models | None = None, log=print,
             else:
                 ent = cfg.ent_coef(done)
             t_update = time.perf_counter()
-            freeze = done < cfg.freeze_actor_iters
-            if cfg.freeze_actor_iters > 0 and done == cfg.freeze_actor_iters:
+            freeze = done < freeze_until
+            if cfg.freeze_actor_iters > 0 and done == freeze_until:
                 log(f"[handoff] actor unfrozen at it={done}")
             kl_now = 0.0
-            if teacher_ref is not None and done < cfg.kl_teacher_iters:
-                kl_now = cfg.kl_teacher_coef * (1.0 - done / cfg.kl_teacher_iters)
+            if teacher_ref is not None and done < kl_until:
+                kl_now = cfg.kl_teacher_coef * (1.0 - (done - handoff_start) / cfg.kl_teacher_iters)
             ppo_stats = ppo_update(batch, m.actor, m.critic, opt_ppo, cfg, ent, rng_seed=done,
                                    ref_actor=teacher_ref, kl_ref_coef=kl_now,
                                    train_actor=not freeze)

@@ -9,7 +9,7 @@ rem    2. runs win-rate panels alongside the session, every 15 min
 rem    3. trains in THIS window: resumes %CKPT%\latest.pt, or FRESH-starts (with the
 rem       architecture in deploy\train.args) when the dir is empty
 rem
-rem  The active lineage is checkpoints-v4 (bookkeeper belief + HANDS critic (2026-08-21) +
+rem  The active lineage is checkpoints-v3 (bookkeeper belief + HANDS critic (2026-08-21) +
 rem  parity aux, actor warm-started from checkpoints-v2\best.pt -- see
 rem  fishrl.train.bootstrap_v3). v2 (382h entity run) and the 622h flat run are
 rem  preserved untouched in checkpoints-v2\ and checkpoints\.
@@ -38,11 +38,11 @@ rem ============================================================================
 setlocal
 for %%i in ("%~dp0..") do set "REPO=%%~fi"
 set "PY=%REPO%\.venv\Scripts\python.exe"
-rem The ACTIVE run lives here. checkpoints-v4 is the bookkeeper/public-critic lineage
+rem The ACTIVE run lives here. checkpoints-v3 is the bookkeeper/public-critic lineage
 rem (seed it first: python -m fishrl.train.bootstrap_v3). v2 and the flat run are
 rem preserved in checkpoints-v2\ and checkpoints\. To go back, point CKPT there. (--resume auto-starts fresh when the dir has no checkpoint, so
 rem the first launch of a new dir bootstraps the architecture from deploy\train.args.)
-set "CKPT=%REPO%\checkpoints-v4"
+set "CKPT=%REPO%\checkpoints-v3"
 
 rem Create the lineage dir up front: the dashboard (started below, before the trainer)
 rem refuses a non-existent --ckpt-dir, and on a fresh run the trainer hasn't made it yet.
@@ -118,7 +118,7 @@ rem now is useful (the checkpoint is final; the next session evaluates it anyway
 rem end it with the session.
 echo.
 echo [fishrl-pc] trainer exited; stopping the eval panel...
-powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*parallel_panel*' -and $_.CommandLine -like '*checkpoints-v4*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*parallel_panel*' -and $_.CommandLine -like '*checkpoints-v3*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
 
 rem The dashboard's "End training session" drops a TEARDOWN marker next to the
 rem STOP file: it asks for the WHOLE session to close, not just the trainer.
@@ -138,6 +138,6 @@ exit /b 0
 :teardown
 del "%CKPT%\TEARDOWN"
 echo [fishrl-pc] full teardown requested from the dashboard; closing it too...
-powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'python*' -and $_.CommandLine -like '*fishrl.serve*' -and $_.CommandLine -like '*checkpoints-v4*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'python*' -and $_.CommandLine -like '*fishrl.serve*' -and $_.CommandLine -like '*checkpoints-v3*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
 echo [fishrl-pc] session ended; the trainer checkpointed to %CKPT%\latest.pt.
 exit /b 0

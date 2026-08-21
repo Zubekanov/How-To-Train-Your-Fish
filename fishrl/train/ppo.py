@@ -34,7 +34,12 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0,
     v3 (Config.critic_view="public"): the critic reads the PUBLIC features and, when
     ``cfg.critic_deckout_aux > 0``, its deckout-winner aux head adds
     ``w * BCE(aux_logit, y_p1)`` over the deckout-ended rows (the parity-credit
-    lever). At w=0 the head exists but contributes nothing."""
+    lever). At w=0 the head exists but contributes nothing.
+
+    ``cfg.critic_epochs`` (2026-08-21): when > 0 the critic (and aux head) receive
+    gradient only on the first ``critic_epochs`` of the ``ppo_epochs`` passes; the actor
+    keeps all of them. critic_loss / deckout_aux_loss are averaged over the critic's
+    passes only."""
     dev = device_of(actor)
     critic_view = getattr(cfg, "critic_view", "god")
     public_family = critic_view in ("public", "hands")
@@ -50,20 +55,29 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0,
     acc = None                 # device-side [ploss, closs, ent, kl, cf, kl_ref] running sum
     n = 0
     zero = torch.zeros((), device=dev)
-    for _ in range(cfg.ppo_epochs):
+    critic_epochs = int(getattr(cfg, "critic_epochs", 0) or 0)
+    acc_c = None               # device-side [closs, aux] over the critic's epochs only
+    n_c = 0
+    for epoch in range(cfg.ppo_epochs):
+        train_critic = critic_epochs <= 0 or epoch < critic_epochs
+        if not train_actor and not train_critic:
+            break                                  # nothing left to fit this update
         rng.shuffle(idx)
         for s in range(0, M, cfg.minibatch):
             mb = torch.from_numpy(idx[s:s + cfg.minibatch]).to(dev)
             logp_all = actor.log_probs(b["x_act"][mb], b["mask"][mb])
             ploss, ent, kl, cf = ppo_actor_loss(
                 logp_all, b["action"][mb], b["old_logp"][mb], b["adv"][mb], cfg.clip)
-            if aux_w > 0.0:
-                critic_logit, aux_logit = critic.forward_with_aux(b[feat_key][mb])
-                aux_loss = outcome_bce(aux_logit, b["y_p1"][mb], b["deckout_valid"][mb])
+            aux_loss = None
+            if train_critic:
+                if aux_w > 0.0:
+                    critic_logit, aux_logit = critic.forward_with_aux(b[feat_key][mb])
+                    aux_loss = outcome_bce(aux_logit, b["y_p1"][mb], b["deckout_valid"][mb])
+                else:
+                    critic_logit = critic(b[feat_key][mb])
+                closs = outcome_bce(critic_logit, b["y_p1"][mb], b["valid"][mb])
             else:
-                critic_logit = critic(b[feat_key][mb])
-                aux_loss = None
-            closs = outcome_bce(critic_logit, b["y_p1"][mb], b["valid"][mb])
+                closs = zero
             if train_actor:
                 loss = ploss - ent_coef * ent + cfg.critic_coef * closs
             else:                                  # handoff warmup: critic-only gradient
@@ -86,16 +100,20 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0,
             opt.step()
             # kl/cf come back as detached device tensors (losses.py) -- stack
             # everything device-side; the ONLY host sync is the .tolist() below.
-            aux_stat = (aux_loss.detach() if aux_loss is not None
-                        and torch.isfinite(aux_loss) else zero)
-            step_stats = torch.stack([ploss.detach(), closs.detach(), ent.detach(), kl, cf,
-                                      kl_ref.detach(), aux_stat])
+            step_stats = torch.stack([ploss.detach(), ent.detach(), kl, cf, kl_ref.detach()])
             acc = step_stats if acc is None else acc + step_stats
             n += 1
-    vals = (acc / max(n, 1)).tolist() if acc is not None else [0.0] * 7
-    return {"policy_loss": vals[0], "critic_loss": vals[1], "entropy": vals[2],
-            "approx_kl": vals[3], "clip_frac": vals[4], "kl_teacher": vals[5],
-            "deckout_aux_loss": vals[6], "n": n}
+            if train_critic:
+                aux_stat = (aux_loss.detach() if aux_loss is not None
+                            and torch.isfinite(aux_loss) else zero)
+                cs = torch.stack([closs.detach(), aux_stat])
+                acc_c = cs if acc_c is None else acc_c + cs
+                n_c += 1
+    vals = (acc / max(n, 1)).tolist() if acc is not None else [0.0] * 5
+    cvals = (acc_c / max(n_c, 1)).tolist() if acc_c is not None else [0.0, 0.0]
+    return {"policy_loss": vals[0], "critic_loss": cvals[0], "entropy": vals[1],
+            "approx_kl": vals[2], "clip_frac": vals[3], "kl_teacher": vals[4],
+            "deckout_aux_loss": cvals[1], "n": n, "n_critic": n_c}
 
 
 def aux_update(batch, guesser, public_est, opt_g, opt_p, steps: int,

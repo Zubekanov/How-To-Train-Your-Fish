@@ -135,6 +135,11 @@ class Config:
     # PPO
     clip: float = 0.2
     ppo_epochs: int = 4
+    # Epochs (of ppo_epochs) on which the CRITIC receives gradient; the actor always
+    # gets all of them. 0 = all (legacy). 1 = the critic fits each batch once: every
+    # held-out benchmark (2026-08-21) peaked on the first pass and the in-batch
+    # Brier (0.03-0.05) vs online held-out (0.21-0.23) gap is per-batch memorisation.
+    critic_epochs: int = 0
     minibatch: int = 256
     lr_ppo: float = 3e-4
     grad_clip: float = 1.0

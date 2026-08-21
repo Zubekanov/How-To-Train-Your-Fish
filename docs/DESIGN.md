@@ -671,6 +671,13 @@ measured the fit to the batch just trained on, which the hands critic drives to 
 fingerprinting games while generalising worse than the old public critic (held-out probe .28 vs
 .21). Expect a step *up* in `critic_brier` at the seam; that is the honest number appearing.
 
+**`critic_epochs` (2026-08-21, cloud it≈52,600):** the critic (and aux head) take gradient only on
+the first `critic_epochs` of the `ppo_epochs` passes (0 = all, legacy); the actor keeps every pass.
+Motivation: in-batch Brier 0.03–0.05 vs online held-out 0.21–0.23 with four passes per batch, and
+every held-out view benchmark peaked on its first epoch. The mainline runs `--critic-epochs 1`
+(resume-tunable launcher flag). `critic_loss` / `deckout_aux_loss` (`V`, `aux`) are averaged over
+the critic's passes only, so expect both to read *higher* at this seam (one pass, no memorisation).
+
 ### 3.3 The eval row — `stats.json → evals[]`
 
 Written by `fishrl.eval.parallel_panel`, out-of-band on a timer, reading `latest.pt` so it never

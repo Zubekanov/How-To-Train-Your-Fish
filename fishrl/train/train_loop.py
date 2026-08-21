@@ -295,6 +295,13 @@ def train(cfg: Config, models: Models | None = None, log=print,
         last_tick_flush = time.perf_counter()
     scen_mix: dict = {}            # scenario games played this window (DEBUG logging only)
     last_batch = None
+    # Critic calibration is scored on each batch BEFORE the update touches it (an
+    # honest online held-out estimate: the critic has never seen these games). Scored
+    # after the update it measured the fit to the batch just trained on, which a
+    # critic that can fingerprint games (critic_view="hands") drives to ~0 Brier
+    # regardless of how it generalises (2026-08-21; held-out probe showed .28 while
+    # the post-update number read .03).
+    last_pre_est: dict = {}
     # PFSP opponent league: scripted anchors + a ring of frozen past selves, appended
     # at each report. In-memory only (never serialized), so resume refills it over the
     # first few reports. Unused when cfg.pool_frac <= 0.
@@ -368,7 +375,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
         wr = (panel_winrates(m, frozen=frozen, n_games=cfg.report_winrate_games,
                              max_decisions=cfg.max_decisions, use_belief=cfg.use_belief)
               if cfg.report_winrate_games > 0 else None)
-        est = estimator_metrics(m, last_batch) if last_batch is not None else {}
+        est = dict(last_pre_est)                         # pre-update (held-out) calibration
         if not cfg.train_public:                         # pub head disabled -> its calib is meaningless
             est = {k: v for k, v in est.items() if not k.startswith("pub_")}
         gmae = (guesser_mae(m, last_batch)
@@ -954,6 +961,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
             kl_now = 0.0
             if teacher_ref is not None and done < kl_until:
                 kl_now = cfg.kl_teacher_coef * (1.0 - (done - handoff_start) / cfg.kl_teacher_iters)
+            last_pre_est = estimator_metrics(m, batch)   # score BEFORE fitting this batch
             ppo_stats = ppo_update(batch, m.actor, m.critic, opt_ppo, cfg, ent, rng_seed=done,
                                    ref_actor=teacher_ref, kl_ref_coef=kl_now,
                                    train_actor=not freeze)

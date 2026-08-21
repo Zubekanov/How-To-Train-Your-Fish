@@ -665,6 +665,12 @@ win-rates from a blocking panel.**
 
 NaN/inf are sanitized to `null`.
 
+**`critic_acc` / `critic_brier` semantics changed 2026-08-21 (cloud it≈48,600):** scored on each
+batch *before* the PPO update (an online held-out estimate) instead of after. Post-update they
+measured the fit to the batch just trained on, which the hands critic drives to ~0.03 Brier by
+fingerprinting games while generalising worse than the old public critic (held-out probe .28 vs
+.21). Expect a step *up* in `critic_brier` at the seam; that is the honest number appearing.
+
 ### 3.3 The eval row — `stats.json → evals[]`
 
 Written by `fishrl.eval.parallel_panel`, out-of-band on a timer, reading `latest.pt` so it never

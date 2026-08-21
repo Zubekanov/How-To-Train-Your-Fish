@@ -155,6 +155,10 @@ def main():
     ap.add_argument("--text-change", choices=["full", "guided", "auto"], default=None,
                     help="choose_text_change action space: full 25-way (legacy), guided "
                          "{EFFECT, NO-OP}, or auto (EFFECT forced). FRESH-only.")
+    ap.add_argument("--obs-counts", action="store_true", default=None,
+                    help="append the per-name count block to the actor input + hands critic "
+                         "(features.COUNT_DIM). FRESH-only; a live run gets it via "
+                         "fishrl.train.widen_counts (in place).")
     # runtime v3 knobs (resume-tunable)
     ap.add_argument("--critic-deckout-aux", type=float, default=None,
                     help="weight of the public critic's deckout-winner auxiliary loss "
@@ -296,6 +300,8 @@ def main():
             v3["critic_view"] = args.critic_view
         if args.text_change is not None:
             v3["text_change_mode"] = args.text_change
+        if args.obs_counts:
+            v3["obs_counts"] = True
         cfg = Config(encoder=args.encoder, seed=args.seed,
                      actor_hidden=_parse_hidden(args.actor_hidden),
                      card_dim=args.card_dim, **per_net, **v3, **common)

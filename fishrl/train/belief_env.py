@@ -92,11 +92,12 @@ class BeliefAugmentedEnv:
 
     def observe(self, agent: str) -> dict:
         if self.mode == "bookkeeper":             # analytic vector; stateless, no net
-            from fishrl.data.features import bookkeeper_counts
+            from fishrl.data.features import belief_dim, bookkeeper_counts
             from fishrl.obs.encoder import OBS_DIM
             # One buffer for obs ⊕ belief: the env encodes into the head in place and
             # the bookkeeper tail is a 20-float assignment -- no concatenate, no copy.
-            full = np.zeros(OBS_DIM + V.N_NAMES, dtype=np.float32)
+            # (42 more floats when the count block is on: belief_dim()).
+            full = np.zeros(OBS_DIM + belief_dim(), dtype=np.float32)
             base = self.env.observe(agent, out=full[:OBS_DIM])
             full[OBS_DIM:] = bookkeeper_counts(self.env.g, agent)
             self.last_prev[agent] = np.zeros(V.N_NAMES, dtype=np.float32)

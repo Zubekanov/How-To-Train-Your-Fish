@@ -18,7 +18,13 @@ from fishrl.obs.encoder import OBS_DIM, SLOTS
 from fishrl.obs import vocab as V
 from fishrl.spaces import action_space as A
 
-ACTOR_IN = OBS_DIM + V.N_NAMES          # perspective ⊕ hand-guess
+ACTOR_IN = OBS_DIM + V.N_NAMES          # perspective ⊕ hand-guess (legacy width)
+
+
+def actor_in() -> int:
+    """Live actor input width: ACTOR_IN + the count block when features.obs_counts is on."""
+    from fishrl.data.features import belief_dim
+    return OBS_DIM + belief_dim()
 _NEG_INF = -1e9
 
 
@@ -30,10 +36,13 @@ def masked_log_softmax(logits: torch.Tensor, mask: torch.Tensor) -> torch.Tensor
 
 
 class MaskedActor(nn.Module):
-    def __init__(self, hidden=(256, 256), encoder: str = "flat", card_dim: int = 64):
+    def __init__(self, hidden=(256, 256), encoder: str = "flat", card_dim: int = 64,
+                 in_dim: int | None = None):
         super().__init__()
-        self.enc = build_entity_encoder(encoder, *layout_from_slots(SLOTS), ACTOR_IN, d=card_dim)
-        in_dim = self.enc.enc_dim if self.enc is not None else ACTOR_IN
+        total = int(in_dim) if in_dim is not None else ACTOR_IN
+        self.in_dim = total
+        self.enc = build_entity_encoder(encoder, *layout_from_slots(SLOTS), total, d=card_dim)
+        in_dim = self.enc.enc_dim if self.enc is not None else total
         self.net = make_mlp(in_dim, A.N, hidden)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

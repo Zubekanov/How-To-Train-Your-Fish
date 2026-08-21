@@ -27,7 +27,8 @@ from fishrl.data.buffer import RolloutBuffer
 from fishrl.models import device_of
 from fishrl.models.estimators import PrivilegedCritic, PublicEstimator, make_critic
 from fishrl.models.guesser import HandGuesser
-from fishrl.models.policy import MaskedActor
+from fishrl.data import features
+from fishrl.models.policy import ACTOR_IN, MaskedActor
 from fishrl.train import checkpoint as ckpt
 from fishrl.train import stats as stats_io
 from fishrl.train.belief_env import BeliefAugmentedEnv
@@ -72,10 +73,18 @@ def build_models(cfg: Config) -> Models:
     if getattr(cfg, "has_public", True):
         public = PublicEstimator(cfg.head_hidden("public"), cfg.enc_for("public"),
                                  cfg.card_dim).to(dev)
+    # The count block is a process-wide layout switch (features.set_count_block): every
+    # loader goes through build_models, so the encoders agree with the nets built here.
+    counts = bool(getattr(cfg, "obs_counts", False))
+    if counts:
+        assert cfg.belief_mode == "bookkeeper" and cfg.critic_view == "hands", "obs_counts rides the bookkeeper belief and the hands critic"
+    features.set_count_block(counts)
+    extra = features.COUNT_DIM if counts else 0
     return Models(
-        MaskedActor(cfg.head_hidden("actor"), cfg.enc_for("actor"), cfg.card_dim).to(dev),
+        MaskedActor(cfg.head_hidden("actor"), cfg.enc_for("actor"), cfg.card_dim,
+                    in_dim=ACTOR_IN + extra).to(dev),
         make_critic(getattr(cfg, "critic_view", "god"), cfg.head_hidden("critic"),
-                    cfg.enc_for("critic"), cfg.card_dim).to(dev),
+                    cfg.enc_for("critic"), cfg.card_dim, extra_in=extra).to(dev),
         guesser, public,
     )
 
@@ -110,6 +119,7 @@ def config_from_checkpoint(cd: dict, **overrides) -> Config:
         critic_view=cd.get("critic_view", "god"),
         critic_deckout_aux=float(cd.get("critic_deckout_aux", 0.0)),
         text_change_mode=cd.get("text_change_mode", "full"),
+        obs_counts=bool(cd.get("obs_counts", False)),
         hidden=tuple(cd.get("hidden", (256, 256))),
         actor_hidden=tuple(ah) if ah is not None else None,
         critic_hidden=tuple(cd.get("critic_hidden", (512, 512, 256))),
@@ -338,7 +348,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
                        "card_dim": cfg.card_dim,
                        "belief_mode": cfg.belief_mode, "critic_view": cfg.critic_view,
                        "critic_deckout_aux": cfg.critic_deckout_aux,
-                       "text_change_mode": cfg.text_change_mode},
+                       "text_change_mode": cfg.text_change_mode,
+                       "obs_counts": cfg.obs_counts},
             "done": done, "elapsed": total_elapsed(), "frozen_it": frozen_it,
             "handoff_start": handoff_start,
             "warmup_done": True,
@@ -665,7 +676,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 # (head widths + card_dim), or their saved weights won't load. In
                 # bookkeeper/none belief modes there is no guesser to rebuild.
                 actor = MaskedActor(cfg.head_hidden("actor"), cfg.enc_for("actor"),
-                                    cfg.card_dim).to(cfg.device)
+                                    cfg.card_dim, in_dim=m.actor.in_dim).to(cfg.device)
                 guesser = None
                 if cfg.has_guesser:
                     guesser = HandGuesser(cfg.head_hidden("guesser"), cfg.enc_for("guesser"),

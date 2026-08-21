@@ -190,7 +190,8 @@ def collect_heuristic_games(guesser, actor, n_games, base_seed, critic=None,
                 cnt_target=(_ZERO_NAMES if mode == "bookkeeper"
                             else opponent_hand_counts(g, SEAT)),
             ))
-            prev_guess = guess
+            if mode == "guesser":                 # the carried belief is the GUESSER's input;
+                prev_guess = guess                # bookkeeper/none keep the zero slot
             obs, _reward, done, _info = match.step(action)
         winner = match.g.result.get("winner")
         _stamp_game(buf, start, winner,

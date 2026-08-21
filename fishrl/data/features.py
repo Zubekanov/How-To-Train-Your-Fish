@@ -60,8 +60,56 @@ HANDS_DIM = _HANDS_ROWS * CARD_F + _PUB_PER_PLAYER * 2 + _PUB_GAME + _CLOCK
 PUBLIC_FAMILY = ("public", "hands")     # critic views that ride the pub_feat slot
 
 
+# ── per-name count block (Config.obs_counts, 2026-08-22) ──────────────────────
+# The entity encoder pools each zone by masked mean + max: a per-name FRACTION and a
+# presence bit, never an absolute count -- and the scalar tail carries no graveyard or
+# exile count. So "how many Dandâns / Lapses are left in the deck" was not linearly
+# recoverable from any view (the same failure class as library parity from len/80).
+# When enabled, a COUNT_DIM block is appended to the globals tail of the actor input
+# (after the bookkeeper belief) and of the hands critic's features:
+#   actor : per-name cards the VIEWER cannot see (library + unknown opponent hand),
+#           = deck copies - visible - known, the bookkeeper's own `remaining` vector
+#   hands : per-name cards in the LIBRARY (exact; both hands are visible to it)
+#   both  : + graveyard count / 40, exile count / 8
+# Layout is versioned in the checkpoint config (obs_counts); the toggle is set by
+# build_models / the collector worker init, like set_public_view. Adding it to a
+# trained net is an in-place zero-column widening of the head's first Linear
+# (fishrl/train/widen_counts.py) -- function-identical at the seam, no restart.
+COUNT_DIM = V.N_NAMES + 2
+_COUNTS = False
+
+
+def set_count_block(enabled: bool) -> None:
+    global _COUNTS
+    _COUNTS = bool(enabled)
+
+
+def count_block_on() -> bool:
+    return _COUNTS
+
+
+def belief_dim() -> int:
+    """Width of the actor's belief tail: the 20-dim bookkeeper (+ COUNT_DIM when on)."""
+    return V.N_NAMES + (COUNT_DIM if _COUNTS else 0)
+
+
+def hands_dim() -> int:
+    return HANDS_DIM + (COUNT_DIM if _COUNTS else 0)
+
+
 def pub_dim_for(view: str) -> int:
-    return HANDS_DIM if view == "hands" else PUB_DIM
+    return hands_dim() if view == "hands" else PUB_DIM
+
+
+def _zone_counts_tail(g) -> list:
+    return [len(g.graveyard) / 40.0, len(g.exile) / 8.0]
+
+
+def library_counts(g) -> np.ndarray:
+    """Per-name count of cards in the shared library (exact; the hands critic's block)."""
+    out = np.zeros(V.N_NAMES, dtype=np.float32)
+    _name_counts_into(g, (s.instance_id for s in g.library), out)
+    return out
 
 
 def opponent_hand_counts(g, viewer: str) -> np.ndarray:
@@ -145,13 +193,17 @@ def bookkeeper_counts(g, viewer: str) -> np.ndarray:
     _name_counts_into(g, (s.instance_id for s in g.library
                           if s.known_by.get(viewer)), visible)
     fill = len(g.players[opp].hand) - float(known.sum())
-    if fill <= 0.0:
-        return known
     remaining = np.maximum(copies - visible - known, 0.0)
     rtot = float(remaining.sum())
-    if rtot <= 0.0:
-        return known
-    return (known + fill * remaining / rtot).astype(np.float32)
+    if fill <= 0.0 or rtot <= 0.0:
+        belief = known
+    else:
+        belief = (known + fill * remaining / rtot).astype(np.float32)
+    if not _COUNTS:
+        return belief
+    # count block: what the viewer cannot see, by name (library + unknown opp hand)
+    return np.concatenate([belief, remaining, np.asarray(_zone_counts_tail(g), dtype=np.float32)]
+                          ).astype(np.float32, copy=False)
 
 
 def _player_scalars(life, hand_count, bf_cards, pool, mulligans, has_lost) -> list:
@@ -281,7 +333,6 @@ def encode_public_ref(g) -> np.ndarray:
 # of the pub calibration telemetry. Toggled once per process (main + each pcollect worker).
 _PUBLIC_ENCODING = True
 _ZERO_PUB = np.zeros(PUB_DIM, dtype=np.float32)
-_ZERO_HANDS = np.zeros(HANDS_DIM, dtype=np.float32)
 _PUB_VIEW = "public"
 
 
@@ -310,11 +361,11 @@ def encode_hands(g) -> np.ndarray:
     battlefields, graveyard, exile and the stack; no library rows. Gated by the
     same set_public_encoding switch as encode_public."""
     if not _PUBLIC_ENCODING:
-        return _ZERO_HANDS
+        return np.zeros(hands_dim(), dtype=np.float32)
     obj = g.objects
     bf = {pid: [obj[iid] for iid in g.players[pid].battlefield if iid in obj]
           for pid in ("p1", "p2")}
-    out = np.zeros(HANDS_DIM, dtype=np.float32)
+    out = np.zeros(hands_dim(), dtype=np.float32)
     rows = out[:_HANDS_ROWS * CARD_F].reshape(_HANDS_ROWS, CARD_F)
     b = _fill_zone(rows, 0, [obj[iid] for iid in g.players["p1"].hand if iid in obj],
                    HANDS_SLOTS["p1_hand"], "p1")
@@ -336,6 +387,8 @@ def encode_hands(g) -> np.ndarray:
     gv += [g.turn_number / 40.0, float(g.active_player == "p1"),
            float(g.priority_player == "p1"), len(g.library) / 80.0, len(g.stack) / 6.0]
     gv += list(deckout_clock(g, "p1"))
+    if _COUNTS:
+        gv += list(library_counts(g)) + _zone_counts_tail(g)
     out[_HANDS_ROWS * CARD_F:] = gv
     return out
 

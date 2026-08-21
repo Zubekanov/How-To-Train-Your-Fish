@@ -311,6 +311,11 @@ class Config:
     #   "auto"   -- mask to {EFFECT} alone; the collector's single-legal-action fast
     #               path plays it with no policy forward (auto-resolve)
     text_change_mode: str = "full"
+    # Per-name count block appended to the actor input (after the bookkeeper belief)
+    # and to the hands critic's features: see fishrl.data.features COUNT_DIM. Needs
+    # belief_mode="bookkeeper" + critic_view="hands". Architecture-defining (persisted);
+    # added to a live run by fishrl/train/widen_counts.py (in place, zero-init columns).
+    obs_counts: bool = False
     actor_encoder: str | None = None
     # critic defaults to entity: it's the measured on-policy calibration winner
     # (Brier 0.261 vs flat 0.342), off the deployment path, and ~free now that the

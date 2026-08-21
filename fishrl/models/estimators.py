@@ -63,9 +63,11 @@ class PublicCritic(_OutcomeHead):
 
     DIM, SLOTS = PUB_DIM, PUB_SLOTS
 
-    def __init__(self, hidden=(512, 512, 256), encoder: str = "entity", card_dim: int = 64):
-        super().__init__(self.DIM, self.SLOTS, hidden, encoder, card_dim)
-        in_dim = self.enc.enc_dim if self.enc is not None else self.DIM
+    def __init__(self, hidden=(512, 512, 256), encoder: str = "entity", card_dim: int = 64,
+                 extra_in: int = 0):
+        total = self.DIM + int(extra_in)            # + count block (Config.obs_counts)
+        super().__init__(total, self.SLOTS, hidden, encoder, card_dim)
+        in_dim = self.enc.enc_dim if self.enc is not None else total
         self.aux_head = nn.Linear(in_dim, 1)
 
     def forward_with_aux(self, x: torch.Tensor):
@@ -81,11 +83,11 @@ class HandsCritic(PublicCritic):
 
 
 def make_critic(view: str, hidden=(512, 512, 256), encoder: str = "flat",
-                card_dim: int = 64):
+                card_dim: int = 64, extra_in: int = 0):
     """The PPO critic for a Config.critic_view: "god" -> PrivilegedCritic (legacy),
     "public" -> PublicCritic, "hands" -> HandsCritic (both + deckout aux head)."""
     if view == "hands":
-        return HandsCritic(hidden, encoder, card_dim)
+        return HandsCritic(hidden, encoder, card_dim, extra_in=extra_in)
     if view == "public":
         return PublicCritic(hidden, encoder, card_dim)
     return PrivilegedCritic(hidden, encoder, card_dim)

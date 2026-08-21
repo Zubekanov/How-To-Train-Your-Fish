@@ -50,10 +50,11 @@ _HDR_I32 = 4                    # per-slot int32 header words: [pid, state, _, _
 
 
 def _dims() -> tuple:
-    from fishrl.models.policy import ACTOR_IN
+    from fishrl.models.policy import actor_in
     from fishrl.obs.encoder import OBS_DIM
     from fishrl.obs import vocab as V
     from fishrl.spaces import action_space as A
+    ACTOR_IN = actor_in()                   # live width (count block, if the run has it)
     pay = max(ACTOR_IN + A.N, OBS_DIM + V.N_NAMES)          # request floats
     resp = max(A.N, V.N_NAMES)                              # response floats
     return ACTOR_IN, OBS_DIM, V.N_NAMES, A.N, pay, resp
@@ -274,13 +275,16 @@ def _serve_main(shm_name: str, nslots: int, conn, lite: dict) -> None:
             os._exit(0)
         threading.Thread(target=_die, daemon=True).start()
 
+    from fishrl.data import features
     from fishrl.models.guesser import HandGuesser
-    from fishrl.models.policy import MaskedActor
+    from fishrl.models.policy import MaskedActor, actor_in
 
+    features.set_count_block(lite.get("obs_counts", False))
     dev = lite["device"] if (not str(lite["device"]).startswith("cuda")
                              or torch.cuda.is_available()) else "cpu"
     ah = tuple(lite.get("actor_hidden") or lite["hidden"])
-    actor = MaskedActor(ah, lite["enc_actor"], int(lite.get("card_dim", 64))).to(dev)
+    actor = MaskedActor(ah, lite["enc_actor"], int(lite.get("card_dim", 64)),
+                        in_dim=actor_in()).to(dev)
     has_guesser = lite.get("belief_mode", "guesser") == "guesser"
     guesser = None
     if has_guesser:
@@ -373,7 +377,8 @@ class InferenceServer:
             args=(self.shm.name, self.nslots,
                   child, {k: lite[k] for k in
                           ("hidden", "actor_hidden", "card_dim",
-                           "enc_actor", "enc_guesser")} | {"device": lite["device"]}),
+                           "enc_actor", "enc_guesser")}
+                  | {"device": lite["device"], "obs_counts": lite.get("obs_counts", False)}),
             daemon=True)
         self.proc.start()
 

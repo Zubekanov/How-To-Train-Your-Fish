@@ -85,7 +85,7 @@ def _winit(lite: dict) -> None:
     import torch
 
     from fishrl.models.guesser import HandGuesser
-    from fishrl.models.policy import MaskedActor
+    from fishrl.models.policy import MaskedActor, actor_in
 
     # Die with the parent. A gracefully-stopped trainer shuts the pool down, but
     # a hard-killed one (TerminateProcess) leaves the workers orphaned -- observed
@@ -109,15 +109,16 @@ def _winit(lite: dict) -> None:
     if lite.get("critic_view", "god") in features.PUBLIC_FAMILY:
         features.set_public_view(lite["critic_view"])
     masking.set_text_change_mode(lite.get("text_change_mode", "full"))
+    features.set_count_block(lite.get("obs_counts", False))
     hidden = tuple(lite["hidden"])                        # guesser head width
     ah = tuple(lite.get("actor_hidden", hidden))          # actor head width (may differ)
     cd = int(lite.get("card_dim", 64))                    # entity card-embedding width
     has_guesser = lite.get("belief_mode", "guesser") == "guesser"
     _G.update(
         lite=lite,
-        actor=MaskedActor(ah, lite["enc_actor"], cd),
+        actor=MaskedActor(ah, lite["enc_actor"], cd, in_dim=actor_in()),
         guesser=HandGuesser(hidden, lite["enc_guesser"], cd) if has_guesser else None,
-        opp_actor=MaskedActor(ah, lite["enc_actor"], cd),
+        opp_actor=MaskedActor(ah, lite["enc_actor"], cd, in_dim=actor_in()),
         opp_guesser=HandGuesser(hidden, lite["enc_guesser"], cd) if has_guesser else None,
     )
     if lite.get("serve_shm"):
@@ -264,6 +265,7 @@ class ParallelCollector:
                 "train_public": cfg.train_public,
                 "belief_mode": cfg.belief_mode, "critic_view": cfg.critic_view,
                 "text_change_mode": cfg.text_change_mode,
+                "obs_counts": bool(getattr(cfg, "obs_counts", False)),
                 "scenario_names": scen_names,
                 "affinity": parse_affinity(getattr(cfg, "collect_affinity", ""))}
         self._server = None

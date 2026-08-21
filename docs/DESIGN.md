@@ -678,6 +678,19 @@ every held-out view benchmark peaked on its first epoch. The mainline runs `--cr
 (resume-tunable launcher flag). `critic_loss` / `deckout_aux_loss` (`V`, `aux`) are averaged over
 the critic's passes only, so expect both to read *higher* at this seam (one pass, no memorisation).
 
+**`obs_counts` (2026-08-22, cloud it≈64k):** a COUNT_DIM=22 block on the globals tail of the actor
+input (after the bookkeeper belief: per-name cards the viewer cannot see + graveyard/40 + exile/8)
+and of the hands critic (per-name library counts + the same scalars). Motivation: the entity
+encoder's mean/max pooling yields per-name fractions and presence, never absolute counts, and the
+tail carried no graveyard/exile count — so "Dandâns left in the deck" was not linearly
+recoverable (the parity-bug class). Added to the live run by `fishrl/train/widen_counts.py`:
+zero-initialised input columns on the heads' first Linear (+ aux head), Adam moments padded,
+league selves widened — function-identical at the seam, no reset, KL anchor untouched. Bench
+(88.7k v1.3-mirror states, entity encoder, 3 seeds): critic Brier .1715 → .1714, a null; the
+expected value is actor-side (deckout-window decisions), unmeasurable offline. Same day, the
+graveyard overflow fill became value-first (AK, one per instant/sorcery name, newest of the
+rest) — `encoder.graveyard_order`, bit-identical below 32 cards.
+
 ### 3.3 The eval row — `stats.json → evals[]`
 
 Written by `fishrl.eval.parallel_panel`, out-of-band on a timer, reading `latest.pt` so it never

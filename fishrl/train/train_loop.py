@@ -493,7 +493,9 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     "deckout_aux_loss": mean.get("deckout_aux_loss"),
                     # per-turn calibration buckets (pre-update, same forward)
                     **{k: est.get(k) for lbl, _lo, _hi in features.TURN_BUCKETS
-                       for k in (f"critic_brier_{lbl}", f"critic_acc_{lbl}", f"critic_n_{lbl}")}}
+                       for k in (f"critic_brier_{lbl}", f"critic_acc_{lbl}", f"critic_n_{lbl}")},
+                    # turn-by-turn arrays (index t-1; last slot pools TURN_MAX+), same forward
+                    "critic_turn": est.get("critic_turn")}
                    if v3 else
                    {"guesser_loss": mean["guesser_loss"], "public_loss": mean["public_loss"],
                     "priv_acc": est.get("priv_acc"), "pub_acc": est.get("pub_acc"),

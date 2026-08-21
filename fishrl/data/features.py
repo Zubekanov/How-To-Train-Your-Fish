@@ -113,6 +113,7 @@ def turn_index_for(view: str) -> int:
 
 # Per-turn calibration buckets (telemetry): (label, lo, hi) inclusive turn ranges.
 TURN_BUCKETS = (("t1_10", 1, 10), ("t11_20", 11, 20), ("t21_30", 21, 30), ("t31p", 31, 999))
+TURN_MAX = 40        # per-turn telemetry: turns 1..TURN_MAX-1 individually, TURN_MAX+ pooled
 
 
 def _zone_counts_tail(g) -> list:

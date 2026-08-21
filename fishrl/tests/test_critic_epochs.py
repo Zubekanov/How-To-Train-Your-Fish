@@ -80,3 +80,7 @@ def test_estimator_metrics_per_turn_buckets():
     assert est["critic_n_t1_10"] == 16 and est["critic_n_t11_20"] == 8 and est["critic_n_t21_30"] == 8 and est["critic_n_t31p"] == 8
     tot = sum(est[f"critic_n_{lbl}"] * est[f"critic_brier_{lbl}"] for lbl, _, _ in TURN_BUCKETS) / n
     assert abs(tot - est["critic_brier"]) < 1e-5
+    ct = est["critic_turn"]
+    assert len(ct["n"]) == 40 and ct["n"][0] == 8 and ct["n"][4] == 8 and ct["n"][11] == 8 and ct["n"][39] == 8
+    assert ct["n"][1] == 0 and ct["brier"][1] is None
+    assert abs(sum(ct["n"][i] * ct["brier"][i] for i in range(40) if ct["n"][i]) / n - est["critic_brier"]) < 1e-3

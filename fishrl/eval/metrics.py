@@ -70,14 +70,28 @@ def estimator_metrics(models, batch) -> dict:
             out = {"n": int(y.numel()), "critic_acc": acc(cp), "critic_brier": brier(cp)}
             # per-turn buckets: the turn is in the feature tail (turn/40), so this is a
             # group-by on the forward already done -- no extra collection or compute
-            from fishrl.data.features import TURN_BUCKETS, turn_index_for
+            from fishrl.data.features import TURN_BUCKETS, TURN_MAX, turn_index_for
             turn = torch.round(feat[keep][:, turn_index_for(view)] * 40.0)
+            sq = (cp - y) ** 2
+            hit = ((cp > 0.5).float() == y).float()
             for label, lo, hi in TURN_BUCKETS:
                 s = (turn >= lo) & (turn <= hi)
                 n_b = int(s.sum())
                 out[f"critic_n_{label}"] = n_b
-                out[f"critic_brier_{label}"] = float(((cp[s] - y[s]) ** 2).mean()) if n_b else float("nan")
-                out[f"critic_acc_{label}"] = float(((cp[s] > 0.5).float() == y[s]).float().mean()) if n_b else float("nan")
+                out[f"critic_brier_{label}"] = float(sq[s].mean()) if n_b else float("nan")
+                out[f"critic_acc_{label}"] = float(hit[s].mean()) if n_b else float("nan")
+            # turn-by-turn: index t-1 for turns 1..TURN_MAX-1, the last slot pools TURN_MAX+
+            # (bincount on the same tensors -- one pass, no extra forward)
+            tb = turn.clamp(1, TURN_MAX).long() - 1
+            n_t = torch.bincount(tb, minlength=TURN_MAX).float()
+            sq_t = torch.bincount(tb, weights=sq, minlength=TURN_MAX)
+            hit_t = torch.bincount(tb, weights=hit, minlength=TURN_MAX)
+            safe = n_t.clamp(min=1.0)
+            out["critic_turn"] = {
+                "n": [int(v) for v in n_t.tolist()],
+                "brier": [round(float(b / c), 4) if c > 0 else None for b, c in zip(sq_t, n_t)],
+                "acc": [round(float(h / c), 4) if c > 0 else None for h, c in zip(hit_t, n_t)],
+            }
             return out
         pub = models.public.p1_winprob(batch["pub"][keep].to(device_of(models.public))).cpu()
     return {"n": int(y.numel()),

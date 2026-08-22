@@ -113,13 +113,13 @@ def fill_critic_values(buf: RolloutBuffer, critic, batch: int = 8192,
         # Landmine guard: encode_public is gated by set_public_encoding — if the gate
         # zeroed it the critic would silently train on nothing. A genuine pub row
         # always carries a nonzero globals tail (life/20 etc.).
-        assert np.abs(feat[:256]).sum() > 0.0, \
+        assert float(abs(feat[:256]).sum()) > 0.0, \
             "critic_view='public' but pub features are all-zero — set_public_encoding gate?"
     sign = np.where(buf.scalar("seat"), 1.0, -1.0).astype(np.float32)
     out = np.empty(len(buf), dtype=np.float32)
     with torch.no_grad():
         for i in range(0, len(feat), batch):
-            gt = torch.as_tensor(feat[i:i + batch], dtype=torch.float32).to(dev)
+            gt = torch.as_tensor(feat[i:i + batch]).to(dev, dtype=torch.float32)
             p1 = critic.p1_winprob(gt).cpu().numpy()
             out[i:i + batch] = sign[i:i + batch] * (2.0 * p1 - 1.0)
     buf.set_values(out)

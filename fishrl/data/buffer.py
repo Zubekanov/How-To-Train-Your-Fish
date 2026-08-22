@@ -40,6 +40,19 @@ def _pconcat(parts: list) -> np.ndarray:
     return out
 
 
+def _dev_concat(parts: list, device) -> torch.Tensor:
+    """Assemble per-game blocks straight into one device tensor (the only copy)."""
+    total = sum(p.shape[0] for p in parts)
+    out = torch.empty((total,) + tuple(parts[0].shape[1:]),
+                      dtype=torch.from_numpy(np.asarray(parts[0][:1])).dtype, device=device)
+    off = 0
+    for p in parts:
+        n = p.shape[0]
+        out[off:off + n].copy_(torch.from_numpy(np.ascontiguousarray(p)), non_blocking=False)
+        off += n
+    return out
+
+
 @dataclass
 class Step:
     seat: str
@@ -117,6 +130,10 @@ class RolloutBuffer:
         self.meta: list = list(meta) if meta else []      # per-game {"truncated"} — how it ended
         self.cols: list = []                              # columnar backing (per-game dicts)
         self._colcache: dict = {}
+        # When set (the trainer's update device), columnar `column()` assembles the big
+        # arrays straight into a device tensor -- one copy per game block, no host concat,
+        # no second host->device copy in fill_critic_values / ppo_update.
+        self.device = None
 
     # ── backing ────────────────────────────────────────────────────────────────
     @property
@@ -172,8 +189,9 @@ class RolloutBuffer:
         return bool(self.cols) and all(c.get("god_shared") and not np.any(c["god"])
                                        for c in self.cols if int(c["n"]))
 
-    def column(self, name: str) -> np.ndarray:
-        """Stacked (T, ...) array for one of x_act/mask/god/pub/guess_in/cnt."""
+    def column(self, name: str):
+        """Stacked (T, ...) array for one of x_act/mask/god/pub/guess_in/cnt -- a numpy
+        array, or a torch tensor on `self.device` when that is set (columnar only)."""
         if self.cols:
             if name in self._colcache:
                 return self._colcache[name]
@@ -185,7 +203,12 @@ class RolloutBuffer:
                 if name == "god" and c.get("god_shared"):
                     a = np.broadcast_to(a, (int(c["n"]),) + a.shape)
                 parts.append(a)
-            out = _pconcat(parts) if parts else np.zeros((0,), dtype=np.float32)
+            if not parts:
+                out = np.zeros((0,), dtype=np.float32)
+            elif self.device is not None and name != "god":
+                out = _dev_concat(parts, self.device)
+            else:
+                out = _pconcat(parts)
             self._colcache[name] = out
             return out
         return np.stack([getattr(s, _COL_ATTR[name]) for s in self._steps])
@@ -311,7 +334,7 @@ class RolloutBuffer:
             "x_act": torch.as_tensor(x_act, dtype=torch.float32),
             "persp": torch.as_tensor(x_act[:, :OBS_DIM], dtype=torch.float32),
             "prev_guess": torch.as_tensor(self.column("guess_in"), dtype=torch.float32),
-            "mask": torch.as_tensor(self.column("mask"), dtype=torch.float32),
+            "mask": torch.as_tensor(self.column("mask")).to(torch.float32),
             "action": torch.as_tensor(self.scalar("action"), dtype=torch.long),
             "old_logp": torch.as_tensor(self.scalar("logp"), dtype=torch.float32),
             "adv": torch.as_tensor(adv, dtype=torch.float32),

@@ -213,3 +213,28 @@ def test_columnar_compute_matches_step_compute():
         assert torch.equal(ba[k], bc[k]), k
     # lazy Step materialisation still works for per-step consumers
     assert c.steps[5].seat == "p2" and c.steps[5].game_id == 1
+
+
+def test_device_column_assembly_matches_host():
+    """buf.device set -> columns are assembled into device tensors; values identical."""
+    import torch
+    from fishrl.data.buffer import RolloutBuffer, pack_steps
+    rng = np.random.default_rng(1)
+    god0 = np.zeros(2, np.float32)
+    c = RolloutBuffer()
+    for g in range(3):
+        b = RolloutBuffer()
+        for i in range(4):
+            b.add(Step(seat="p1", x_act=rng.random(5).astype(np.float32), mask=np.array([1, 1, 0], np.int8),
+                       action=i, logp=-0.1, value=0.2, god_feat=god0, pub_feat=rng.random(3).astype(np.float32),
+                       guess_in=np.zeros(2, np.float32), cnt_target=np.ones(2, np.float32), winner="p1", game_id=0))
+        b.games = ["p1"]; b.meta = [{"truncated": False}]
+        d = pack_steps(b.steps); d["games"] = b.games; d["meta"] = b.meta
+        gb = RolloutBuffer(games=b.games, meta=b.meta); gb.set_cols([d]); c.merge(gb)
+    host = c.compute(0.99, 0.9)
+    c._colcache = {}
+    c.device = "cpu"                                     # exercises _dev_concat on CPU
+    dev = c.compute(0.99, 0.9)
+    for k in host:
+        assert torch.equal(host[k], dev[k].cpu()), k
+    assert torch.is_tensor(c.column("x_act")) and c.column("x_act").shape == (12, 5)

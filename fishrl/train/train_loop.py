@@ -910,6 +910,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     log(f"[stop] stop requested during collection at it={done}")
                     break
                 buf = RolloutBuffer()
+                buf.device = cfg.device if str(cfg.device).startswith("cuda") else None
                 for (tag, member, lseat), gbuf in zip(metas, bufs):
                     won = gbuf.games[-1] if gbuf.games else None
                     if tag == "mirror":

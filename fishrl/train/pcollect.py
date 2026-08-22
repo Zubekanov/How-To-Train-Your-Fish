@@ -208,6 +208,7 @@ def _collect_one_with(spec: dict, actor, guesser):
 
 
 _WRING = {"shm": None, "ver": -1}
+_WT = {"last_done": None}          # worker-side timing: when the previous task returned
 
 
 def _ring_read(name: str, nbuf: int, cap: int, ver: int) -> bytes:
@@ -260,8 +261,16 @@ def _collect_chunk(learner_blob, specs: list, torch_seed: int) -> bytes:
         load_np_state(_G["actor"], learner_state["actor"])    # plain-pickled torch tensors
         if "guesser" in learner_state and _G["guesser"] is not None:   # leak their storage
             load_np_state(_G["guesser"], learner_state["guesser"])     # on loads
+    t0 = time.perf_counter()
+    gap = (t0 - _WT["last_done"]) if _WT["last_done"] is not None else 0.0
     out = [(spec["idx"], _collect_one(spec)) for spec in specs]
-    return zlib.compress(pickle.dumps(out, protocol=pickle.HIGHEST_PROTOCOL), 1)
+    play = time.perf_counter() - t0
+    # worker timing rides along as a pseudo-row: gap = idle between tasks (task
+    # feeding / result draining), play = inside the games (engine + forwards)
+    out.append((-1, {"gap": gap, "play": play, "pid": os.getpid()}))
+    blob = zlib.compress(pickle.dumps(out, protocol=pickle.HIGHEST_PROTOCOL), 1)
+    _WT["last_done"] = time.perf_counter()
+    return blob
 
 
 # ── main-process side ─────────────────────────────────────────────────────────
@@ -338,6 +347,7 @@ class ParallelCollector:
         self._ring_n = 4
         self._ring_cap = 0
         self._ring_ver = 0
+        self.timing = {"gap_s": 0.0, "play_s": 0.0, "n": 0}
 
     def _new_executor(self) -> ProcessPoolExecutor:
         # Recycle each worker after this many chunks. Historically this capped an
@@ -429,8 +439,20 @@ class ParallelCollector:
             except Exception as e:                     # noqa: BLE001 -- retry ANY chunk failure
                 blob = self._retry_chunk(chunk, seed, e)
             for idx, buf in pickle.loads(zlib.decompress(blob)):
+                if idx < 0:
+                    self._note_timing(buf); continue
                 out[idx] = buf
         return [out[i] for i in range(n_specs)]
+
+    def _note_timing(self, t: dict) -> None:
+        self.timing["gap_s"] += t["gap"]; self.timing["play_s"] += t["play"]; self.timing["n"] += 1
+
+    def pop_timing(self) -> dict:
+        """Mean worker gap/play seconds per task since the last call."""
+        t, n = self.timing, max(self.timing["n"], 1)
+        out = {"worker_gap_s": t["gap_s"] / n, "worker_play_s": t["play_s"] / n, "worker_tasks": t["n"]}
+        self.timing = {"gap_s": 0.0, "play_s": 0.0, "n": 0}
+        return out
 
     def take(self, items: list, n: int) -> tuple:
         """Streamed gather: block until `n` of the single-game work items have
@@ -448,7 +470,9 @@ class ParallelCollector:
                     blob = fut.result()
                 except Exception as e:                 # noqa: BLE001 -- retry ANY failure
                     blob = self._retry_chunk(chunk, seed, e)
-                for _idx, buf in pickle.loads(zlib.decompress(blob)):
+                for idx, buf in pickle.loads(zlib.decompress(blob)):
+                    if idx < 0:
+                        self._note_timing(buf); continue
                     got.append((i, buf))
         rest = [items[i] for i in sorted(pending.values())]
         return got, rest

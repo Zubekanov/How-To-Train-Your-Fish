@@ -433,11 +433,13 @@ def train(cfg: Config, models: Models | None = None, log=print,
         # estimates and can hit zero/negative -> inf; the means are well-behaved)
         _g2 = acc["gns_g2"] / max(win_iters, 1)
         gns_b = (acc["gns_tr_sigma"] / max(win_iters, 1)) / _g2 if _g2 > 0 else nan
+        wt = pcol.pop_timing() if pcol is not None else {}
         brier_gap = (est["pub_brier"] - est["priv_brier"]) if "pub_brier" in est else nan
         game_str = (
             f" | games={games} len={len_full:.1f} slen={len_scen:.1f} "
             f"trunc={trunc_rate:.2f} draw={draw_rate:.2f} "
             f"seat_p1={seat_p1:.2f} fdec={fdec:.2f} | wall collect={collect_frac:.2f} book={book_frac:.2f} gns_b={gns_b:.0f}"
+            + (f" worker gap/play={wt['worker_gap_s']:.2f}/{wt['worker_play_s']:.2f}s" if wt else "")
         )
         if v3:
             # v3 status format: no guesser/public tokens; one critic calib group +
@@ -525,6 +527,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 # decisions; compare with T/iter to read the games/iter slack
                 "gns_b": gns_b, "gns_tr_sigma": acc["gns_tr_sigma"] / max(win_iters, 1),
                 "gns_g2": acc["gns_g2"] / max(win_iters, 1),
+                **wt,
                 # Window composition as shares of ALL games incl. scenario-seeded ones, so the
                 # league slices + opp_scenario partition the window (~sum to 1) and the website's
                 # stacked mix shows scenarios. opp_self+opp_past==opp_trained. NOTE: these use the

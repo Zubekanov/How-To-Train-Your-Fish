@@ -97,7 +97,8 @@ def test_gather_rebuilds_a_poisoned_pool(monkeypatch):
         poisoned.shutdown(wait=False, cancel_futures=True)
         blob = pc._retry_chunk(specs, seed=7,
                                err=BrokenProcessPool("simulated worker death"))
-        got = pickle.loads(zlib.decompress(blob))
+        from fishrl.train.pcollect import _decode
+        got = _decode(blob)
         assert pc._ex is not poisoned                  # the pool was rebuilt, not reused
         assert got and got[0][0] == 0 and got[0][1].steps   # (idx, buffer) with real steps
     finally:
@@ -197,3 +198,27 @@ def test_weights_ring_versions_and_torn_read_guard():
         assert len(bufs[0].games) == 1
     finally:
         pc.close()
+
+
+def test_pack_unpack_roundtrip_is_exact():
+    import numpy as np
+    from fishrl.data.buffer import RolloutBuffer, Step
+    from fishrl.train.pcollect import _pack_buf, _unpack_buf
+    god0 = np.zeros(3, dtype=np.float32)
+    buf = RolloutBuffer()
+    for i in range(5):
+        buf.add(Step(seat="p1" if i % 2 == 0 else "p2", x_act=np.full(4, i, np.float32),
+                     mask=np.array([1, 0, i % 2], np.int8), action=i, logp=-0.1 * i, value=0.2 * i,
+                     god_feat=god0, pub_feat=np.full(2, -i, np.float32),
+                     guess_in=np.zeros(2, np.float32), cnt_target=np.ones(2, np.float32),
+                     winner="p1" if i < 3 else None, game_id=7, truncated=i == 4, deckout_end=i == 1))
+    buf.games = ["p1"]; buf.meta = [{"truncated": False}]
+    back = _unpack_buf(_pack_buf(buf))
+    assert back.games == buf.games and back.meta == buf.meta and len(back.steps) == 5
+    for a, b in zip(buf.steps, back.steps):
+        for f in ("seat", "action", "logp", "value", "winner", "game_id", "truncated", "deckout_end"):
+            assert getattr(a, f) == getattr(b, f), f
+        for f in ("x_act", "mask", "god_feat", "pub_feat", "guess_in", "cnt_target"):
+            assert np.array_equal(getattr(a, f), getattr(b, f)), f
+    assert back.steps[0].god_feat is back.steps[4].god_feat          # shared zero row survives
+    assert len(_unpack_buf(_pack_buf(RolloutBuffer())).steps) == 0

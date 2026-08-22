@@ -30,7 +30,7 @@ import time
 import zlib
 
 import numpy as np
-from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait as _fwait
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, wait as _fwait
 from concurrent.futures.process import BrokenProcessPool
 from types import SimpleNamespace
 
@@ -236,6 +236,64 @@ def _ring_read(name: str, nbuf: int, cap: int, ver: int) -> bytes:
     raise RuntimeError("weights ring: could not get a consistent read")
 
 
+def _pack_buf(buf) -> dict:
+    """Columnar transport form of a per-game RolloutBuffer: a few stacked arrays
+    instead of ~300 Step objects. Unpickling stacked arrays is a memcpy; unpickling
+    Step objects was ~30 ms/game on the trainer's main thread (3.6 s/iteration of
+    120 games, serial, on the thread the executor's manager also needs)."""
+    st = buf.steps
+    if not st:
+        return {"n": 0, "games": list(buf.games), "meta": list(buf.meta)}
+    god_shared = all(x.god_feat is st[0].god_feat for x in st)
+    return {
+        "n": len(st),
+        "seat": np.array([x.seat == "p1" for x in st], dtype=np.bool_),
+        "x_act": np.stack([x.x_act for x in st]),
+        "mask": np.stack([x.mask for x in st]),
+        "action": np.array([x.action for x in st], dtype=np.int64),
+        "logp": np.array([x.logp for x in st], dtype=np.float64),
+        "value": np.array([x.value for x in st], dtype=np.float64),
+        "god": st[0].god_feat if god_shared else np.stack([x.god_feat for x in st]),
+        "god_shared": god_shared,
+        "pub": np.stack([x.pub_feat for x in st]),
+        "guess_in": np.stack([x.guess_in for x in st]),
+        "cnt": np.stack([x.cnt_target for x in st]),
+        "winner": [x.winner for x in st],
+        "game_id": np.array([x.game_id for x in st], dtype=np.int64),
+        "truncated": np.array([x.truncated for x in st], dtype=np.bool_),
+        "deckout_end": np.array([x.deckout_end for x in st], dtype=np.bool_),
+        "games": list(buf.games), "meta": list(buf.meta),
+    }
+
+
+def _unpack_buf(d: dict):
+    from fishrl.data.buffer import RolloutBuffer, Step
+    buf = RolloutBuffer()
+    buf.games = list(d["games"]); buf.meta = list(d["meta"])
+    n = int(d["n"])
+    if n == 0:
+        return buf
+    god = d["god"]
+    for i in range(n):
+        buf.steps.append(Step(
+            seat="p1" if d["seat"][i] else "p2", x_act=d["x_act"][i], mask=d["mask"][i],
+            action=int(d["action"][i]), logp=float(d["logp"][i]), value=float(d["value"][i]),
+            god_feat=god if d["god_shared"] else god[i], pub_feat=d["pub"][i],
+            guess_in=d["guess_in"][i], cnt_target=d["cnt"][i], winner=d["winner"][i],
+            game_id=int(d["game_id"][i]), truncated=bool(d["truncated"][i]),
+            deckout_end=bool(d["deckout_end"][i])))
+    return buf
+
+
+def _decode(blob: bytes) -> list:
+    """Result blob -> [(idx, RolloutBuffer | timing dict)]. Decompression releases
+    the GIL, so gather/take run this in a thread pool."""
+    out = []
+    for idx, item in pickle.loads(zlib.decompress(blob)):
+        out.append((idx, _unpack_buf(item) if idx >= 0 else item))
+    return out
+
+
 def _collect_chunk(learner_blob, specs: list, torch_seed: int) -> bytes:
     """Load this iteration's learner weights once, then play the chunk's games.
     Returns [(spec_index, RolloutBuffer), ...] as a COMPRESSED pickle. The
@@ -263,7 +321,7 @@ def _collect_chunk(learner_blob, specs: list, torch_seed: int) -> bytes:
             load_np_state(_G["guesser"], learner_state["guesser"])     # on loads
     t0 = time.perf_counter()
     gap = (t0 - _WT["last_done"]) if _WT["last_done"] is not None else 0.0
-    out = [(spec["idx"], _collect_one(spec)) for spec in specs]
+    out = [(spec["idx"], _pack_buf(_collect_one(spec))) for spec in specs]
     play = time.perf_counter() - t0
     # worker timing rides along as a pseudo-row: gap = idle between tasks (task
     # feeding / result draining), play = inside the games (engine + forwards)
@@ -348,6 +406,7 @@ class ParallelCollector:
         self._ring_cap = 0
         self._ring_ver = 0
         self.timing = {"gap_s": 0.0, "play_s": 0.0, "n": 0}
+        self._dec = ThreadPoolExecutor(max_workers=4, thread_name_prefix="pcollect-decode")
 
     def _new_executor(self) -> ProcessPoolExecutor:
         # Recycle each worker after this many chunks. Historically this capped an
@@ -433,12 +492,14 @@ class ParallelCollector:
         Any chunk failure is retried (see `_retry_chunk`) rather than propagated,
         so a transient Windows resource spike doesn't end a multi-day run."""
         out: dict = {}
+        blobs = []
         for fut, chunk, seed in items:
             try:
-                blob = fut.result()
+                blobs.append(fut.result())
             except Exception as e:                     # noqa: BLE001 -- retry ANY chunk failure
-                blob = self._retry_chunk(chunk, seed, e)
-            for idx, buf in pickle.loads(zlib.decompress(blob)):
+                blobs.append(self._retry_chunk(chunk, seed, e))
+        for decoded in self._dec.map(_decode, blobs):
+            for idx, buf in decoded:
                 if idx < 0:
                     self._note_timing(buf); continue
                 out[idx] = buf
@@ -460,20 +521,23 @@ class ParallelCollector:
         order, remaining items). Failures retry like `gather`."""
         pending = {fut: i for i, (fut, _c, _s) in enumerate(items)}
         got: list = []
-        while len(got) < n and pending:
+        decoding: list = []                            # (i, future-of-decode)
+        while len(got) + len(decoding) < n and pending:
             done, _ = _fwait(list(pending), return_when=FIRST_COMPLETED)
             # several may land together: take at most n overall, the rest stay pending
-            for fut in sorted(done, key=pending.get)[:n - len(got)]:
+            for fut in sorted(done, key=pending.get)[:n - len(got) - len(decoding)]:
                 i = pending.pop(fut)
                 _f, chunk, seed = items[i]
                 try:
                     blob = fut.result()
                 except Exception as e:                 # noqa: BLE001 -- retry ANY failure
                     blob = self._retry_chunk(chunk, seed, e)
-                for idx, buf in pickle.loads(zlib.decompress(blob)):
-                    if idx < 0:
-                        self._note_timing(buf); continue
-                    got.append((i, buf))
+                decoding.append((i, self._dec.submit(_decode, blob)))
+        for i, df in decoding:
+            for idx, buf in df.result():
+                if idx < 0:
+                    self._note_timing(buf); continue
+                got.append((i, buf))
         rest = [items[i] for i in sorted(pending.values())]
         return got, rest
 
@@ -545,5 +609,6 @@ class ParallelCollector:
                 pass
             self._ring = None
         self._ex.shutdown(wait=False, cancel_futures=True)
+        self._dec.shutdown(wait=False)
         if self._server is not None:
             self._server.close()

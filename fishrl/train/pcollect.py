@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import pickle
 import zlib
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait as _fwait
 from concurrent.futures.process import BrokenProcessPool
 from types import SimpleNamespace
 
@@ -305,7 +305,7 @@ class ParallelCollector:
         g = getattr(member.models, "guesser", None)
         return (_cpu_state(member.models.actor), _cpu_state(g) if g is not None else None)
 
-    def submit(self, m, specs: list, it: int) -> list:
+    def submit(self, m, specs: list, it: int, per_game: bool = False) -> list:
         """Ship the CURRENT weights of `m` and start the specs' games on the pool;
         returns [(future, chunk, seed), ...] work items (gather needs the args to
         resubmit a failed chunk). Round-robin chunking; one weights shipment per
@@ -324,7 +324,9 @@ class ParallelCollector:
             # are exactly as fresh as the worker-local weights they replace.
             self._server.push_weights(learner_blob)
         items = []
-        for w, chunk in enumerate(specs[w::self.workers] for w in range(self.workers)):
+        chunks = ([[s] for s in specs] if per_game else
+                  [specs[w::self.workers] for w in range(self.workers)])
+        for w, chunk in enumerate(chunks):
             if chunk:
                 seed = (it * 1009 + w) % (2**31)
                 items.append((self._ex.submit(_collect_chunk, learner_blob, chunk, seed),
@@ -344,6 +346,27 @@ class ParallelCollector:
             for idx, buf in pickle.loads(zlib.decompress(blob)):
                 out[idx] = buf
         return [out[i] for i in range(n_specs)]
+
+    def take(self, items: list, n: int) -> tuple:
+        """Streamed gather: block until `n` of the single-game work items have
+        finished and return ([(idx_in_items, RolloutBuffer), ...] in completion
+        order, remaining items). Failures retry like `gather`."""
+        pending = {fut: i for i, (fut, _c, _s) in enumerate(items)}
+        got: list = []
+        while len(got) < n and pending:
+            done, _ = _fwait(list(pending), return_when=FIRST_COMPLETED)
+            # several may land together: take at most n overall, the rest stay pending
+            for fut in sorted(done, key=pending.get)[:n - len(got)]:
+                i = pending.pop(fut)
+                _f, chunk, seed = items[i]
+                try:
+                    blob = fut.result()
+                except Exception as e:                 # noqa: BLE001 -- retry ANY failure
+                    blob = self._retry_chunk(chunk, seed, e)
+                for _idx, buf in pickle.loads(zlib.decompress(blob)):
+                    got.append((i, buf))
+        rest = [items[i] for i in sorted(pending.values())]
+        return got, rest
 
     # Escalating backoff (~3.9 min total) so recovery OUTLASTS a resource storm:
     # the eval-panel burst that triggers WinError 1450 lasts "a couple of minutes",

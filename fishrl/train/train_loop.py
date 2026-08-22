@@ -490,6 +490,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 # (one-update-stale) collection must be distinguishable later.
                 # Sparse on purpose -- absent means strictly on-policy.
                 **({"pipeline": True} if pipeline else {}),
+                **({"stream": True} if stream else {}),
                 "iters": win_iters, "iters_per_h": win_iters / dt_h, "transitions": win_T,
                 "policy_loss": mean["policy_loss"], "critic_loss": mean["critic_loss"],
                 "entropy": mean["entropy"], "approx_kl": mean["approx_kl"],
@@ -668,6 +669,14 @@ def train(cfg: Config, models: Models | None = None, log=print,
         log("[pcollect] PIPELINED collection: iteration N+1's games play during "
             "N's update (behavior policy one update stale; see Config.pipeline_collect)")
     pipe_pending = None                # (specs, metas, futures) of the in-flight iteration
+    stream = pipeline and bool(getattr(cfg, "collect_stream", False))
+    if stream:
+        log(f"[pcollect] STREAMED collection: one task per game, {cfg.stream_depth} "
+            f"iteration-sized sets in flight, games consumed in completion order "
+            f"(see Config.collect_stream)")
+    stream_items: list = []            # in-flight (future, chunk, seed) single-game tasks
+    stream_metas: list = []            # their bookkeeping metas, aligned with stream_items
+    stream_it = 0                      # spec-set counter (seeds / league sampling streams)
 
     resuming = resume_path is not None and os.path.exists(resume_path)
     try:
@@ -833,7 +842,28 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 # serial branch in the else:); buffers come back in spec order and every
                 # piece of bookkeeping is applied here on the main thread.
                 try:
-                    if pipeline:
+                    if stream:
+                        # Streamed: keep stream_depth sets in flight; consume the next
+                        # games_per_iter FINISHED games whatever set they came from,
+                        # then top up with one set on the current (pre-update) weights.
+                        def _stream_fill(n_sets: int):
+                            nonlocal stream_it
+                            for _ in range(n_sets):
+                                sspecs, smetas = _pspecs(stream_it)
+                                stream_items.extend(pcol.submit(m, sspecs, stream_it, per_game=True))
+                                stream_metas.extend(smetas)
+                                stream_it += 1
+                        if not stream_items:
+                            stream_it = done
+                            _stream_fill(int(cfg.stream_depth))
+                        got, rest = pcol.take(stream_items, cfg.games_per_iter)
+                        taken = {i for i, _b in got}
+                        bufs = [b for _i, b in got]
+                        metas = [stream_metas[i] for i, _b in got]
+                        stream_metas = [mt for i, mt in enumerate(stream_metas) if i not in taken]
+                        stream_items = rest
+                        _stream_fill(1)
+                    elif pipeline:
                         # This iteration's games were submitted during the previous one
                         # (first pass: submit now). Then start N+1's games BEFORE the
                         # update below, with the current -- pre-update -- weights: that is

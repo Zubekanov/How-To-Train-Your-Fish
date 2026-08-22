@@ -678,6 +678,19 @@ every held-out view benchmark peaked on its first epoch. The mainline runs `--cr
 (resume-tunable launcher flag). `critic_loss` / `deckout_aux_loss` (`V`, `aux`) are averaged over
 the critic's passes only, so expect both to read *higher* at this seam (one pass, no memorisation).
 
+**`collect_stream` (2026-08-22, cloud it≈71.5k):** profiling the 128-core box showed ~20 cores
+busy of 120 collect workers during collection: `ParallelCollector.submit` round-robins the
+iteration's specs over the workers, so with games_per_iter == workers every worker plays ONE
+game and the iteration waits on its single longest game while the rest idle. The gradient
+noise scale (`gns_b` ≈ 900k decisions vs 24.5k per batch) says the slope is set by games per
+HOUR, not by the games/iteration split, so the fix is throughput at unchanged batch. Streaming
+submits every spec as its own task (`submit(..., per_game=True)`), keeps `stream_depth`
+iteration-sized sets in flight, and each iteration `take()`s the next games_per_iter finished
+games in completion order, then tops up with one set on the current weights. Staleness: served
+forwards always use the server's latest weights (old_logp matches what sampled); local-fallback
+nets are the submit-time weights, ≤ stream_depth updates old. Report rows carry `stream: true`.
+Bookkeeping (`buf.compute`, ~0.6 s/iter, now timed as `book=`) is the next serial cost.
+
 **`critic_td_mix` + jump telemetry (2026-08-22, cloud it≈70k):** the critic loss was pure BCE
 against the terminal winner, one row at a time — no TD/bootstrap term anywhere, so nothing tied
 `V(main 1)`, `V(declare attackers)`, `V(two lands tapped, mana floating)` and `V(spell cast)`

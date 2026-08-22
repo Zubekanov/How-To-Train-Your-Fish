@@ -65,6 +65,11 @@ def main():
                     help="REGIME: collect iteration N+1's games while updating on N's "
                          "batch (one-update-stale behavior policy; PPO's ratio absorbs "
                          "it). Requires --collect-workers > 0.")
+    ap.add_argument("--collect-stream", action="store_true", default=Config.collect_stream,
+                    help="REGIME: one task per game, games consumed in completion order "
+                         "(no per-iteration straggler wait); implies --pipeline-collect.")
+    ap.add_argument("--stream-depth", type=int, default=Config.stream_depth,
+                    help="iteration-sized game sets kept in flight under --collect-stream.")
     ap.add_argument("--warmup-games", type=int, default=64)
     ap.add_argument("--pool-frac", type=float, default=Config.pool_frac,
                     help="fraction of each iteration's games played vs a PFSP league "
@@ -263,7 +268,8 @@ def main():
                   games_per_iter=args.games_per_iter, minibatch=args.minibatch,
                   collect_workers=args.collect_workers,
                   collect_affinity=args.collect_affinity,
-                  pipeline_collect=args.pipeline_collect,
+                  pipeline_collect=args.pipeline_collect or args.collect_stream,
+                  collect_stream=args.collect_stream, stream_depth=args.stream_depth,
                   infer_server=args.infer_server,
                   warmup_games=args.warmup_games,
                   pool_frac=args.pool_frac, pfsp_mode=args.pfsp_mode,

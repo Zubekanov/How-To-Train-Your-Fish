@@ -65,6 +65,20 @@ class Config:
     # simply don't start at 1), visible as a higher approx_kl floor. Off by
     # default; requires collect_workers > 0 (a serial trainer cannot overlap).
     pipeline_collect: bool = False
+    # Streamed collection (REGIME; implies pipeline_collect). Round-robin chunking
+    # gives every worker ONE game per iteration, so the iteration waits on its
+    # single longest game while the rest of the pool idles (measured 2026-08-22 on
+    # the 128-core box: ~20 cores busy of 120 workers during collect). Streaming
+    # submits every spec as its own task, keeps `stream_depth` iteration-sized sets
+    # in flight, and each iteration consumes the next games_per_iter games in
+    # COMPLETION order, then tops the pool up with one set on the current weights.
+    # A game's behaviour policy is the weights at its submit time (local nets) or
+    # the server's current weights (served forwards; old_logp always matches what
+    # sampled) -- up to ~stream_depth updates stale for the local path. Short
+    # (scenario) games are consumed sooner than long ones; the batch's game-length
+    # mix is unchanged in expectation.
+    collect_stream: bool = False
+    stream_depth: int = 2
 
     # ── Opponent pool / PFSP (prioritized fictitious self-play) ──────────────
     # Fraction of each iteration's games the learner plays against a POOL opponent

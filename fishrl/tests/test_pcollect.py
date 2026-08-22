@@ -138,3 +138,39 @@ def test_parallel_matches_serial_game_accounting():
     assert par["league_games"] == serial["league_games"]
     assert par["members"] == serial["members"]
     assert par["T"] > 200 and serial["T"] > 200
+
+
+def test_streamed_run_completes_with_full_game_accounting():
+    """Streamed collection: one task per game, stream_depth sets in flight, games
+    consumed in completion order. Every iteration still books exactly
+    games_per_iter games; the pool is left holding stream_depth sets' worth."""
+    cfg = Config(iters=3, games_per_iter=4, warmup_games=2, warmup_epochs=1,
+                 max_decisions=200, report_winrate_games=0,
+                 pool_frac=0.5, league_size=2,
+                 pfsp_anchors=("random", "attacker"),
+                 collect_workers=2, pipeline_collect=True, collect_stream=True,
+                 stream_depth=2, seed=1)
+    lines: list = []
+    train(cfg, build_models(cfg), log=lines.append)
+    assert any("STREAMED" in line for line in lines)
+    status = next(line for line in reversed(lines) if line.startswith("[status"))
+    assert int(re.search(r"games=(\d+)", status).group(1)) == 12   # 3 iters x 4 games
+    assert int(re.search(r"T=(\d+)", status).group(1)) > 100
+
+
+def test_take_returns_completion_order_and_keeps_rest():
+    cfg = Config(device="cpu", collect_workers=2, max_decisions=120, pool_frac=0.0, seed=0)
+    m = build_models(cfg)
+    pc = ParallelCollector(cfg, 2)
+    try:
+        specs = [{"kind": "self", "seed": 100 + i} for i in range(5)]
+        items = pc.submit(m, specs, it=1, per_game=True)
+        assert len(items) == 5 and all(len(c) == 1 for _f, c, _s in items)
+        got, rest = pc.take(items, 3)
+        assert len(got) == 3 and len(rest) == 2
+        assert {i for i, _b in got}.isdisjoint({items.index(r) for r in rest})
+        got2, rest2 = pc.take(rest, 2)
+        assert len(got2) == 2 and rest2 == []
+        assert all(len(b.games) == 1 for _i, b in got + got2)
+    finally:
+        pc.close()

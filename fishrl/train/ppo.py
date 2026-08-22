@@ -53,11 +53,12 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0,
     if consist_w > 0.0 and public_family and "det_next" in batch:
         from fishrl.data.features import turn_index_for
         ti = turn_index_for(critic_view)
-        nxt_all = batch["det_next"].clone()
+        turn_col = batch[feat_key][:, ti].cpu()          # feats may already live on the device
+        nxt_all = batch["det_next"].clone().cpu()
         ok = nxt_all >= 0
         # same-turn filter: a turn change hides a draw (stochastic) -- not a consistency pair
         same = torch.zeros_like(ok)
-        same[ok] = batch[feat_key][ok, ti] == batch[feat_key][nxt_all[ok], ti]
+        same[ok] = turn_col[ok] == turn_col[nxt_all[ok]]
         nxt_all[~same] = -1
         nxt_all = nxt_all.to(dev, non_blocking=True)
     else:

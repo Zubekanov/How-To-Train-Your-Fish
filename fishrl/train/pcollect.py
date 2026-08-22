@@ -827,9 +827,14 @@ class ParallelCollector:
     def close(self) -> None:
         for b in self._pool:
             try:
-                b.close(); b.unlink()
+                b.unlink()
             except Exception:                          # noqa: BLE001
                 pass
+            # Detach rather than close(): a view of a block may still be alive somewhere
+            # (an in-flight decoded game at shutdown) and close() would raise BufferError
+            # from __del__ at interpreter teardown. The mapping dies with the process.
+            b._buf = None
+            b._mmap = None
         self._pool = []
         if self._ring is not None:
             try:

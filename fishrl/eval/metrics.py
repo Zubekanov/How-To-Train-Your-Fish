@@ -92,6 +92,30 @@ def estimator_metrics(models, batch) -> dict:
                 "brier": [round(float(b / c), 4) if c > 0 else None for b, c in zip(sq_t, n_t)],
                 "acc": [round(float(h / c), 4) if c > 0 else None for h, c in zip(hit_t, n_t)],
             }
+            # deterministic-transition jump: |V(s') - V(s)| in p1 win-prob over consecutive
+            # decisions of the SAME seat in the SAME game with no opponent decision in
+            # between and the same turn (tap/float/pay/cast chains). Nothing stochastic
+            # happens across such a pair, so a calibrated V should barely move; the jump
+            # is invisible to Brier but lands verbatim on the second action's advantage.
+            nxt = batch.get("det_next")
+            if nxt is not None:
+                pos = torch.full((keep.numel(),), -1, dtype=torch.long)
+                pos[keep] = torch.arange(int(keep.sum()))
+                src = torch.nonzero(keep & (nxt >= 0)).flatten()
+                dst = nxt[src]
+                ok = pos[dst] >= 0
+                a, bpos = pos[src[ok]], pos[dst[ok]]
+                same_turn = turn[a] == turn[bpos]
+                a, bpos = a[same_turn], bpos[same_turn]
+                if a.numel():
+                    jump = (cp[bpos] - cp[a]).abs()
+                    out["critic_jump_n"] = int(jump.numel())
+                    out["critic_jump_mean"] = float(jump.mean())
+                    out["critic_jump_p90"] = float(torch.quantile(jump, 0.9))
+                else:
+                    out["critic_jump_n"] = 0
+                    out["critic_jump_mean"] = float("nan")
+                    out["critic_jump_p90"] = float("nan")
             return out
         pub = models.public.p1_winprob(batch["pub"][keep].to(device_of(models.public))).cpu()
     return {"n": int(y.numel()),

@@ -168,6 +168,9 @@ def main():
                     help="PPO epochs on which the critic gets gradient (actor: all). 0 = all "
                          "(legacy); 1 = fit each batch once (curbs per-batch memorisation). "
                          "Resume-tunable.")
+    ap.add_argument("--critic-td-mix", type=float, default=Config.critic_td_mix,
+                    help="critic target blend b: (1-b)*terminal outcome + b*lambda-return "
+                         "(p1 frame). 0 = legacy outcome-only BCE. Resume-tunable.")
     ap.add_argument("--ent-start", type=float, default=Config.ent_start,
                     help="entropy coefficient at the START of the anneal (default 0.02). "
                          "Lower it for a warm-started policy that must not be re-inflated.")
@@ -272,6 +275,7 @@ def main():
                   kl_teacher_coef=args.kl_teacher_coef,
                   kl_teacher_iters=args.kl_teacher_iters,
                   critic_epochs=args.critic_epochs,
+                  critic_td_mix=args.critic_td_mix,
                   ent_start=args.ent_start,
                   ent_end=args.ent_end, ent_anneal_iters=args.ent_anneal_iters,
                   ent_reheat_period=args.ent_reheat_period, ent_reheat_peak=args.ent_reheat_peak,
@@ -311,7 +315,7 @@ def main():
     print(f"device: {cfg.device} | encoders: {encs} | iters: {cap} | "
           f"actor_hidden={cfg.head_hidden('actor')} card_dim={cfg.card_dim} | "
           f"belief={cfg.belief_mode} critic_view={cfg.critic_view} "
-          f"deckout_aux={cfg.critic_deckout_aux} critic_epochs={cfg.critic_epochs or cfg.ppo_epochs}/{cfg.ppo_epochs} text_change={cfg.text_change_mode} | "
+          f"deckout_aux={cfg.critic_deckout_aux} critic_epochs={cfg.critic_epochs or cfg.ppo_epochs}/{cfg.ppo_epochs} td_mix={cfg.critic_td_mix} text_change={cfg.text_change_mode} | "
           f"pool: {cfg.pool_frac:.2f} (pfsp={cfg.pfsp_mode}, league={cfg.league_size}) | "
           f"p1_adv={cfg.p1_adv_weight:.2f} ent_end={cfg.ent_end:.3f} | "
           f"resume: {resume} | ckpt: {latest}", flush=True)

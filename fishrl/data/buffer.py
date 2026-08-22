@@ -68,6 +68,14 @@ class RolloutBuffer:
         # game's opening state. A truncated game (decision cap, no verdict) bootstraps
         # its tail with the critic's own last value instead of pretending it drew.
         adv = np.zeros(len(self.steps), dtype=np.float32)
+        # raw seat-frame lambda-return (adv + V, BEFORE the p1 weight and the joint
+        # normalisation), flipped to the p1 frame: the critic's bootstrapped target
+        # for Config.critic_td_mix. Lives in [-1, 1] like the outcome it blends with.
+        ret_p1 = np.zeros(len(self.steps), dtype=np.float32)
+        # index of the next decision of the SAME seat in the SAME game with no opponent
+        # decision in between (steps are appended in decision order), else -1: the
+        # deterministic tap/float/pay/cast chains the critic-jump telemetry scores.
+        det_next = np.full(len(self.steps), -1, dtype=np.int64)
         segments: dict[tuple, list[int]] = {}
         for i, s in enumerate(self.steps):
             segments.setdefault((s.game_id, s.seat), []).append(i)
@@ -77,7 +85,12 @@ class RolloutBuffer:
             last = self.steps[idxs[-1]]
             rewards[-1] = seat_outcome(last.winner, seat)
             bootstrap = values[-1] if last.truncated else 0.0
-            a, _ = gae(values, rewards, gamma, lam, bootstrap=bootstrap)
+            a, ret = gae(values, rewards, gamma, lam, bootstrap=bootstrap)
+            sgn = 1.0 if seat == "p1" else -1.0
+            for j, i in enumerate(idxs):
+                ret_p1[i] = sgn * ret[j]
+                if j + 1 < len(idxs) and idxs[j + 1] == i + 1:
+                    det_next[i] = i + 1
             if seat == "p1" and p1_adv_weight != 1.0:
                 a = a * p1_adv_weight
             for j, i in enumerate(idxs):
@@ -96,6 +109,8 @@ class RolloutBuffer:
             "action": torch.as_tensor([s.action for s in self.steps], dtype=torch.long),
             "old_logp": torch.as_tensor([s.logp for s in self.steps], dtype=torch.float32),
             "adv": torch.as_tensor(adv, dtype=torch.float32),
+            "ret_p1": torch.as_tensor(ret_p1, dtype=torch.float32),
+            "det_next": torch.as_tensor(det_next, dtype=torch.long),
             "god": torch.as_tensor(np.stack([s.god_feat for s in self.steps]), dtype=torch.float32),
             "pub": torch.as_tensor(np.stack([s.pub_feat for s in self.steps]), dtype=torch.float32),
             "cnt": torch.as_tensor(np.stack([s.cnt_target for s in self.steps]), dtype=torch.float32),

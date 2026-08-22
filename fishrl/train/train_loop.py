@@ -443,7 +443,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
             calib_str = (
                 f"calib critic(acc={est.get('critic_acc', nan):.2f},"
                 f"brier={est.get('critic_brier', nan):.2f}) "
-                f"aux={mean.get('deckout_aux_loss', nan):.3f} brier/t={by_turn}"
+                f"aux={mean.get('deckout_aux_loss', nan):.3f} brier/t={by_turn} "
+                f"jump={est.get('critic_jump_mean', nan):.3f}/{est.get('critic_jump_p90', nan):.3f}"
             )
             head_str = ""
         else:
@@ -495,7 +496,12 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     **{k: est.get(k) for lbl, _lo, _hi in features.TURN_BUCKETS
                        for k in (f"critic_brier_{lbl}", f"critic_acc_{lbl}", f"critic_n_{lbl}")},
                     # turn-by-turn arrays (index t-1; last slot pools TURN_MAX+), same forward
-                    "critic_turn": est.get("critic_turn")}
+                    "critic_turn": est.get("critic_turn"),
+                    # deterministic-transition |dV| (same seat, same game, same turn, no
+                    # opponent decision between): mean / p90 / pair count
+                    "critic_jump_mean": est.get("critic_jump_mean"),
+                    "critic_jump_p90": est.get("critic_jump_p90"),
+                    "critic_jump_n": est.get("critic_jump_n")}
                    if v3 else
                    {"guesser_loss": mean["guesser_loss"], "public_loss": mean["public_loss"],
                     "priv_acc": est.get("priv_acc"), "pub_acc": est.get("pub_acc"),

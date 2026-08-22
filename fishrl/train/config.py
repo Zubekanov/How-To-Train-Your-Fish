@@ -140,6 +140,14 @@ class Config:
     # held-out benchmark (2026-08-21) peaked on the first pass and the in-batch
     # Brier (0.03-0.05) vs online held-out (0.21-0.23) gap is per-batch memorisation.
     critic_epochs: int = 0
+    # Critic target blend: soft label (1-b)*y_p1 + b*(ret_p1+1)/2, where ret_p1 is the
+    # seat-frame lambda-return (GAE adv + V, the same bootstrap the actor's advantage
+    # uses) in the p1 frame. 0 = pure terminal-outcome BCE (legacy: rows fit
+    # independently, no temporal consistency -- V jumps across tap/float/cast chains
+    # and the second action of each pair collects the jump as advantage). >0 pulls
+    # V(s) toward gamma*V(s') on deterministic transitions and propagates resolved
+    # endings backwards. Held-out Brier/acc still score the TRUE outcome.
+    critic_td_mix: float = 0.0
     minibatch: int = 256
     lr_ppo: float = 3e-4
     grad_clip: float = 1.0

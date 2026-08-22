@@ -678,6 +678,23 @@ every held-out view benchmark peaked on its first epoch. The mainline runs `--cr
 (resume-tunable launcher flag). `critic_loss` / `deckout_aux_loss` (`V`, `aux`) are averaged over
 the critic's passes only, so expect both to read *higher* at this seam (one pass, no memorisation).
 
+**`critic_td_mix` + jump telemetry (2026-08-22, cloud it≈70k):** the critic loss was pure BCE
+against the terminal winner, one row at a time — no TD/bootstrap term anywhere, so nothing tied
+`V(main 1)`, `V(declare attackers)`, `V(two lands tapped, mana floating)` and `V(spell cast)`
+together even though those transitions are deterministic. Observed: ±8% swings across tap→cast
+with the *second* action collecting the swing as advantage (the tap's own δ telescopes away under
+λ=.95, the cast's does not) — a systematic cast-step bonus, invisible to Brier (a ±8% flicker
+costs .006). The buffer now emits `ret_p1` (seat-frame λ-return `adv + V` in the p1 frame, before
+the p1 weight / normalisation) and `det_next` (next decision of the same seat in the same game with
+no opponent decision between). `critic_td_mix = b` trains the critic on the soft label
+`(1−b)·y_p1 + b·(ret_p1+1)/2` — pulling `V(s)` toward `γV(s')` on deterministic chains and
+propagating resolved endings backwards (the pooled per-turn Brier was flat .175–.185 from turn
+12 to 40+, i.e. no sharpening as games resolve). Held-out `critic_acc`/`critic_brier` still score
+the true outcome, the guardrail against target drift. Telemetry `critic_jump_mean`/`_p90`/`_n`
+(status `jump=m/p90`): |ΔP(p1)| over `det_next` pairs on the same turn, off the same pre-update
+forward — the number that should fall when `b > 0`. Resume-tunable launcher flag
+`--critic-td-mix`; deployed telemetry-first for a baseline row, then `b` = 0.5.
+
 **`obs_counts` (2026-08-22, cloud it≈64k):** a COUNT_DIM=22 block on the globals tail of the actor
 input (after the bookkeeper belief: per-name cards the viewer cannot see + graveyard/40 + exile/8)
 and of the hands critic (per-name library counts + the same scalars). Motivation: the entity

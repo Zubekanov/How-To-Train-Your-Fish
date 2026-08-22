@@ -48,6 +48,11 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0,
     keys = ("x_act", "mask", "action", "old_logp", "adv", feat_key, "y_p1", "valid")
     if aux_w > 0.0:
         keys = keys + ("deckout_valid",)
+    td_mix = float(getattr(cfg, "critic_td_mix", 0.0) or 0.0)
+    if td_mix > 0.0 and "ret_p1" in batch:
+        keys = keys + ("ret_p1",)
+    else:
+        td_mix = 0.0
     b = {k: batch[k].to(dev, non_blocking=True) for k in keys}
     M = b["x_act"].shape[0]
     idx = np.arange(M)
@@ -75,7 +80,11 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0,
                     aux_loss = outcome_bce(aux_logit, b["y_p1"][mb], b["deckout_valid"][mb])
                 else:
                     critic_logit = critic(b[feat_key][mb])
-                closs = outcome_bce(critic_logit, b["y_p1"][mb], b["valid"][mb])
+                y_c = b["y_p1"][mb]
+                if td_mix > 0.0:
+                    soft = (b["ret_p1"][mb].clamp(-1.0, 1.0) + 1.0) * 0.5
+                    y_c = (1.0 - td_mix) * y_c + td_mix * soft
+                closs = outcome_bce(critic_logit, y_c, b["valid"][mb])
             else:
                 closs = zero
             if train_actor:

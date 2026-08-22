@@ -169,6 +169,12 @@ class Config:
     # V(s) toward gamma*V(s') on deterministic transitions and propagates resolved
     # endings backwards. Held-out Brier/acc still score the TRUE outcome.
     critic_td_mix: float = 0.0
+    # Direct temporal-consistency penalty on the critic: lam * mean (p(s) - p(s'))^2 over
+    # det_next pairs (next decision of the SAME seat in the same game, no opponent
+    # decision between, same turn) -- the exact quantity critic_jump_* measures. Unlike
+    # critic_td_mix it cannot move calibration (both ends are the critic's own output);
+    # it only asks V to be flat across tap/float/pay/cast chains. 0 = off.
+    critic_consistency: float = 0.0
     minibatch: int = 256
     lr_ppo: float = 3e-4
     grad_clip: float = 1.0

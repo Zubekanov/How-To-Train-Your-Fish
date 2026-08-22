@@ -48,6 +48,20 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0,
     keys = ("x_act", "mask", "action", "old_logp", "adv", feat_key, "y_p1", "valid")
     if aux_w > 0.0:
         keys = keys + ("deckout_valid",)
+    consist_w = float(getattr(cfg, "critic_consistency", 0.0) or 0.0)
+    nxt_all = None
+    if consist_w > 0.0 and public_family and "det_next" in batch:
+        from fishrl.data.features import turn_index_for
+        ti = turn_index_for(critic_view)
+        nxt_all = batch["det_next"].clone()
+        ok = nxt_all >= 0
+        # same-turn filter: a turn change hides a draw (stochastic) -- not a consistency pair
+        same = torch.zeros_like(ok)
+        same[ok] = batch[feat_key][ok, ti] == batch[feat_key][nxt_all[ok], ti]
+        nxt_all[~same] = -1
+        nxt_all = nxt_all.to(dev, non_blocking=True)
+    else:
+        consist_w = 0.0
     td_mix = float(getattr(cfg, "critic_td_mix", 0.0) or 0.0)
     if td_mix > 0.0 and "ret_p1" in batch:
         keys = keys + ("ret_p1",)
@@ -92,8 +106,18 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0,
                     soft = (b["ret_p1"][mb].clamp(-1.0, 1.0) + 1.0) * 0.5
                     y_c = (1.0 - td_mix) * y_c + td_mix * soft
                 closs = outcome_bce(critic_logit, y_c, b["valid"][mb])
+                consist = zero
+                if consist_w > 0.0:
+                    nxt = nxt_all[mb]
+                    has = nxt >= 0
+                    if int(has.sum()) > 0:
+                        p_here = torch.sigmoid(critic_logit[has])
+                        p_next = torch.sigmoid(critic(b[feat_key][nxt[has]]))
+                        consist = ((p_here - p_next) ** 2).mean()
+                        closs = closs + consist_w * consist
             else:
                 closs = zero
+                consist = zero
             if train_actor:
                 loss = ploss - ent_coef * ent + cfg.critic_coef * closs
             else:                                  # handoff warmup: critic-only gradient
@@ -129,11 +153,11 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0,
             if train_critic:
                 aux_stat = (aux_loss.detach() if aux_loss is not None
                             and torch.isfinite(aux_loss) else zero)
-                cs = torch.stack([closs.detach(), aux_stat])
+                cs = torch.stack([closs.detach(), aux_stat, consist.detach()])
                 acc_c = cs if acc_c is None else acc_c + cs
                 n_c += 1
     vals = (acc / max(n, 1)).tolist() if acc is not None else [0.0] * 5
-    cvals = (acc_c / max(n_c, 1)).tolist() if acc_c is not None else [0.0, 0.0]
+    cvals = (acc_c / max(n_c, 1)).tolist() if acc_c is not None else [0.0, 0.0, 0.0]
     gns = {"gns_tr_sigma": float("nan"), "gns_g2": float("nan"), "gns_b": float("nan")}
     if g_n >= 2 and M > cfg.minibatch:
         b_mb = float(min(cfg.minibatch, M))
@@ -145,7 +169,8 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0,
                "gns_b": (tr_sigma / g2) if g2 > 0 else float("inf")}
     return {"policy_loss": vals[0], "critic_loss": cvals[0], "entropy": vals[1],
             "approx_kl": vals[2], "clip_frac": vals[3], "kl_teacher": vals[4],
-            "deckout_aux_loss": cvals[1], "n": n, "n_critic": n_c, **gns}
+            "deckout_aux_loss": cvals[1], "critic_consist_loss": cvals[2],
+            "n": n, "n_critic": n_c, **gns}
 
 
 def aux_update(batch, guesser, public_est, opt_g, opt_p, steps: int,

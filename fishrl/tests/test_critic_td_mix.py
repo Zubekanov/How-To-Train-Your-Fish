@@ -90,3 +90,31 @@ def test_jump_metric_pairs():
     pub[:, ti] = torch.tensor([3, 4, 4, 4, 7, 7]) / 40.0
     est = estimator_metrics(m, batch)
     assert est["critic_jump_n"] == 1
+
+
+def test_consistency_penalty_pulls_pairs_together():
+    from fishrl.data.features import turn_index_for
+    torch.manual_seed(0)
+    m = build_models(_cfg(critic_consistency=5.0, critic_epochs=1))
+    batch = _batch(m)
+    n = batch["y_p1"].numel()
+    ti = turn_index_for("hands")
+    batch["pub"][:, ti] = 0.25                                  # all same turn
+    det = torch.full((n,), -1, dtype=torch.long); det[0] = 1; det[2] = 3
+    batch["det_next"] = det
+    with torch.no_grad():
+        p0 = m.critic.p1_winprob(batch["pub"])
+    gap0 = float((p0[0] - p0[1]).abs() + (p0[2] - p0[3]).abs())
+    opt = torch.optim.Adam(list(m.actor.parameters()) + list(m.critic.parameters()), lr=1e-2)
+    cfg = _cfg(critic_consistency=5.0, critic_epochs=1)
+    for _ in range(5):
+        st = ppo_update(batch, m.actor, m.critic, opt, cfg, 0.01, train_actor=False)
+    assert st["critic_consist_loss"] >= 0.0
+    with torch.no_grad():
+        p1 = m.critic.p1_winprob(batch["pub"])
+    gap1 = float((p1[0] - p1[1]).abs() + (p1[2] - p1[3]).abs())
+    assert gap1 < gap0
+    # cross-turn pair is excluded from the penalty (no pairs -> loss exactly 0)
+    batch["pub"][1, ti] = 0.5; batch["pub"][3, ti] = 0.5
+    st = ppo_update(batch, m.actor, m.critic, opt, cfg, 0.01, train_actor=False)
+    assert st["critic_consist_loss"] == 0.0

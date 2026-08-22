@@ -249,7 +249,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
     frozen: Models | None = None
     KEYS = ("policy_loss", "critic_loss", "entropy", "approx_kl", "clip_frac",
             "guesser_loss", "public_loss", "deckout_aux_loss",
-            "gns_b", "gns_tr_sigma", "gns_g2")
+            "gns_b", "gns_tr_sigma", "gns_g2", "critic_consist_loss")
     acc = {k: 0.0 for k in KEYS}
     win_iters = win_T = 0
     # Per-window game/health telemetry (reset each report alongside the loss means):
@@ -513,7 +513,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     # opponent decision between): mean / p90 / pair count
                     "critic_jump_mean": est.get("critic_jump_mean"),
                     "critic_jump_p90": est.get("critic_jump_p90"),
-                    "critic_jump_n": est.get("critic_jump_n")}
+                    "critic_jump_n": est.get("critic_jump_n"),
+                    "critic_consist_loss": mean.get("critic_consist_loss")}
                    if v3 else
                    {"guesser_loss": mean["guesser_loss"], "public_loss": mean["public_loss"],
                     "priv_acc": est.get("priv_acc"), "pub_acc": est.get("pub_acc"),
@@ -1064,8 +1065,9 @@ def train(cfg: Config, models: Models | None = None, log=print,
             iter_update_s = time.perf_counter() - t_update
             gwin["update_s"] += iter_update_s
             for k in ("policy_loss", "critic_loss", "entropy", "approx_kl", "clip_frac",
-                      "deckout_aux_loss", "gns_b", "gns_tr_sigma", "gns_g2"):
-                acc[k] += ppo_stats[k]
+                      "deckout_aux_loss", "gns_b", "gns_tr_sigma", "gns_g2",
+                      "critic_consist_loss"):
+                acc[k] += ppo_stats.get(k, 0.0)
             acc["guesser_loss"] += aux_stats["guesser_loss"]
             acc["public_loss"] += aux_stats["public_loss"]
             win_iters += 1

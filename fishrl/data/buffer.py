@@ -10,6 +10,26 @@ from fishrl.obs.encoder import OBS_DIM
 from fishrl.train.advantages import gae, seat_outcome
 
 
+def _pconcat(parts: list) -> np.ndarray:
+    """np.concatenate for a few hundred large contiguous blocks, copied by a thread
+    pool: the slice-assignment releases the GIL, so ~5 GB/iteration of x_act + pub
+    assembly runs at memory bandwidth instead of one core (was ~19% of the trainer)."""
+    if len(parts) == 1:
+        return np.asarray(parts[0])
+    total = sum(p.shape[0] for p in parts)
+    if total * parts[0][0].nbytes < (64 << 20):
+        return np.concatenate(parts)
+    from concurrent.futures import ThreadPoolExecutor
+    out = np.empty((total,) + parts[0].shape[1:], dtype=parts[0].dtype)
+    offs = np.cumsum([0] + [p.shape[0] for p in parts[:-1]])
+
+    def _cp(i):
+        out[offs[i]:offs[i] + parts[i].shape[0]] = parts[i]
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        list(ex.map(_cp, range(len(parts))))
+    return out
+
+
 @dataclass
 class Step:
     seat: str
@@ -68,7 +88,7 @@ class RolloutBuffer:
                 if name == "god" and c.get("god_shared"):
                     a = np.broadcast_to(a, (int(c["n"]),) + a.shape)
                 parts.append(a)
-            out = np.concatenate(parts) if len(parts) > 1 else np.asarray(parts[0])
+            out = _pconcat(parts)
             self._colcache[name] = out
             return out
         attr = self._COL_ATTR[name]

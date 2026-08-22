@@ -691,6 +691,24 @@ forwards always use the server's latest weights (old_logp matches what sampled);
 nets are the submit-time weights, ≤ stream_depth updates old. Report rows carry `stream: true`.
 Bookkeeping (`buf.compute`, ~0.6 s/iter, now timed as `book=`) is the next serial cost.
 
+**Throughput ceiling = the trainer's per-game serial cost (2026-08-22, cloud it≈74k):** the
+gradient noise scale (`gns_b`, epoch-0 actor minibatch grads, status `gns_b=`) reads 160k–300k
+decisions against 24.5k per 120-game batch — noise-dominated, so progress/hour is set by games
+per HOUR, not by the games/iteration split. Worker telemetry (`worker gap/play`) showed a game
+takes 0.35 s and the worker then waits ~4 s; the in-process stack sampler
+(`FISHRL_STACKPROF=1`, `fishrl/train/stackprof.py`) showed the executor's manager thread idle
+and the main thread spending ~half of each iteration on transport and bookkeeping: pickle
+decode of Step objects (21%), `np.stack` in `buf.compute` and `fill_critic_values` (14%), a
+duplicate full-batch critic forward in `estimator_metrics` (11%), `feat[keep]` and
+`np.abs(feat).sum()` over the 2.4 GB pub tensor. Fixes: POSIX shared-memory array transport
+(`_shm_pack`/`_decode`, decode = memcpy in a thread pool), columnar `RolloutBuffer.cols` with
+`column()` (threaded `_pconcat`) replacing both stacks, `estimator_metrics` scoring from
+`batch["value"]`/`["seat_sign"]` (the same pre-update forward), slice-first turn index, guard on
+256 rows, learner weights via a shm ring instead of a 10 MB blob per task, CUDA-graph buckets
+to 128, worker OMP/OPENBLAS pinned to 1 (the Vast image exports 62). games/iter raised
+120 → 360: 93k → 152k+ games/h at unchanged per-game cost. Remaining main-thread time is the
+PPO update itself (~35%).
+
 **`critic_td_mix` + jump telemetry (2026-08-22, cloud it≈70k):** the critic loss was pure BCE
 against the terminal winner, one row at a time — no TD/bootstrap term anywhere, so nothing tied
 `V(main 1)`, `V(declare attackers)`, `V(two lands tapped, mana floating)` and `V(spell cast)`

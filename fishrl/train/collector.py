@@ -108,7 +108,7 @@ def fill_critic_values(buf: RolloutBuffer, critic, batch: int = 8192,
     if not buf.steps:
         return
     dev = device_of(critic)
-    feat = np.stack([s.pub_feat if view in PUBLIC_FAMILY else s.god_feat for s in buf.steps])
+    feat = buf.column("pub" if view in PUBLIC_FAMILY else "god")
     if view in PUBLIC_FAMILY:
         # Landmine guard: encode_public is gated by set_public_encoding — if the gate
         # zeroed it the critic would silently train on nothing. A genuine pub row

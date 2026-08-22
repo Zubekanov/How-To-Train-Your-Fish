@@ -282,14 +282,71 @@ def _unpack_buf(d: dict):
             guess_in=d["guess_in"][i], cnt_target=d["cnt"][i], winner=d["winner"][i],
             game_id=int(d["game_id"][i]), truncated=bool(d["truncated"][i]),
             deckout_end=bool(d["deckout_end"][i])))
+    buf.cols = [d]                                 # columnar backing (see RolloutBuffer.cols)
     return buf
 
 
+_SHM_TRANSPORT = os.name == "posix"           # POSIX shm persists until unlink; Windows
+_SHM_KEYS = ("x_act", "pub", "mask", "guess_in", "cnt", "god")   # frees it with the last handle
+
+
+def _shm_pack(items: list) -> bytes:
+    """Put every big array of the chunk's packed games into ONE shared-memory block
+    and return a small pickle carrying its name + descriptors. The trainer's decode
+    is then a memcpy per array (GIL released) instead of unpickling ~20 MB/game."""
+    from multiprocessing import resource_tracker, shared_memory
+    descs, total = [], 0
+    for _idx, d in items:
+        if not isinstance(d, dict) or "x_act" not in d:
+            continue
+        for k in _SHM_KEYS:
+            a = np.ascontiguousarray(d[k])
+            descs.append((d, k, a, total)); total += a.nbytes
+    if total == 0:
+        return pickle.dumps({"shm": None, "items": items}, protocol=pickle.HIGHEST_PROTOCOL)
+    shm = shared_memory.SharedMemory(create=True, size=total)
+    for d, k, a, off in descs:
+        np.frombuffer(shm.buf, dtype=a.dtype, count=a.size, offset=off).reshape(a.shape)[...] = a
+        d[k] = ("shm", off, a.shape, a.dtype.str)
+    name = shm.name
+    try:                                          # the TRAINER unlinks; this worker must
+        resource_tracker.unregister(shm._name, "shared_memory")   # not reap it on recycle
+    except Exception:                             # noqa: BLE001
+        pass
+    shm.close()
+    return pickle.dumps({"shm": name, "items": items}, protocol=pickle.HIGHEST_PROTOCOL)
+
+
 def _decode(blob: bytes) -> list:
-    """Result blob -> [(idx, RolloutBuffer | timing dict)]. Decompression releases
-    the GIL, so gather/take run this in a thread pool."""
+    """Result blob -> [(idx, RolloutBuffer | timing dict)]. Both the zlib path and
+    the shm memcpy path release the GIL, so gather/take run this in a thread pool."""
+    if blob[:1] == b"x":                          # zlib header: pickled-arrays transport
+        items = pickle.loads(zlib.decompress(blob))
+    else:
+        from multiprocessing import shared_memory
+        msg = pickle.loads(blob)
+        items = msg["items"]
+        if msg["shm"] is not None:
+            shm = shared_memory.SharedMemory(name=msg["shm"])
+            try:
+                for _idx, d in items:
+                    if not isinstance(d, dict):
+                        continue
+                    for k in _SHM_KEYS:
+                        v = d.get(k)
+                        if isinstance(v, tuple) and v and v[0] == "shm":
+                            _t, off, shape, dt = v
+                            a = np.frombuffer(shm.buf, dtype=np.dtype(dt),
+                                              count=int(np.prod(shape)), offset=off)
+                            d[k] = a.reshape(shape).copy()
+            finally:
+                shm.close()
+                try:
+                    shm.unlink()
+                except FileNotFoundError:
+                    pass
     out = []
-    for idx, item in pickle.loads(zlib.decompress(blob)):
+    for idx, item in items:
         out.append((idx, _unpack_buf(item) if idx >= 0 else item))
     return out
 
@@ -326,7 +383,10 @@ def _collect_chunk(learner_blob, specs: list, torch_seed: int) -> bytes:
     # worker timing rides along as a pseudo-row: gap = idle between tasks (task
     # feeding / result draining), play = inside the games (engine + forwards)
     out.append((-1, {"gap": gap, "play": play, "pid": os.getpid()}))
-    blob = zlib.compress(pickle.dumps(out, protocol=pickle.HIGHEST_PROTOCOL), 1)
+    if _SHM_TRANSPORT:
+        blob = _shm_pack(out)
+    else:
+        blob = zlib.compress(pickle.dumps(out, protocol=pickle.HIGHEST_PROTOCOL), 1)
     _WT["last_done"] = time.perf_counter()
     return blob
 

@@ -222,3 +222,23 @@ def test_pack_unpack_roundtrip_is_exact():
             assert np.array_equal(getattr(a, f), getattr(b, f)), f
     assert back.steps[0].god_feat is back.steps[4].god_feat          # shared zero row survives
     assert len(_unpack_buf(_pack_buf(RolloutBuffer())).steps) == 0
+
+
+@pytest.mark.skipif(not __import__("os").name == "posix", reason="POSIX shared memory only")
+def test_shm_transport_roundtrip():
+    import numpy as np
+    from fishrl.data.buffer import RolloutBuffer, Step
+    from fishrl.train.pcollect import _decode, _pack_buf, _shm_pack
+    buf = RolloutBuffer()
+    for i in range(4):
+        buf.add(Step(seat="p1", x_act=np.full(6, i, np.float32), mask=np.array([1, 0], np.int8),
+                     action=i, logp=-0.5, value=0.1, god_feat=np.zeros(3, np.float32),
+                     pub_feat=np.full(2, -i, np.float32), guess_in=np.zeros(2, np.float32),
+                     cnt_target=np.ones(2, np.float32), winner="p2", game_id=0))
+    buf.games = ["p2"]
+    blob = _shm_pack([(0, _pack_buf(buf)), (-1, {"gap": 0.0, "play": 1.0, "pid": 1})])
+    got = _decode(blob)
+    assert got[0][0] == 0 and got[1][0] == -1
+    back = got[0][1]
+    assert back.cols and np.array_equal(back.column("x_act"), np.stack([s.x_act for s in buf.steps]))
+    assert np.array_equal(back.steps[3].pub_feat, np.full(2, -3, np.float32))

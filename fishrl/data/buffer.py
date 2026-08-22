@@ -37,9 +37,36 @@ class RolloutBuffer:
     steps: list = field(default_factory=list)
     games: list = field(default_factory=list)   # per-game winner, indexed by game_id
     meta: list = field(default_factory=list)    # per-game {"truncated"} — how it ended
+    # Optional columnar backing (parallel collection): per-game dicts of stacked
+    # arrays, each covering a contiguous run of `steps` in order, summing to
+    # len(steps). When present, `column()` concatenates them instead of re-stacking
+    # ~30k per-step arrays (the np.stack was ~14% of the trainer's wall). The Step
+    # arrays are views INTO these, so the two never disagree.
+    cols: list = field(default_factory=list)
 
     def add(self, step: Step):
         self.steps.append(step)
+        self.cols = []                              # per-step appends -> no columnar backing
+
+    _COL_ATTR = {"x_act": "x_act", "mask": "mask", "god": "god_feat", "pub": "pub_feat",
+                 "guess_in": "guess_in", "cnt": "cnt_target"}
+
+    def _god_all_shared_zero(self) -> bool:
+        return (bool(self.cols) and sum(int(c["n"]) for c in self.cols) == len(self.steps)
+                and all(c.get("god_shared") and not np.any(c["god"]) for c in self.cols))
+
+    def column(self, name: str) -> np.ndarray:
+        """Stacked (T, ...) array for one of x_act/mask/god/pub/guess_in/cnt."""
+        if self.cols and sum(int(c["n"]) for c in self.cols) == len(self.steps):
+            parts = []
+            for c in self.cols:
+                a = c[name]
+                if name == "god" and c.get("god_shared"):
+                    a = np.broadcast_to(a, (int(c["n"]),) + a.shape)
+                parts.append(a)
+            return np.concatenate(parts) if len(parts) > 1 else np.array(parts[0], copy=False)
+        attr = self._COL_ATTR[name]
+        return np.stack([getattr(s, attr) for s in self.steps])
 
     def __len__(self):
         return len(self.steps)
@@ -51,9 +78,14 @@ class RolloutBuffer:
         base = len(self.games)
         for s in other.steps:
             s.game_id += base
+        had_cols = bool(self.cols) or not self.steps
         self.steps.extend(other.steps)
         self.games.extend(other.games)
         self.meta.extend(other.meta)
+        if had_cols and other.cols and sum(int(c["n"]) for c in other.cols) == len(other.steps):
+            self.cols.extend(other.cols)
+        elif other.steps:
+            self.cols = []                          # mixed backing -> fall back to stacking
 
     def compute(self, gamma: float, lam: float, p1_adv_weight: float = 1.0) -> dict:
         """Assign per-(game, seat) GAE advantages and return stacked torch tensors.
@@ -100,20 +132,28 @@ class RolloutBuffer:
         if adv.std() > 1e-6:
             adv = (adv - adv.mean()) / (adv.std() + 1e-8)
 
-        x_act = np.stack([s.x_act for s in self.steps])
+        x_act = self.column("x_act")
         out = {
             "x_act": torch.as_tensor(x_act, dtype=torch.float32),
             "persp": torch.as_tensor(x_act[:, :OBS_DIM], dtype=torch.float32),
-            "prev_guess": torch.as_tensor(np.stack([s.guess_in for s in self.steps]), dtype=torch.float32),
-            "mask": torch.as_tensor(np.stack([s.mask for s in self.steps]), dtype=torch.float32),
+            "prev_guess": torch.as_tensor(self.column("guess_in"), dtype=torch.float32),
+            "mask": torch.as_tensor(self.column("mask"), dtype=torch.float32),
             "action": torch.as_tensor([s.action for s in self.steps], dtype=torch.long),
             "old_logp": torch.as_tensor([s.logp for s in self.steps], dtype=torch.float32),
             "adv": torch.as_tensor(adv, dtype=torch.float32),
             "ret_p1": torch.as_tensor(ret_p1, dtype=torch.float32),
             "det_next": torch.as_tensor(det_next, dtype=torch.long),
-            "god": torch.as_tensor(np.stack([s.god_feat for s in self.steps]), dtype=torch.float32),
-            "pub": torch.as_tensor(np.stack([s.pub_feat for s in self.steps]), dtype=torch.float32),
-            "cnt": torch.as_tensor(np.stack([s.cnt_target for s in self.steps]), dtype=torch.float32),
+            # public-family runs never read "god"; when every game shipped one shared
+            # zero row, emit a (T, 1) zero placeholder instead of materialising
+            # T x GOD_DIM zeros (3.5 GB at 360 games/iter)
+            "god": (torch.zeros(len(self.steps), 1) if self._god_all_shared_zero()
+                    else torch.as_tensor(np.ascontiguousarray(self.column("god")), dtype=torch.float32)),
+            "pub": torch.as_tensor(self.column("pub"), dtype=torch.float32),
+            "cnt": torch.as_tensor(self.column("cnt"), dtype=torch.float32),
+            # seat-frame critic value + seat sign: lets estimator_metrics score the
+            # pre-update critic from fill_critic_values' forward instead of redoing it
+            "value": torch.as_tensor([s.value for s in self.steps], dtype=torch.float32),
+            "seat_sign": torch.as_tensor([1.0 if s.seat == "p1" else -1.0 for s in self.steps], dtype=torch.float32),
             "y_p1": torch.as_tensor([1.0 if s.winner == "p1" else 0.0 for s in self.steps], dtype=torch.float32),
             "valid": torch.as_tensor([1.0 if s.winner is not None else 0.0 for s in self.steps], dtype=torch.float32),
             # parity-aux label domain: decided games that ended by decking. y is the

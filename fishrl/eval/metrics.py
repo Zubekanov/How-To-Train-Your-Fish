@@ -65,7 +65,13 @@ def estimator_metrics(models, batch) -> dict:
     view = _critic_view_of(models)
     feat = batch["pub" if view in ("public", "hands") else "god"]
     with torch.no_grad():
-        cp = models.critic.p1_winprob(feat[keep].to(device_of(models.critic))).cpu()
+        if models.public is None and "value" in batch and "seat_sign" in batch:
+            # fill_critic_values already ran THIS critic (pre-update) over every row:
+            # value = sign * (2p - 1)  ->  p = (sign * value + 1) / 2. Same forward,
+            # no second full-batch pass (was ~11% of the trainer's wall).
+            cp = ((batch["seat_sign"][keep] * batch["value"][keep]) + 1.0) * 0.5
+        else:
+            cp = models.critic.p1_winprob(feat[keep].to(device_of(models.critic))).cpu()
         if models.public is None:
             out = {"n": int(y.numel()), "critic_acc": acc(cp), "critic_brier": brier(cp)}
             # per-turn buckets: the turn is in the feature tail (turn/40), so this is a

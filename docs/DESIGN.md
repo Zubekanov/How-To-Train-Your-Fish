@@ -706,8 +706,13 @@ duplicate full-batch critic forward in `estimator_metrics` (11%), `feat[keep]` a
 `batch["value"]`/`["seat_sign"]` (the same pre-update forward), slice-first turn index, guard on
 256 rows, learner weights via a shm ring instead of a 10 MB blob per task, CUDA-graph buckets
 to 128, worker OMP/OPENBLAS pinned to 1 (the Vast image exports 62). games/iter raised
-120 → 360: 93k → 152k+ games/h at unchanged per-game cost. Remaining main-thread time is the
-PPO update itself (~35%).
+120 → 360. Zero-copy decode then needed three more things: the soft fd limit raised in-process
+(one fd per mapped block; the 1024 default crashed the trainer), `buffer.release()` right after
+`compute()`, and a pooled block set (`fishrl_<pid>_pool_<i>`, free-list `mp.Queue`,
+`ParallelCollector.recycle()`), because unlinking 360 fresh tmpfs blocks per iteration cost ~1.5 s
+of munmap on the main thread. Result: 93k → 168k games/h (1.8×) at 468 it/h × 360. Remaining
+main-thread time: the PPO update (~35%, GPU), and creating/destroying ~100k `Step` objects per
+iteration (~20%) — the next lever is a Step-free columnar `RolloutBuffer` end-to-end.
 
 **`critic_td_mix` + jump telemetry (2026-08-22, cloud it≈70k):** the critic loss was pure BCE
 against the terminal winner, one row at a time — no TD/bootstrap term anywhere, so nothing tied

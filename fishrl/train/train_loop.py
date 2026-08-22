@@ -28,6 +28,7 @@ from fishrl.models import device_of
 from fishrl.models.estimators import PrivilegedCritic, PublicEstimator, make_critic
 from fishrl.models.guesser import HandGuesser
 from fishrl.data import features
+from fishrl.train import stackprof
 from fishrl.models.policy import ACTOR_IN, MaskedActor
 from fishrl.train import checkpoint as ckpt
 from fishrl.train import stats as stats_io
@@ -434,6 +435,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
         _g2 = acc["gns_g2"] / max(win_iters, 1)
         gns_b = (acc["gns_tr_sigma"] / max(win_iters, 1)) / _g2 if _g2 > 0 else nan
         wt = pcol.pop_timing() if pcol is not None else {}
+        stackprof.report(log)
         brier_gap = (est["pub_brier"] - est["priv_brier"]) if "pub_brier" in est else nan
         game_str = (
             f" | games={games} len={len_full:.1f} slen={len_scen:.1f} "
@@ -672,6 +674,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
         log("[pcollect] PIPELINED collection: iteration N+1's games play during "
             "N's update (behavior policy one update stale; see Config.pipeline_collect)")
     pipe_pending = None                # (specs, metas, futures) of the in-flight iteration
+    stackprof.start()
     stream = pipeline and bool(getattr(cfg, "collect_stream", False))
     if stream:
         log(f"[pcollect] STREAMED collection: one task per game, {cfg.stream_depth} "

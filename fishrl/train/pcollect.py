@@ -306,8 +306,10 @@ def _shm_pack(items: list) -> bytes:
         return pickle.dumps({"shm": None, "items": items}, protocol=pickle.HIGHEST_PROTOCOL)
     shm = shared_memory.SharedMemory(create=True, size=total)
     for d, k, a, off in descs:
-        np.frombuffer(shm.buf, dtype=a.dtype, count=a.size, offset=off).reshape(a.shape)[...] = a
+        view = np.frombuffer(shm.buf, dtype=a.dtype, count=a.size, offset=off).reshape(a.shape)
+        view[...] = a
         d[k] = ("shm", off, a.shape, a.dtype.str)
+    del view, descs                                # views of shm.buf must die before close()
     name = shm.name
     try:                                          # the TRAINER unlinks; this worker must
         resource_tracker.unregister(shm._name, "shared_memory")   # not reap it on recycle
@@ -339,6 +341,7 @@ def _decode(blob: bytes) -> list:
                             a = np.frombuffer(shm.buf, dtype=np.dtype(dt),
                                               count=int(np.prod(shape)), offset=off)
                             d[k] = a.reshape(shape).copy()
+                            del a                  # view of shm.buf must die before close()
             finally:
                 shm.close()
                 try:

@@ -329,25 +329,31 @@ def _decode(blob: bytes) -> list:
         msg = pickle.loads(blob)
         items = msg["items"]
         if msg["shm"] is not None:
+            # Zero-copy: the column arrays are VIEWS into the block; the one copy left
+            # is column()'s assembly into the batch. Lifetime: unlink now (POSIX keeps
+            # the mapping valid), hand the memoryview + mmap to the arrays, and strip
+            # them off the SharedMemory object so its close()/__del__ never sees
+            # exported pointers. The mapping is released when the last view dies
+            # (the RolloutBuffer of this iteration).
             shm = shared_memory.SharedMemory(name=msg["shm"])
+            buf = shm.buf
             try:
-                for _idx, d in items:
-                    if not isinstance(d, dict):
-                        continue
-                    for k in _SHM_KEYS:
-                        v = d.get(k)
-                        if isinstance(v, tuple) and v and v[0] == "shm":
-                            _t, off, shape, dt = v
-                            a = np.frombuffer(shm.buf, dtype=np.dtype(dt),
-                                              count=int(np.prod(shape)), offset=off)
-                            d[k] = a.reshape(shape).copy()
-                            del a                  # view of shm.buf must die before close()
-            finally:
-                shm.close()
-                try:
-                    shm.unlink()
-                except FileNotFoundError:
-                    pass
+                shm.unlink()
+            except FileNotFoundError:
+                pass
+            shm._buf = None
+            shm._mmap = None
+            shm.close()                               # just the fd; mapping stays
+            for _idx, d in items:
+                if not isinstance(d, dict):
+                    continue
+                for k in _SHM_KEYS:
+                    v = d.get(k)
+                    if isinstance(v, tuple) and v and v[0] == "shm":
+                        _t, off, shape, dt = v
+                        d[k] = np.frombuffer(buf, dtype=np.dtype(dt),
+                                             count=int(np.prod(shape)), offset=off).reshape(shape)
+            del buf
     out = []
     for idx, item in items:
         out.append((idx, _unpack_buf(item) if idx >= 0 else item))

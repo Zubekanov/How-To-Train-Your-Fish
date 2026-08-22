@@ -24,6 +24,7 @@ path, byte-identical for the ODROID service).
 """
 from __future__ import annotations
 
+import os
 import pickle
 import time
 import zlib
@@ -316,6 +317,16 @@ class ParallelCollector:
             print(f"[infer] batched inference server on {cfg.device} "
                   f"({self._server.nslots} slots)", flush=True)
         self._lite = lite                              # kept so a poisoned pool can be rebuilt
+        # Workers are single-threaded BY DESIGN (one game each, batch-1 / served
+        # forwards). torch.set_num_threads(1) in _winit is too late for the OpenBLAS /
+        # OpenMP pools numpy spins up at import: a host env of OMP_NUM_THREADS=62
+        # (the Vast.ai image, 2026-08-22) gave 120 workers x 62 BLAS threads, every
+        # tiny per-decision numpy op paying a 62-thread futex barrier (workers at
+        # ~19% CPU, asleep in futex_wait). Spawned children inherit os.environ, so
+        # pin it HERE, before the pool exists. The parent's own pools are untouched.
+        for k in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+                  "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+            os.environ[k] = "1"
         self._ex = self._new_executor()
         # Weights ring: the per-iteration learner blob is written ONCE into shared
         # memory and tasks carry a version stamp, instead of every task hauling the

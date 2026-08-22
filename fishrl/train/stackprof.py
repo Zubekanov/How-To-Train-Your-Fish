@@ -43,15 +43,20 @@ def start(interval: float = 0.01) -> None:
     threading.Thread(target=_sample, args=(interval,), daemon=True, name="stackprof").start()
 
 
-def report(log=print, top: int = 14) -> None:
+def report(log=print, top: int = 10, main_top: int = 25) -> None:
     global _N
     if not _ON:
         return
     with _LOCK:
-        n, items = _N, _HIST.most_common(top)
+        n = _N
+        items = _HIST.most_common(top)
+        main = [(k, c) for k, c in _HIST.most_common() if k[0] == "MainThread"][:main_top]
         _HIST.clear(); _N = 0
     if not n:
         return
     log(f"[stackprof] {n} samples")
     for (nm, where, up), c in items:
         log(f"[stackprof]   {100*c/n:5.1f}%  {nm:<28} {where}  <- {up}")
+    log("[stackprof] MainThread:")
+    for (nm, where, up), c in main:
+        log(f"[stackprof]   {100*c/n:5.1f}%  {where}  <- {up}")

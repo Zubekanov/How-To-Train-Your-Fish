@@ -242,3 +242,29 @@ def test_shm_transport_roundtrip():
     back = got[0][1]
     assert back.cols and np.array_equal(back.column("x_act"), np.stack([s.x_act for s in buf.steps]))
     assert np.array_equal(back.steps[3].pub_feat, np.full(2, -3, np.float32))
+
+
+@pytest.mark.skipif(not __import__("os").name == "posix", reason="POSIX shared memory only")
+def test_shm_pool_roundtrip_and_recycle():
+    cfg = Config(device="cpu", collect_workers=2, max_decisions=120, pool_frac=0.0, seed=0,
+                 shm_pool_blocks=3, shm_block_mb=16)
+    m = build_models(cfg)
+    pc = ParallelCollector(cfg, 2)
+    try:
+        assert len(pc._pool) == 3
+        specs = [{"kind": "self", "seed": 50 + i} for i in range(5)]   # > pool: fallback path too
+        bufs = pc.gather(pc.submit(m, specs, it=1), 5)
+        ids = [c["_blk"] for b in bufs for c in b.cols if "_blk" in c]
+        assert 1 <= len(ids) <= 3 and len(set(ids)) == len(ids)
+        merged = bufs[0]
+        for b in bufs[1:]:
+            merged.merge(b)
+        batch = merged.compute(0.99, 0.95)
+        assert batch["x_act"].shape[0] == len(merged.steps)
+        got = merged.release()
+        assert sorted(got) == sorted(ids)
+        pc.recycle(got)
+        bufs = pc.gather(pc.submit(m, specs[:2], it=2), 2)             # blocks reusable
+        assert all(len(b.games) == 1 for b in bufs)
+    finally:
+        pc.close()

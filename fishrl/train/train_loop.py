@@ -664,6 +664,9 @@ def train(cfg: Config, models: Models | None = None, log=print,
         # A stop requested mid-collection (STOP file or a signal) must be seen even
         # while a recovery storm holds the collector -- not only at the loop boundary.
         _stop_now = (lambda: stop["v"] or (stop_file is not None and os.path.exists(stop_file)))
+        if os.name == "posix" and int(getattr(cfg, "shm_pool_blocks", 0) or 0) == 0:
+            depth = int(getattr(cfg, "stream_depth", 2)) if getattr(cfg, "collect_stream", False) else 1
+            cfg.shm_pool_blocks = (depth + 1) * int(cfg.games_per_iter) + int(cfg.collect_workers)
         pcol = ParallelCollector(cfg, int(cfg.collect_workers), should_stop=_stop_now)
         log(f"[pcollect] {cfg.collect_workers} collector worker processes")
     pipeline = bool(getattr(cfg, "pipeline_collect", False))
@@ -1032,9 +1035,11 @@ def train(cfg: Config, models: Models | None = None, log=print,
             batch = buf.compute(cfg.gamma, cfg.lam, p1_adv_weight=cfg.p1_adv_weight)
             gwin["book_s"] += time.perf_counter() - t_book   # serial GAE + stacking (neither GPU nor workers)
             n_buf = len(buf)
-            buf.release()                       # views into shared memory die here (fd per block)
+            blk_ids = buf.release()             # views into shared memory die here (fd per block)
             bufs = got = None                   # the per-game buffers share those Step objects
             gc.collect(0)                       # reap ~100k Steps + 360 mappings now, off the seam
+            if pcol is not None and blk_ids:
+                pcol.recycle(blk_ids)           # pooled blocks back to the workers
             if max_seconds is not None:                  # anneal entropy over the budget
                 frac = min(total_elapsed() / max_seconds, 1.0)
                 ent = cfg.ent_start + frac * (cfg.ent_end - cfg.ent_start)

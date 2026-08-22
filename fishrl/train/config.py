@@ -79,6 +79,13 @@ class Config:
     # mix is unchanged in expectation.
     collect_stream: bool = False
     stream_depth: int = 2
+    # POSIX shared-memory result pool: workers write each game's arrays into a pooled
+    # block (reused, pages stay resident) instead of a fresh create/unlink per game,
+    # which cost the trainer ~1.5 s of munmap per 360 games. 0 = auto-size in the
+    # trainer: (stream_depth + 1) * games_per_iter + workers. -1 = per-game blocks.
+    # A block must fit one game (54 KB/decision; 32 MB ~ 600 decisions, else fallback).
+    shm_pool_blocks: int = 0
+    shm_block_mb: int = 32
 
     # ── Opponent pool / PFSP (prioritized fictitious self-play) ──────────────
     # Fraction of each iteration's games the learner plays against a POOL opponent

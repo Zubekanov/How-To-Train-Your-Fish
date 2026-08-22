@@ -115,6 +115,10 @@ def _winit(lite: dict) -> None:
     masking.set_text_change_mode(lite.get("text_change_mode", "full"))
     features.set_count_block(lite.get("obs_counts", False))
     _G["owner_pid"] = int(lite.get("owner_pid", 0))
+    _G["pool_names"] = list(lite.get("pool_names") or [])
+    _G["pool_bytes"] = int(lite.get("pool_bytes", 0))
+    _G["pool_free"] = lite.get("pool_free")            # mp.Queue of free block ids
+    _G["pool_open"] = {}                               # id -> SharedMemory (attached lazily)
     hidden = tuple(lite["hidden"])                        # guesser head width
     ah = tuple(lite.get("actor_hidden", hidden))          # actor head width (may differ)
     cd = int(lite.get("card_dim", 64))                    # entity card-embedding width
@@ -220,6 +224,7 @@ def _ring_read(name: str, nbuf: int, cap: int, ver: int) -> bytes:
     from multiprocessing import shared_memory
     if _WRING["shm"] is None:
         _WRING["shm"] = shared_memory.SharedMemory(name=name)
+        _untrack(_WRING["shm"])
     buf = _WRING["shm"].buf
     hdr = np.ndarray((nbuf, 2), dtype=np.int64, buffer=buf)            # [ver, len] per slot
     base = nbuf * 16
@@ -339,6 +344,33 @@ def sweep_stale_shm(root: str = "/dev/shm") -> int:
     return n
 
 
+def _untrack(shm) -> None:
+    """An ATTACHING process must not let its resource tracker reap the block."""
+    from multiprocessing import resource_tracker
+    try:
+        resource_tracker.unregister(shm._name, "shared_memory")
+    except Exception:                                  # noqa: BLE001
+        pass
+
+
+def _pool_block(total: int):
+    """Borrow a pooled block (id, SharedMemory) that fits `total` bytes, or None."""
+    q = _G.get("pool_free")
+    if q is None or total > _G.get("pool_bytes", 0):
+        return None
+    try:
+        bid = q.get(timeout=2.0)
+    except Exception:                                  # noqa: BLE001 -- Empty: pool exhausted
+        return None
+    shm = _G["pool_open"].get(bid)
+    if shm is None:
+        from multiprocessing import shared_memory
+        shm = shared_memory.SharedMemory(name=_G["pool_names"][bid])
+        _untrack(shm)
+        _G["pool_open"][bid] = shm
+    return bid, shm
+
+
 def _shm_pack(items: list) -> bytes:
     """Put every big array of the chunk's packed games into ONE shared-memory block
     and return a small pickle carrying its name + descriptors. The trainer's decode
@@ -353,6 +385,19 @@ def _shm_pack(items: list) -> bytes:
             descs.append((d, k, a, total)); total += a.nbytes
     if total == 0:
         return pickle.dumps({"shm": None, "items": items}, protocol=pickle.HIGHEST_PROTOCOL)
+    pooled = _pool_block(total)
+    if pooled is not None:
+        # Pooled block: pages stay mapped + resident in both processes across reuse --
+        # no first-touch faults here, no munmap/page-free storm on the trainer
+        # (measured 2026-08-22: ~1.5 s per 360 games, 20% of the iteration).
+        bid, shm = pooled
+        for d, k, a, off in descs:
+            view = np.frombuffer(shm.buf, dtype=a.dtype, count=a.size, offset=off).reshape(a.shape)
+            view[...] = a
+            d[k] = ("shm", off, a.shape, a.dtype.str)
+        del view, descs
+        return pickle.dumps({"shm": None, "pool": bid, "items": items},
+                            protocol=pickle.HIGHEST_PROTOCOL)
     # name carries the TRAINER's pid (shipped in _G) so a restart can sweep blocks whose
     # owner died with results unread (a STOP mid-flight leaked ~14 GB per restart)
     _SHM_SEQ[0] += 1
@@ -372,7 +417,7 @@ def _shm_pack(items: list) -> bytes:
     return pickle.dumps({"shm": name, "items": items}, protocol=pickle.HIGHEST_PROTOCOL)
 
 
-def _decode(blob: bytes) -> list:
+def _decode(blob: bytes, pool: list | None = None) -> list:
     """Result blob -> [(idx, RolloutBuffer | timing dict)]. Both the zlib path and
     the shm memcpy path release the GIL, so gather/take run this in a thread pool."""
     if blob[:1] == b"x":                          # zlib header: pickled-arrays transport
@@ -381,7 +426,21 @@ def _decode(blob: bytes) -> list:
         from multiprocessing import shared_memory
         msg = pickle.loads(blob)
         items = msg["items"]
-        if msg["shm"] is not None:
+        if msg.get("pool") is not None and pool is not None:
+            bid = int(msg["pool"])
+            buf = pool[bid].buf
+            for _idx, d in items:
+                if not isinstance(d, dict):
+                    continue
+                for k in _SHM_KEYS:
+                    v = d.get(k)
+                    if isinstance(v, tuple) and v and v[0] == "shm":
+                        _t, off, shape, dt = v
+                        d[k] = np.frombuffer(buf, dtype=np.dtype(dt),
+                                             count=int(np.prod(shape)), offset=off).reshape(shape)
+                d["_blk"] = bid                      # returned to the pool by recycle()
+            del buf
+        elif msg["shm"] is not None:
             # Zero-copy: the column arrays are VIEWS into the block; the one copy left
             # is column()'s assembly into the batch. Lifetime: unlink now (POSIX keeps
             # the mapping valid), hand the memoryview + mmap to the arrays, and strip
@@ -519,6 +578,26 @@ class ParallelCollector:
         for k in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
                   "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
             os.environ[k] = "1"
+        # Pooled result blocks (POSIX): created here, borrowed by workers through a
+        # free-list queue, returned by recycle() once the batch tensors exist.
+        self._pool: list = []
+        self._pool_free = None
+        n_blocks = int(getattr(cfg, "shm_pool_blocks", 0) or 0)
+        if _SHM_TRANSPORT and n_blocks > 0:
+            import multiprocessing
+            from multiprocessing import shared_memory
+            ctx = multiprocessing.get_context("spawn")
+            self._pool_free = ctx.Queue()
+            block_bytes = int(getattr(cfg, "shm_block_mb", 32)) << 20
+            for i in range(n_blocks):
+                self._pool.append(shared_memory.SharedMemory(
+                    name=f"fishrl_{os.getpid()}_pool_{i}", create=True, size=block_bytes))
+                self._pool_free.put(i)
+            lite = lite | {"pool_names": [b.name for b in self._pool], "pool_bytes": block_bytes,
+                           "pool_free": self._pool_free}
+            self._lite = lite
+            print(f"[pcollect] shm result pool: {n_blocks} x {block_bytes >> 20} MB "
+                  f"(pages allocated on first use)", flush=True)
         self._ex = self._new_executor()
         # Weights ring: the per-iteration learner blob is written ONCE into shared
         # memory and tasks carry a version stamp, instead of every task hauling the
@@ -623,7 +702,7 @@ class ParallelCollector:
                 blobs.append(fut.result())
             except Exception as e:                     # noqa: BLE001 -- retry ANY chunk failure
                 blobs.append(self._retry_chunk(chunk, seed, e))
-        for decoded in self._dec.map(_decode, blobs):
+        for decoded in self._dec.map(lambda b: _decode(b, self._pool), blobs):
             for idx, buf in decoded:
                 if idx < 0:
                     self._note_timing(buf); continue
@@ -657,7 +736,7 @@ class ParallelCollector:
                     blob = fut.result()
                 except Exception as e:                 # noqa: BLE001 -- retry ANY failure
                     blob = self._retry_chunk(chunk, seed, e)
-                decoding.append((i, self._dec.submit(_decode, blob)))
+                decoding.append((i, self._dec.submit(_decode, blob, self._pool)))
         for i, df in decoding:
             for idx, buf in df.result():
                 if idx < 0:
@@ -726,7 +805,20 @@ class ParallelCollector:
         `m` (strictly on-policy, exactly like the serial path)."""
         return self.gather(self.submit(m, specs, it), len(specs))
 
+    def recycle(self, block_ids) -> None:
+        """Return pooled blocks after every view into them is gone (buffer.release())."""
+        if self._pool_free is None:
+            return
+        for bid in block_ids:
+            self._pool_free.put(int(bid))
+
     def close(self) -> None:
+        for b in self._pool:
+            try:
+                b.close(); b.unlink()
+            except Exception:                          # noqa: BLE001
+                pass
+        self._pool = []
         if self._ring is not None:
             try:
                 self._ring.close(); self._ring.unlink()

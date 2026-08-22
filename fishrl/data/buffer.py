@@ -73,13 +73,16 @@ class RolloutBuffer:
     _COL_ATTR = {"x_act": "x_act", "mask": "mask", "god": "god_feat", "pub": "pub_feat",
                  "guess_in": "guess_in", "cnt": "cnt_target"}
 
-    def release(self) -> None:
+    def release(self) -> list:
         """Drop the per-step arrays and columnar backing (shared-memory views under
         parallel collection) once the batch tensors exist, so the mappings -- and the
-        fd each one pins -- go away now rather than at the next rebinding."""
+        fd each one pins -- go away now rather than at the next rebinding. Returns the
+        pooled block ids the columns lived in (for ParallelCollector.recycle)."""
+        ids = [c["_blk"] for c in self.cols if isinstance(c, dict) and "_blk" in c]
         self.steps = []
         self.cols = []
         self._colcache = {}
+        return ids
 
     def _god_all_shared_zero(self) -> bool:
         return (bool(self.cols) and sum(int(c["n"]) for c in self.cols) == len(self.steps)
@@ -96,7 +99,7 @@ class RolloutBuffer:
                 if name == "god" and c.get("god_shared"):
                     a = np.broadcast_to(a, (int(c["n"]),) + a.shape)
                 parts.append(a)
-            out = _pconcat(parts)
+            out = _pconcat(parts) if len(parts) > 1 else np.array(parts[0])   # copy: never a pool view
             self._colcache[name] = out
             return out
         attr = self._COL_ATTR[name]

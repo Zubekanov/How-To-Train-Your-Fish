@@ -174,3 +174,26 @@ def test_take_returns_completion_order_and_keeps_rest():
         assert all(len(b.games) == 1 for _i, b in got + got2)
     finally:
         pc.close()
+
+
+def test_weights_ring_versions_and_torn_read_guard():
+    """Tasks carry a ring stamp, not the blob; an overwritten slot resolves to the
+    newest version instead of a torn read."""
+    from fishrl.train.pcollect import _ring_read
+    cfg = Config(device="cpu", collect_workers=1, max_decisions=60, pool_frac=0.0, seed=0)
+    m = build_models(cfg)
+    pc = ParallelCollector(cfg, 1)
+    try:
+        refs = [pc._ring_write(bytes([i]) * (1000 + i)) for i in range(6)]   # 6 writes, 4 slots
+        assert [r[-1] for r in refs] == [1, 2, 3, 4, 5, 6]
+        tag, name, nbuf, cap, _ = refs[-1]
+        assert _ring_read(name, nbuf, cap, 6) == bytes([5]) * 1005
+        assert _ring_read(name, nbuf, cap, 3) == bytes([2]) * 1002          # still resident
+        newest = _ring_read(name, nbuf, cap, 1)                             # overwritten by 5
+        assert newest == bytes([5]) * 1005
+        # end-to-end: a real game through the ring path
+        specs = [{"kind": "self", "seed": 3}]
+        bufs = pc.gather(pc.submit(m, specs, it=2), 1)
+        assert len(bufs[0].games) == 1
+    finally:
+        pc.close()

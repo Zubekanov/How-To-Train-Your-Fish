@@ -25,7 +25,10 @@ path, byte-identical for the ODROID service).
 from __future__ import annotations
 
 import pickle
+import time
 import zlib
+
+import numpy as np
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait as _fwait
 from concurrent.futures.process import BrokenProcessPool
 from types import SimpleNamespace
@@ -203,7 +206,35 @@ def _collect_one_with(spec: dict, actor, guesser):
                                learner_seat=spec["lseat"], critic_view=cview)
 
 
-def _collect_chunk(learner_blob: bytes, specs: list, torch_seed: int) -> bytes:
+_WRING = {"shm": None, "ver": -1}
+
+
+def _ring_read(name: str, nbuf: int, cap: int, ver: int) -> bytes:
+    """Read the learner blob stamped `ver` (or newer) from the weights ring. The
+    writer stamps [ver, len] AFTER the bytes; we re-check the stamp after the copy
+    so a buffer being overwritten underneath us is detected and re-read from the
+    newest slot (a newer blob is always acceptable: served forwards are newer still)."""
+    from multiprocessing import shared_memory
+    if _WRING["shm"] is None:
+        _WRING["shm"] = shared_memory.SharedMemory(name=name)
+    buf = _WRING["shm"].buf
+    hdr = np.ndarray((nbuf, 2), dtype=np.int64, buffer=buf)            # [ver, len] per slot
+    base = nbuf * 16
+    for _attempt in range(50):
+        v, n = int(hdr[ver % nbuf, 0]), int(hdr[ver % nbuf, 1])
+        if v < ver:                                                     # not written yet
+            time.sleep(0.001); continue
+        if v > ver:                                                     # overwritten: take newest
+            ver = int(hdr[:, 0].max())
+            continue
+        off = base + (ver % nbuf) * cap
+        data = bytes(buf[off:off + n])
+        if int(hdr[ver % nbuf, 0]) == v:
+            return data
+    raise RuntimeError("weights ring: could not get a consistent read")
+
+
+def _collect_chunk(learner_blob, specs: list, torch_seed: int) -> bytes:
     """Load this iteration's learner weights once, then play the chunk's games.
     Returns [(spec_index, RolloutBuffer), ...] as a COMPRESSED pickle. The
     weights arrive PRE-PICKLED: the main process serializes the 14 MB state
@@ -216,10 +247,18 @@ def _collect_chunk(learner_blob: bytes, specs: list, torch_seed: int) -> bytes:
     import torch
     from fishrl.train.inference import load_np_state
     torch.manual_seed(torch_seed)                      # reproducible action sampling per chunk
-    learner_state = pickle.loads(learner_blob)         # numpy arrays only (see np_state):
-    load_np_state(_G["actor"], learner_state["actor"])    # plain-pickled torch tensors
-    if "guesser" in learner_state and _G["guesser"] is not None:   # leak their storage
-        load_np_state(_G["guesser"], learner_state["guesser"])     # on loads
+    if isinstance(learner_blob, tuple):                # ("ring", name, nbuf, cap, ver): weights
+        _tag, name, nbuf, cap, ver = learner_blob      # live in shared memory, one write per
+        if _WRING["ver"] >= ver:                       # iteration; skip if already at/above
+            learner_blob = None
+        else:
+            learner_blob = _ring_read(name, nbuf, cap, ver)
+            _WRING["ver"] = ver
+    if learner_blob is not None:
+        learner_state = pickle.loads(learner_blob)     # numpy arrays only (see np_state):
+        load_np_state(_G["actor"], learner_state["actor"])    # plain-pickled torch tensors
+        if "guesser" in learner_state and _G["guesser"] is not None:   # leak their storage
+            load_np_state(_G["guesser"], learner_state["guesser"])     # on loads
     out = [(spec["idx"], _collect_one(spec)) for spec in specs]
     return zlib.compress(pickle.dumps(out, protocol=pickle.HIGHEST_PROTOCOL), 1)
 
@@ -278,6 +317,16 @@ class ParallelCollector:
                   f"({self._server.nslots} slots)", flush=True)
         self._lite = lite                              # kept so a poisoned pool can be rebuilt
         self._ex = self._new_executor()
+        # Weights ring: the per-iteration learner blob is written ONCE into shared
+        # memory and tasks carry a version stamp, instead of every task hauling the
+        # ~10 MB blob through the executor's single feeder pipe (120 tasks/iter =
+        # 1.2 GB/iter serialised behind the main thread's GIL -- workers sat at ~19%
+        # CPU blocked on that pipe, 2026-08-22). 4 slots so in-flight tasks from
+        # older sets still find their stamp; a worker that misses reads the newest.
+        self._ring = None
+        self._ring_n = 4
+        self._ring_cap = 0
+        self._ring_ver = 0
 
     def _new_executor(self) -> ProcessPoolExecutor:
         # Recycle each worker after this many chunks. Historically this capped an
@@ -319,6 +368,7 @@ class ParallelCollector:
              **({"guesser": _cpu_state(m.guesser)} if m.guesser is not None else {})},
             protocol=pickle.HIGHEST_PROTOCOL)          # serialize ONCE, memcpy per chunk
         self._last_blob = learner_blob                 # for gather's resubmit path
+        ring_ref = self._ring_write(learner_blob)
         if self._server is not None:
             # Same blob, applied + ACKed before any chunk starts: served forwards
             # are exactly as fresh as the worker-local weights they replace.
@@ -329,9 +379,33 @@ class ParallelCollector:
         for w, chunk in enumerate(chunks):
             if chunk:
                 seed = (it * 1009 + w) % (2**31)
-                items.append((self._ex.submit(_collect_chunk, learner_blob, chunk, seed),
+                items.append((self._ex.submit(_collect_chunk, ring_ref, chunk, seed),
                               chunk, seed))
         return items
+
+    def _ring_write(self, blob: bytes) -> tuple:
+        """Write `blob` into the next ring slot; returns the task-side reference."""
+        from multiprocessing import shared_memory
+        if self._ring is None or len(blob) > self._ring_cap:
+            if self._ring is not None:
+                try:
+                    self._ring.close(); self._ring.unlink()
+                except Exception:                      # noqa: BLE001
+                    pass
+            self._ring_cap = int(len(blob) * 1.25) + 4096
+            self._ring = shared_memory.SharedMemory(
+                create=True, size=self._ring_n * 16 + self._ring_n * self._ring_cap)
+            np.ndarray((self._ring_n, 2), dtype=np.int64, buffer=self._ring.buf)[:] = -1
+        self._ring_ver += 1
+        ver = self._ring_ver
+        slot = ver % self._ring_n
+        hdr = np.ndarray((self._ring_n, 2), dtype=np.int64, buffer=self._ring.buf)
+        hdr[slot, 0] = -1                              # invalidate while writing
+        off = self._ring_n * 16 + slot * self._ring_cap
+        self._ring.buf[off:off + len(blob)] = blob
+        hdr[slot, 1] = len(blob)
+        hdr[slot, 0] = ver                             # bytes first, stamp last
+        return ("ring", self._ring.name, self._ring_n, self._ring_cap, ver)
 
     def gather(self, items: list, n_specs: int) -> list:
         """Block on the work items and return the RolloutBuffers in spec order.
@@ -429,6 +503,12 @@ class ParallelCollector:
         return self.gather(self.submit(m, specs, it), len(specs))
 
     def close(self) -> None:
+        if self._ring is not None:
+            try:
+                self._ring.close(); self._ring.unlink()
+            except Exception:                          # noqa: BLE001
+                pass
+            self._ring = None
         self._ex.shutdown(wait=False, cancel_futures=True)
         if self._server is not None:
             self._server.close()

@@ -228,7 +228,7 @@ class _Graphed:
     — the same order as the CPU-collect vs CUDA-update mismatch PPO already
     absorbs)."""
 
-    _BUCKETS = (1, 2, 4, 8, 16)
+    _BUCKETS = (1, 2, 4, 8, 16, 32, 64, 128)      # 120-worker box: one replay per poll
 
     def __init__(self, fn, in_dims: tuple, out_dim: int, dev):
         self.fn, self.in_dims, self.out_dim, self.dev = fn, in_dims, out_dim, dev

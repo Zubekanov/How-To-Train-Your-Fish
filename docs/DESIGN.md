@@ -710,9 +710,12 @@ to 128, worker OMP/OPENBLAS pinned to 1 (the Vast image exports 62). games/iter 
 (one fd per mapped block; the 1024 default crashed the trainer), `buffer.release()` right after
 `compute()`, and a pooled block set (`fishrl_<pid>_pool_<i>`, free-list `mp.Queue`,
 `ParallelCollector.recycle()`), because unlinking 360 fresh tmpfs blocks per iteration cost ~1.5 s
-of munmap on the main thread. Result: 93k → 168k games/h (1.8×) at 468 it/h × 360. Remaining
-main-thread time: the PPO update (~35%, GPU), and creating/destroying ~100k `Step` objects per
-iteration (~20%) — the next lever is a Step-free columnar `RolloutBuffer` end-to-end.
+of munmap on the main thread. Result: 93k → 168k games/h (1.8×) at 468 it/h × 360. The Step-free
+columnar `RolloutBuffer` followed (2026-08-23: `compute`/`fill_critic_values`/`merge` on per-game
+column dicts, `steps` a lazy view-materialising property for per-step consumers; batch pinned
+bit-identical by test): 502 it/h × 360 = 181k games/h. Winrate confirms the games/h thesis — same
+7.5 h of wall, h1.3 moved +.021 under the old regime vs +.051 at 360 games. Remaining main-thread
+time is the PPO update itself (backward ~20%, Adam ~8%); the only lever left is minibatch size.
 
 **`critic_td_mix` + jump telemetry (2026-08-22, cloud it≈70k):** the critic loss was pure BCE
 against the terminal winner, one row at a time — no TD/bootstrap term anywhere, so nothing tied
@@ -729,7 +732,11 @@ propagating resolved endings backwards (the pooled per-turn Brier was flat .175�
 the true outcome, the guardrail against target drift. Telemetry `critic_jump_mean`/`_p90`/`_n`
 (status `jump=m/p90`): |ΔP(p1)| over `det_next` pairs on the same turn, off the same pre-update
 forward — the number that should fall when `b > 0`. Resume-tunable launcher flag
-`--critic-td-mix`; deployed telemetry-first for a baseline row, then `b` = 0.5.
+`--critic-td-mix`; deployed telemetry-first for a baseline row, then `b` = 0.5. **Verdict
+(2026-08-23, 30 rows):** jump back at 0.018, Brier +.007, acc −2pp, no late-turn sharpening —
+reverted to 0. Replaced by **`critic_consistency`**: `λ·(p(s)−p(s′))²` on same-turn `det_next`
+pairs (both ends are the critic's own output, so it cannot move calibration). λ = 1 was inert;
+λ = 50 cut the jump to 0.011 / 0.032 (−40%) on its first row with Brier/acc inside the band.
 
 **`obs_counts` (2026-08-22, cloud it≈64k):** a COUNT_DIM=22 block on the globals tail of the actor
 input (after the bookkeeper belief: per-name cards the viewer cannot see + graveyard/40 + exile/8)

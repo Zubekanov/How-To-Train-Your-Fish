@@ -429,7 +429,10 @@ def train(cfg: Config, models: Models | None = None, log=print,
         wall = gwin["collect_s"] + gwin["update_s"] + gwin["book_s"]
         collect_frac = (gwin["collect_s"] / wall) if wall > 0 else nan
         book_frac = (gwin["book_s"] / wall) if wall > 0 else nan
-        gns_b = acc["gns_b"] / max(win_iters, 1)
+        # ratio of the window MEANS (per-iteration g2 is a difference of two noisy
+        # estimates and can hit zero/negative -> inf; the means are well-behaved)
+        _g2 = acc["gns_g2"] / max(win_iters, 1)
+        gns_b = (acc["gns_tr_sigma"] / max(win_iters, 1)) / _g2 if _g2 > 0 else nan
         brier_gap = (est["pub_brier"] - est["priv_brier"]) if "pub_brier" in est else nan
         game_str = (
             f" | games={games} len={len_full:.1f} slen={len_scen:.1f} "

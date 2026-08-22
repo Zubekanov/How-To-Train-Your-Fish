@@ -253,9 +253,9 @@ def test_shm_pool_roundtrip_and_recycle():
     try:
         assert len(pc._pool) == 3
         specs = [{"kind": "self", "seed": 50 + i} for i in range(5)]   # > pool: fallback path too
-        bufs = pc.gather(pc.submit(m, specs, it=1), 5)
+        bufs = pc.gather(pc.submit(m, specs, it=1, per_game=True), 5)
         ids = [c["_blk"] for b in bufs for c in b.cols if "_blk" in c]
-        assert 1 <= len(ids) <= 3 and len(set(ids)) == len(ids)
+        assert len(ids) == 3 and len(set(ids)) == 3          # pool of 3, 2 games fell back
         merged = bufs[0]
         for b in bufs[1:]:
             merged.merge(b)
@@ -264,7 +264,7 @@ def test_shm_pool_roundtrip_and_recycle():
         got = merged.release()
         assert sorted(got) == sorted(ids)
         pc.recycle(got)
-        bufs = pc.gather(pc.submit(m, specs[:2], it=2), 2)             # blocks reusable
+        bufs = pc.gather(pc.submit(m, specs[:2], it=2, per_game=True), 2)   # blocks reusable
         assert all(len(b.games) == 1 for b in bufs)
     finally:
         pc.close()

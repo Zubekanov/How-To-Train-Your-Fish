@@ -223,8 +223,7 @@ def _ring_read(name: str, nbuf: int, cap: int, ver: int) -> bytes:
     newest slot (a newer blob is always acceptable: served forwards are newer still)."""
     from multiprocessing import shared_memory
     if _WRING["shm"] is None:
-        _WRING["shm"] = shared_memory.SharedMemory(name=name)
-        _untrack(_WRING["shm"])
+        _WRING["shm"] = shared_memory.SharedMemory(name=name)   # main owns/unlinks it
     buf = _WRING["shm"].buf
     hdr = np.ndarray((nbuf, 2), dtype=np.int64, buffer=buf)            # [ver, len] per slot
     base = nbuf * 16
@@ -365,8 +364,7 @@ def _pool_block(total: int):
     shm = _G["pool_open"].get(bid)
     if shm is None:
         from multiprocessing import shared_memory
-        shm = shared_memory.SharedMemory(name=_G["pool_names"][bid])
-        _untrack(shm)
+        shm = shared_memory.SharedMemory(name=_G["pool_names"][bid])   # main owns/unlinks
         _G["pool_open"][bid] = shm
     return bid, shm
 

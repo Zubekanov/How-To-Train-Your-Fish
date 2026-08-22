@@ -40,17 +40,39 @@ def _pconcat(parts: list) -> np.ndarray:
     return out
 
 
+_PINNED: dict = {}      # (dtype, row_shape) -> persistent pinned staging tensor
+
+
 def _dev_concat(parts: list, device) -> torch.Tensor:
-    """Assemble per-game blocks straight into one device tensor (the only copy)."""
+    """Assemble per-game blocks into one device tensor: threaded memcpy into a
+    persistent PINNED staging buffer (slice assignment releases the GIL), then a
+    single pinned->device copy at PCIe speed. Per-block pageable copies straight
+    from the shm mappings measured 17% of the iteration (bounce-buffer staging)."""
     total = sum(p.shape[0] for p in parts)
-    out = torch.empty((total,) + tuple(parts[0].shape[1:]),
-                      dtype=torch.from_numpy(np.asarray(parts[0][:1])).dtype, device=device)
-    off = 0
-    for p in parts:
-        n = p.shape[0]
-        out[off:off + n].copy_(torch.from_numpy(np.ascontiguousarray(p)), non_blocking=False)
-        off += n
-    return out
+    row_shape = tuple(parts[0].shape[1:])
+    np_dtype = parts[0].dtype
+    key = (np_dtype.str, row_shape)
+    stage = _PINNED.get(key)
+    if stage is None or stage.shape[0] < total:
+        cap = int(total * 1.25) + 1
+        stage = torch.empty((cap,) + row_shape, dtype=torch.from_numpy(np.empty(0, np_dtype)).dtype,
+                            pin_memory=True)
+        _PINNED[key] = stage
+    host = stage[:total].numpy()
+    if total * parts[0][0].nbytes < (64 << 20):
+        off = 0
+        for p in parts:
+            host[off:off + p.shape[0]] = p
+            off += p.shape[0]
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+        offs = np.cumsum([0] + [p.shape[0] for p in parts[:-1]])
+
+        def _cp(i):
+            host[offs[i]:offs[i] + parts[i].shape[0]] = parts[i]
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            list(ex.map(_cp, range(len(parts))))
+    return stage[:total].to(device, non_blocking=False, copy=True)   # sync + copy: the stage is reused
 
 
 @dataclass

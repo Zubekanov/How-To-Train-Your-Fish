@@ -114,6 +114,7 @@ def _winit(lite: dict) -> None:
         features.set_public_view(lite["critic_view"])
     masking.set_text_change_mode(lite.get("text_change_mode", "full"))
     features.set_count_block(lite.get("obs_counts", False))
+    _G["owner_pid"] = int(lite.get("owner_pid", 0))
     hidden = tuple(lite["hidden"])                        # guesser head width
     ah = tuple(lite.get("actor_hidden", hidden))          # actor head width (may differ)
     cd = int(lite.get("card_dim", 64))                    # entity card-embedding width
@@ -286,8 +287,38 @@ def _unpack_buf(d: dict):
     return buf
 
 
+_SHM_SEQ = [0]
 _SHM_TRANSPORT = os.name == "posix"           # POSIX shm persists until unlink; Windows
 _SHM_KEYS = ("x_act", "pub", "mask", "guess_in", "cnt", "god")   # frees it with the last handle
+
+
+def sweep_stale_shm(root: str = "/dev/shm") -> int:
+    """Unlink fishrl_<owner>_<worker>_<n> blocks whose owner trainer is dead."""
+    if os.name != "posix" or not os.path.isdir(root):
+        return 0
+    n = 0
+    for fn in os.listdir(root):
+        if not fn.startswith("fishrl_"):
+            continue
+        try:
+            owner = int(fn.split("_")[1])
+        except (IndexError, ValueError):
+            continue
+        alive = True
+        try:
+            os.kill(owner, 0)
+        except ProcessLookupError:
+            alive = False
+        except PermissionError:
+            alive = True
+        if owner == os.getpid() or not alive:
+            try:
+                os.unlink(os.path.join(root, fn)); n += 1
+            except OSError:
+                pass
+    if n:
+        print(f"[pcollect] swept {n} stale shared-memory block(s)", flush=True)
+    return n
 
 
 def _shm_pack(items: list) -> bytes:
@@ -304,7 +335,11 @@ def _shm_pack(items: list) -> bytes:
             descs.append((d, k, a, total)); total += a.nbytes
     if total == 0:
         return pickle.dumps({"shm": None, "items": items}, protocol=pickle.HIGHEST_PROTOCOL)
-    shm = shared_memory.SharedMemory(create=True, size=total)
+    # name carries the TRAINER's pid (shipped in _G) so a restart can sweep blocks whose
+    # owner died with results unread (a STOP mid-flight leaked ~14 GB per restart)
+    _SHM_SEQ[0] += 1
+    name = f"fishrl_{_G.get('owner_pid', 0)}_{os.getpid()}_{_SHM_SEQ[0]}"
+    shm = shared_memory.SharedMemory(name=name, create=True, size=total)
     for d, k, a, off in descs:
         view = np.frombuffer(shm.buf, dtype=a.dtype, count=a.size, offset=off).reshape(a.shape)
         view[...] = a
@@ -443,6 +478,7 @@ class ParallelCollector:
                 "text_change_mode": cfg.text_change_mode,
                 "obs_counts": bool(getattr(cfg, "obs_counts", False)),
                 "scenario_names": scen_names,
+                "owner_pid": os.getpid(),
                 "affinity": parse_affinity(getattr(cfg, "collect_affinity", ""))}
         self._server = None
         if getattr(cfg, "infer_server", False):
@@ -453,6 +489,7 @@ class ParallelCollector:
             print(f"[infer] batched inference server on {cfg.device} "
                   f"({self._server.nslots} slots)", flush=True)
         self._lite = lite                              # kept so a poisoned pool can be rebuilt
+        sweep_stale_shm()
         # Workers are single-threaded BY DESIGN (one game each, batch-1 / served
         # forwards). torch.set_num_threads(1) in _winit is too late for the OpenBLAS /
         # OpenMP pools numpy spins up at import: a host env of OMP_NUM_THREADS=62

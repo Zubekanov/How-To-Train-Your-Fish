@@ -1024,6 +1024,9 @@ def train(cfg: Config, models: Models | None = None, log=print,
             t_book = time.perf_counter()
             batch = buf.compute(cfg.gamma, cfg.lam, p1_adv_weight=cfg.p1_adv_weight)
             gwin["book_s"] += time.perf_counter() - t_book   # serial GAE + stacking (neither GPU nor workers)
+            n_buf = len(buf)
+            buf.release()                       # views into shared memory die here (fd per block)
+            bufs = None
             if max_seconds is not None:                  # anneal entropy over the budget
                 frac = min(total_elapsed() / max_seconds, 1.0)
                 ent = cfg.ent_start + frac * (cfg.ent_end - cfg.ent_start)
@@ -1053,13 +1056,13 @@ def train(cfg: Config, models: Models | None = None, log=print,
             acc["guesser_loss"] += aux_stats["guesser_loss"]
             acc["public_loss"] += aux_stats["public_loss"]
             win_iters += 1
-            win_T += len(buf)
+            win_T += n_buf
             last_batch = batch
             done += 1
             if checkpoint_path is not None and cfg.tick_every_seconds > 0:
                 sysv = sysstats.latest()
                 tick = {
-                    "it": done, "wall_time": time.time(), "T": len(buf),
+                    "it": done, "wall_time": time.time(), "T": n_buf,
                     "games": len(buf.games),
                     "policy_loss": ppo_stats["policy_loss"],
                     "critic_loss": ppo_stats["critic_loss"],

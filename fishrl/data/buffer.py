@@ -73,6 +73,14 @@ class RolloutBuffer:
     _COL_ATTR = {"x_act": "x_act", "mask": "mask", "god": "god_feat", "pub": "pub_feat",
                  "guess_in": "guess_in", "cnt": "cnt_target"}
 
+    def release(self) -> None:
+        """Drop the per-step arrays and columnar backing (shared-memory views under
+        parallel collection) once the batch tensors exist, so the mappings -- and the
+        fd each one pins -- go away now rather than at the next rebinding."""
+        self.steps = []
+        self.cols = []
+        self._colcache = {}
+
     def _god_all_shared_zero(self) -> bool:
         return (bool(self.cols) and sum(int(c["n"]) for c in self.cols) == len(self.steps)
                 and all(c.get("god_shared") and not np.any(c["god"]) for c in self.cols))

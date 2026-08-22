@@ -14,6 +14,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+import gc
 import os
 import platform
 import signal
@@ -675,6 +676,12 @@ def train(cfg: Config, models: Models | None = None, log=print,
             "N's update (behavior policy one update stale; see Config.pipeline_collect)")
     pipe_pending = None                # (specs, metas, futures) of the in-flight iteration
     stackprof.start()
+    # A batch is ~100k Step objects; the default thresholds (700, 10, 10) made the cyclic
+    # GC traverse them on every few hundred allocations (~20% of the iteration showed up
+    # as dealloc/GC at the take() seam). Nothing here is cyclic: collect rarely, and
+    # freeze the long-lived model/league graph out of the traversals entirely.
+    gc.set_threshold(200_000, 50, 50)
+    gc.freeze()
     stream = pipeline and bool(getattr(cfg, "collect_stream", False))
     if stream:
         log(f"[pcollect] STREAMED collection: one task per game, {cfg.stream_depth} "
@@ -862,7 +869,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                         if not stream_items:
                             stream_it = done
                             _stream_fill(int(cfg.stream_depth))
-                        got, rest = pcol.take(stream_items, cfg.games_per_iter)
+                        got, rest = pcol.take(stream_items, cfg.games_per_iter)   # noqa: F841
                         taken = {i for i, _b in got}
                         bufs = [b for _i, b in got]
                         metas = [stream_metas[i] for i, _b in got]
@@ -1026,7 +1033,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
             gwin["book_s"] += time.perf_counter() - t_book   # serial GAE + stacking (neither GPU nor workers)
             n_buf = len(buf)
             buf.release()                       # views into shared memory die here (fd per block)
-            bufs = None
+            bufs = got = None                   # the per-game buffers share those Step objects
+            gc.collect(0)                       # reap ~100k Steps + 360 mappings now, off the seam
             if max_seconds is not None:                  # anneal entropy over the budget
                 frac = min(total_elapsed() / max_seconds, 1.0)
                 ent = cfg.ent_start + frac * (cfg.ent_end - cfg.ent_start)

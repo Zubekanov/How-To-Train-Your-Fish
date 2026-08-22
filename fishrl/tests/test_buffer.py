@@ -169,3 +169,47 @@ def test_collect_games_records_zero_step_games():
     # every step's game_id indexes into games and matches its winner label
     for s in buf.steps:
         assert buf.games[s.game_id] == s.winner
+
+
+def test_columnar_compute_matches_step_compute():
+    """The trainer's Step-free path must produce the identical batch."""
+    import torch
+    from fishrl.data.buffer import RolloutBuffer, pack_steps
+    rng = np.random.default_rng(0)
+    god0 = np.zeros(2, np.float32)                       # the collector's shared zero row
+
+    def game(gid, seat_seq, winner, truncated=False):
+        b = RolloutBuffer()
+        for i, seat in enumerate(seat_seq):
+            b.add(Step(seat=seat, x_act=rng.random(4).astype(np.float32),
+                       mask=np.array([1, i % 2, 1], np.int8), action=i % 3, logp=-0.3 * i,
+                       value=float(rng.random() - 0.5), god_feat=god0,
+                       pub_feat=rng.random(3).astype(np.float32), guess_in=np.zeros(2, np.float32),
+                       cnt_target=np.ones(2, np.float32), winner=winner, game_id=0,
+                       truncated=truncated, deckout_end=winner == "p2"))
+        b.games = [winner]; b.meta = [{"truncated": truncated}]
+        return b
+
+    games = [game(0, ["p1", "p1", "p2", "p1", "p2"], "p1"),
+             game(1, ["p2", "p2", "p1"], "p2"),
+             game(2, ["p1", "p2", "p2"], None, truncated=True)]
+    # columnar merge from packed per-game dicts (pack BEFORE the Step merge mutates ids)
+    c = RolloutBuffer()
+    for g in games:
+        d = pack_steps(g.steps); d["games"] = list(g.games); d["meta"] = list(g.meta)
+        gb = RolloutBuffer(games=g.games, meta=g.meta); gb.set_cols([d])
+        c.merge(gb)
+    # Step-backed merge
+    a = RolloutBuffer()
+    for g in games:
+        a.merge(g)
+    assert c.columnar and len(c) == len(a) == 11 and c.games == a.games
+    ba, bc = a.compute(0.99, 0.9, p1_adv_weight=1.5), c.compute(0.99, 0.9, p1_adv_weight=1.5)
+    assert set(ba) == set(bc)
+    for k in ba:
+        if k == "god":
+            assert bc[k].shape == (11, 1)                # shared-zero placeholder
+            continue
+        assert torch.equal(ba[k], bc[k]), k
+    # lazy Step materialisation still works for per-step consumers
+    assert c.steps[5].seat == "p2" and c.steps[5].game_id == 1

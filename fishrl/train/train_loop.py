@@ -919,7 +919,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     elif tag in ("pool_scen", "carve_scen"):
                         scen_mix[member.name] = scen_mix.get(member.name, 0) + 1
                         gwin["scen_games"] += 1
-                        gwin["scen_T"] += len(gbuf.steps)
+                        gwin["scen_T"] += len(gbuf)
                         if won in ("p1", "p2"):
                             (league if tag == "pool_scen" else scen_league).update(
                                 member, won == "p1")
@@ -966,7 +966,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                         # mix_total stay scenario-free (same telemetry as carve-out mode)
                         scen_mix[member.name] = scen_mix.get(member.name, 0) + 1
                         gwin["scen_games"] += 1
-                        gwin["scen_T"] += len(gbuf.steps)
+                        gwin["scen_T"] += len(gbuf)
                         if gbuf.games and gbuf.games[-1] in ("p1", "p2"):
                             league.update(member, gbuf.games[-1] == "p1")
                         buf.merge(gbuf)
@@ -1013,7 +1013,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                                              critic=None, max_decisions=cfg.max_decisions,
                                              critic_view=cfg.critic_view)
                         gwin["scen_games"] += 1
-                        gwin["scen_T"] += len(sbuf.steps)       # scenario episode lengths
+                        gwin["scen_T"] += len(sbuf)       # scenario episode lengths
                         buf.merge(sbuf)
                         scen_mix[sname] = scen_mix.get(sname, 0) + 1
                         # the learner is p1 (p2 is the engine bot); count the game even if
@@ -1029,7 +1029,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     gwin["trunc"] += 1
                 elif w is None:
                     gwin["draw"] += 1
-            gwin["forced_steps"] += sum(1 for s in buf.steps if int(s.mask.sum()) == 1)
+            gwin["forced_steps"] += int((buf.column("mask").sum(axis=1) == 1).sum()) if len(buf) else 0
             iter_collect_s = time.perf_counter() - t_collect
             gwin["collect_s"] += iter_collect_s
             t_book = time.perf_counter()

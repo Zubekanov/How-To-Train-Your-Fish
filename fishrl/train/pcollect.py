@@ -242,53 +242,67 @@ def _ring_read(name: str, nbuf: int, cap: int, ver: int) -> bytes:
 
 
 def _pack_buf(buf) -> dict:
-    """Columnar transport form of a per-game RolloutBuffer: a few stacked arrays
-    instead of ~300 Step objects. Unpickling stacked arrays is a memcpy; unpickling
-    Step objects was ~30 ms/game on the trainer's main thread (3.6 s/iteration of
-    120 games, serial, on the thread the executor's manager also needs)."""
-    st = buf.steps
-    if not st:
-        return {"n": 0, "games": list(buf.games), "meta": list(buf.meta)}
-    god_shared = all(x.god_feat is st[0].god_feat for x in st)
-    return {
-        "n": len(st),
-        "seat": np.array([x.seat == "p1" for x in st], dtype=np.bool_),
-        "x_act": np.stack([x.x_act for x in st]),
-        "mask": np.stack([x.mask for x in st]),
-        "action": np.array([x.action for x in st], dtype=np.int64),
-        "logp": np.array([x.logp for x in st], dtype=np.float64),
-        "value": np.array([x.value for x in st], dtype=np.float64),
-        "god": st[0].god_feat if god_shared else np.stack([x.god_feat for x in st]),
-        "god_shared": god_shared,
-        "pub": np.stack([x.pub_feat for x in st]),
-        "guess_in": np.stack([x.guess_in for x in st]),
-        "cnt": np.stack([x.cnt_target for x in st]),
-        "winner": [x.winner for x in st],
-        "game_id": np.array([x.game_id for x in st], dtype=np.int64),
-        "truncated": np.array([x.truncated for x in st], dtype=np.bool_),
-        "deckout_end": np.array([x.deckout_end for x in st], dtype=np.bool_),
-        "games": list(buf.games), "meta": list(buf.meta),
-    }
+    """Columnar transport form of a per-game RolloutBuffer (see buffer.pack_steps)."""
+    from fishrl.data.buffer import pack_steps
+    d = pack_steps(buf.steps)
+    d["games"] = list(buf.games); d["meta"] = list(buf.meta)
+    return d
 
 
 def _unpack_buf(d: dict):
-    from fishrl.data.buffer import RolloutBuffer, Step
-    buf = RolloutBuffer()
-    buf.games = list(d["games"]); buf.meta = list(d["meta"])
-    n = int(d["n"])
-    if n == 0:
-        return buf
-    god = d["god"]
-    for i in range(n):
-        buf.steps.append(Step(
-            seat="p1" if d["seat"][i] else "p2", x_act=d["x_act"][i], mask=d["mask"][i],
-            action=int(d["action"][i]), logp=float(d["logp"][i]), value=float(d["value"][i]),
-            god_feat=god if d["god_shared"] else god[i], pub_feat=d["pub"][i],
-            guess_in=d["guess_in"][i], cnt_target=d["cnt"][i], winner=d["winner"][i],
-            game_id=int(d["game_id"][i]), truncated=bool(d["truncated"][i]),
-            deckout_end=bool(d["deckout_end"][i])))
-    buf.cols = [d]                                 # columnar backing (see RolloutBuffer.cols)
+    """Columnar dict -> RolloutBuffer with columnar backing (no Step objects)."""
+    from fishrl.data.buffer import RolloutBuffer
+    buf = RolloutBuffer(games=d.get("games", []), meta=d.get("meta", []))
+    if int(d.get("n", 0)):
+        buf.set_cols([d])
     return buf
+
+
+def _raise_fd_limit(want: int = 65536) -> None:
+    """Zero-copy decode keeps one fd per mapped game block until its views die
+    (the mmap dup's the fd); two iterations of 360 games overlap at the take() seam,
+    plus ~300 worker pipes -- the default 1024 soft limit crashed the trainer
+    (2026-08-22). Lift the soft limit toward the hard one."""
+    if os.name != "posix":
+        return
+    try:
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        new = min(max(soft, want), hard) if hard != resource.RLIM_INFINITY else max(soft, want)
+        if new > soft:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (new, hard))
+            print(f"[pcollect] RLIMIT_NOFILE {soft} -> {new}", flush=True)
+    except Exception as e:                         # noqa: BLE001
+        print(f"[pcollect] could not raise RLIMIT_NOFILE: {e!r}", flush=True)
+
+
+def sweep_stale_shm(root: str = "/dev/shm") -> int:
+    """Unlink fishrl_<owner>_<worker>_<n> blocks whose owner trainer is dead."""
+    if os.name != "posix" or not os.path.isdir(root):
+        return 0
+    n = 0
+    for fn in os.listdir(root):
+        if not fn.startswith("fishrl_"):
+            continue
+        try:
+            owner = int(fn.split("_")[1])
+        except (IndexError, ValueError):
+            continue
+        alive = True
+        try:
+            os.kill(owner, 0)
+        except ProcessLookupError:
+            alive = False
+        except PermissionError:
+            alive = True
+        if owner == os.getpid() or not alive:
+            try:
+                os.unlink(os.path.join(root, fn)); n += 1
+            except OSError:
+                pass
+    if n:
+        print(f"[pcollect] swept {n} stale shared-memory block(s)", flush=True)
+    return n
 
 
 _SHM_SEQ = [0]

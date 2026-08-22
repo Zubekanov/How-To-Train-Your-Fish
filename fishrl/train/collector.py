@@ -105,7 +105,7 @@ def fill_critic_values(buf: RolloutBuffer, critic, batch: int = 8192,
     while lifting the critic forward out of the per-decision hot loop (it was ~14% of
     collection wall-clock at batch=1). `view` selects the critic's input:
     "god" (legacy PrivilegedCritic) or "public" (v3 PublicCritic on pub_feat)."""
-    if not buf.steps:
+    if len(buf) == 0:
         return
     dev = device_of(critic)
     feat = buf.column("pub" if view in PUBLIC_FAMILY else "god")
@@ -115,15 +115,14 @@ def fill_critic_values(buf: RolloutBuffer, critic, batch: int = 8192,
         # always carries a nonzero globals tail (life/20 etc.).
         assert np.abs(feat[:256]).sum() > 0.0, \
             "critic_view='public' but pub features are all-zero — set_public_encoding gate?"
-    sign = np.array([SEAT_SIGN[s.seat] for s in buf.steps], dtype=np.float32)
-    out = np.empty(len(buf.steps), dtype=np.float32)
+    sign = np.where(buf.scalar("seat"), 1.0, -1.0).astype(np.float32)
+    out = np.empty(len(buf), dtype=np.float32)
     with torch.no_grad():
         for i in range(0, len(feat), batch):
             gt = torch.as_tensor(feat[i:i + batch], dtype=torch.float32).to(dev)
             p1 = critic.p1_winprob(gt).cpu().numpy()
             out[i:i + batch] = sign[i:i + batch] * (2.0 * p1 - 1.0)
-    for s, v in zip(buf.steps, out):
-        s.value = float(v)
+    buf.set_values(out)
 
 
 def collect_heuristic_games(guesser, actor, n_games, base_seed, critic=None,

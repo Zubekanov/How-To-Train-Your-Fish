@@ -63,6 +63,13 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0,
     critic_epochs = int(getattr(cfg, "critic_epochs", 0) or 0)
     acc_c = None               # device-side [closs, aux] over the critic's epochs only
     n_c = 0
+    # gradient-noise-scale probe (epoch 0, actor grads, pre-clip): sum of the per-minibatch
+    # gradients and of their squared norms. B_noise = tr(Sigma)/|G|^2 is the critical batch
+    # -- a batch far above it means games/iter has slack; near it, smaller batches cost.
+    actor_params = [p for p in actor.parameters() if p.requires_grad]
+    g_sum = None
+    g_sq = 0.0
+    g_n = 0
     for epoch in range(cfg.ppo_epochs):
         train_critic = critic_epochs <= 0 or epoch < critic_epochs
         if not train_actor and not train_critic:
@@ -104,6 +111,13 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0,
                 loss = loss + kl_ref_coef * kl_ref
             opt.zero_grad()
             loss.backward()
+            if train_actor and epoch == 0:
+                with torch.no_grad():
+                    flat = torch.cat([(p.grad if p.grad is not None else torch.zeros_like(p)).reshape(-1)
+                                      for p in actor_params])
+                    g_sum = flat.clone() if g_sum is None else g_sum.add_(flat)
+                    g_sq = g_sq + float(flat.dot(flat))
+                    g_n += 1
             torch.nn.utils.clip_grad_norm_(
                 list(actor.parameters()) + list(critic.parameters()), cfg.grad_clip)
             opt.step()
@@ -120,9 +134,18 @@ def ppo_update(batch, actor, critic, opt, cfg, ent_coef, rng_seed: int = 0,
                 n_c += 1
     vals = (acc / max(n, 1)).tolist() if acc is not None else [0.0] * 5
     cvals = (acc_c / max(n_c, 1)).tolist() if acc_c is not None else [0.0, 0.0]
+    gns = {"gns_tr_sigma": float("nan"), "gns_g2": float("nan"), "gns_b": float("nan")}
+    if g_n >= 2 and M > cfg.minibatch:
+        b_mb = float(min(cfg.minibatch, M))
+        e_gb2 = g_sq / g_n                                  # E|g_b|^2
+        gB2 = float(g_sum.dot(g_sum)) / (g_n * g_n)         # |mean of the minibatch grads|^2
+        tr_sigma = (e_gb2 - gB2) / (1.0 / b_mb - 1.0 / M)
+        g2 = gB2 - tr_sigma / M
+        gns = {"gns_tr_sigma": tr_sigma, "gns_g2": g2,
+               "gns_b": (tr_sigma / g2) if g2 > 0 else float("inf")}
     return {"policy_loss": vals[0], "critic_loss": cvals[0], "entropy": vals[1],
             "approx_kl": vals[2], "clip_frac": vals[3], "kl_teacher": vals[4],
-            "deckout_aux_loss": cvals[1], "n": n, "n_critic": n_c}
+            "deckout_aux_loss": cvals[1], "n": n, "n_critic": n_c, **gns}
 
 
 def aux_update(batch, guesser, public_est, opt_g, opt_p, steps: int,

@@ -246,7 +246,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
     elapsed_offset = 0.0           # cumulative training seconds carried across restarts
     frozen: Models | None = None
     KEYS = ("policy_loss", "critic_loss", "entropy", "approx_kl", "clip_frac",
-            "guesser_loss", "public_loss", "deckout_aux_loss")
+            "guesser_loss", "public_loss", "deckout_aux_loss",
+            "gns_b", "gns_tr_sigma", "gns_g2")
     acc = {k: 0.0 for k in KEYS}
     win_iters = win_T = 0
     # Per-window game/health telemetry (reset each report alongside the loss means):
@@ -254,7 +255,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
     # episode lengths, forced-decision dilution, and the collect/update wall-clock split.
     GW_KEYS = ("games", "trunc", "draw",
                "mirror_dec", "mirror_p1", "scen_games", "scen_T",
-               "forced_steps", "collect_s", "update_s")
+               "forced_steps", "collect_s", "update_s", "book_s")
     gwin = {k: 0.0 for k in GW_KEYS}
     # Per-report opponent composition: games played vs each opponent category, so the
     # status line can report the proportion of TRAINED (neural) opponents -- mirror
@@ -425,13 +426,15 @@ def train(cfg: Config, models: Models | None = None, log=print,
         draw_rate = (gwin["draw"] / games) if games else nan
         seat_p1 = (gwin["mirror_p1"] / gwin["mirror_dec"]) if gwin["mirror_dec"] else nan
         fdec = (gwin["forced_steps"] / win_T) if win_T else nan
-        wall = gwin["collect_s"] + gwin["update_s"]
+        wall = gwin["collect_s"] + gwin["update_s"] + gwin["book_s"]
         collect_frac = (gwin["collect_s"] / wall) if wall > 0 else nan
+        book_frac = (gwin["book_s"] / wall) if wall > 0 else nan
+        gns_b = acc["gns_b"] / max(win_iters, 1)
         brier_gap = (est["pub_brier"] - est["priv_brier"]) if "pub_brier" in est else nan
         game_str = (
             f" | games={games} len={len_full:.1f} slen={len_scen:.1f} "
             f"trunc={trunc_rate:.2f} draw={draw_rate:.2f} "
-            f"seat_p1={seat_p1:.2f} fdec={fdec:.2f} | wall collect={collect_frac:.2f}"
+            f"seat_p1={seat_p1:.2f} fdec={fdec:.2f} | wall collect={collect_frac:.2f} book={book_frac:.2f} gns_b={gns_b:.0f}"
         )
         if v3:
             # v3 status format: no guesser/public tokens; one critic calib group +
@@ -513,7 +516,11 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 "trunc_rate": trunc_rate, "draw_rate": draw_rate,
                 "mirror_p1_wr": seat_p1, "forced_dec_frac": fdec,
                 "collect_s": gwin["collect_s"], "update_s": gwin["update_s"],
-                "collect_frac": collect_frac,
+                "collect_frac": collect_frac, "book_s": gwin["book_s"], "book_frac": book_frac,
+                # gradient noise scale (actor, epoch-0 minibatch grads): critical batch in
+                # decisions; compare with T/iter to read the games/iter slack
+                "gns_b": gns_b, "gns_tr_sigma": acc["gns_tr_sigma"] / max(win_iters, 1),
+                "gns_g2": acc["gns_g2"] / max(win_iters, 1),
                 # Window composition as shares of ALL games incl. scenario-seeded ones, so the
                 # league slices + opp_scenario partition the window (~sum to 1) and the website's
                 # stacked mix shows scenarios. opp_self+opp_past==opp_trained. NOTE: these use the
@@ -975,7 +982,9 @@ def train(cfg: Config, models: Models | None = None, log=print,
             gwin["forced_steps"] += sum(1 for s in buf.steps if int(s.mask.sum()) == 1)
             iter_collect_s = time.perf_counter() - t_collect
             gwin["collect_s"] += iter_collect_s
+            t_book = time.perf_counter()
             batch = buf.compute(cfg.gamma, cfg.lam, p1_adv_weight=cfg.p1_adv_weight)
+            gwin["book_s"] += time.perf_counter() - t_book   # serial GAE + stacking (neither GPU nor workers)
             if max_seconds is not None:                  # anneal entropy over the budget
                 frac = min(total_elapsed() / max_seconds, 1.0)
                 ent = cfg.ent_start + frac * (cfg.ent_end - cfg.ent_start)
@@ -1000,7 +1009,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
             iter_update_s = time.perf_counter() - t_update
             gwin["update_s"] += iter_update_s
             for k in ("policy_loss", "critic_loss", "entropy", "approx_kl", "clip_frac",
-                      "deckout_aux_loss"):
+                      "deckout_aux_loss", "gns_b", "gns_tr_sigma", "gns_g2"):
                 acc[k] += ppo_stats[k]
             acc["guesser_loss"] += aux_stats["guesser_loss"]
             acc["public_loss"] += aux_stats["public_loss"]

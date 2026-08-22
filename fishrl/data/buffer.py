@@ -43,10 +43,12 @@ class RolloutBuffer:
     # ~30k per-step arrays (the np.stack was ~14% of the trainer's wall). The Step
     # arrays are views INTO these, so the two never disagree.
     cols: list = field(default_factory=list)
+    _colcache: dict = field(default_factory=dict)   # name -> concatenated array (per cols state)
 
     def add(self, step: Step):
         self.steps.append(step)
         self.cols = []                              # per-step appends -> no columnar backing
+        self._colcache = {}
 
     _COL_ATTR = {"x_act": "x_act", "mask": "mask", "god": "god_feat", "pub": "pub_feat",
                  "guess_in": "guess_in", "cnt": "cnt_target"}
@@ -58,13 +60,17 @@ class RolloutBuffer:
     def column(self, name: str) -> np.ndarray:
         """Stacked (T, ...) array for one of x_act/mask/god/pub/guess_in/cnt."""
         if self.cols and sum(int(c["n"]) for c in self.cols) == len(self.steps):
+            if name in self._colcache:
+                return self._colcache[name]
             parts = []
             for c in self.cols:
                 a = c[name]
                 if name == "god" and c.get("god_shared"):
                     a = np.broadcast_to(a, (int(c["n"]),) + a.shape)
                 parts.append(a)
-            return np.concatenate(parts) if len(parts) > 1 else np.array(parts[0], copy=False)
+            out = np.concatenate(parts) if len(parts) > 1 else np.asarray(parts[0])
+            self._colcache[name] = out
+            return out
         attr = self._COL_ATTR[name]
         return np.stack([getattr(s, attr) for s in self.steps])
 
@@ -82,6 +88,7 @@ class RolloutBuffer:
         self.steps.extend(other.steps)
         self.games.extend(other.games)
         self.meta.extend(other.meta)
+        self._colcache = {}
         if had_cols and other.cols and sum(int(c["n"]) for c in other.cols) == len(other.steps):
             self.cols.extend(other.cols)
         elif other.steps:

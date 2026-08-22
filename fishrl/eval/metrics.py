@@ -77,7 +77,7 @@ def estimator_metrics(models, batch) -> dict:
             # per-turn buckets: the turn is in the feature tail (turn/40), so this is a
             # group-by on the forward already done -- no extra collection or compute
             from fishrl.data.features import TURN_BUCKETS, TURN_MAX, turn_index_for
-            turn = torch.round(feat[keep][:, turn_index_for(view)] * 40.0)
+            turn = torch.round(feat[:, turn_index_for(view)][keep] * 40.0)   # column first: no 2 GB copy
             sq = (cp - y) ** 2
             hit = ((cp > 0.5).float() == y).float()
             for label, lo, hi in TURN_BUCKETS:

@@ -113,7 +113,7 @@ def fill_critic_values(buf: RolloutBuffer, critic, batch: int = 8192,
         # Landmine guard: encode_public is gated by set_public_encoding — if the gate
         # zeroed it the critic would silently train on nothing. A genuine pub row
         # always carries a nonzero globals tail (life/20 etc.).
-        assert np.abs(feat).sum() > 0.0, \
+        assert np.abs(feat[:256]).sum() > 0.0, \
             "critic_view='public' but pub features are all-zero — set_public_encoding gate?"
     sign = np.array([SEAT_SIGN[s.seat] for s in buf.steps], dtype=np.float32)
     out = np.empty(len(buf.steps), dtype=np.float32)

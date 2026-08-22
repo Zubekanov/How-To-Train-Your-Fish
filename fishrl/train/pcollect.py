@@ -469,7 +469,7 @@ class ParallelCollector:
         self._ring_cap = 0
         self._ring_ver = 0
         self.timing = {"gap_s": 0.0, "play_s": 0.0, "n": 0}
-        self._dec = ThreadPoolExecutor(max_workers=4, thread_name_prefix="pcollect-decode")
+        self._dec = ThreadPoolExecutor(max_workers=12, thread_name_prefix="pcollect-decode")
 
     def _new_executor(self) -> ProcessPoolExecutor:
         # Recycle each worker after this many chunks. Historically this capped an

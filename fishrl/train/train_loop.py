@@ -215,7 +215,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
 
     Logging is consolidated into a status line emitted every cfg.report_every_seconds
     (plus a final line) -- see module docstring."""
-    from fishrl.eval.metrics import estimator_metrics, guesser_mae, panel_winrates
+    from fishrl.eval.metrics import calib_from_sums, estimator_metrics, guesser_mae, panel_winrates
     from fishrl.train.warmup import warmup
     from fishrl.data import features
     from fishrl.spaces import masking
@@ -252,6 +252,13 @@ def train(cfg: Config, models: Models | None = None, log=print,
             "gns_b", "gns_tr_sigma", "gns_g2", "critic_consist_loss")
     acc = {k: 0.0 for k in KEYS}
     win_iters = win_T = 0
+    # Window sums for the by-turn calibration (n/sq/hit per turn slot + per bucket).
+    # The report row's critic_turn aggregates EVERY batch scored this window: one
+    # batch's ~360 games are ~250 effective samples per turn cell (decisions within a
+    # game share the outcome, ICC ~0.96), which reads as vertical streaks on the
+    # by-turn graph; pooling the window's ~50k games removes them.
+    calib_turn = np.zeros((3, features.TURN_MAX))
+    calib_bucket = {lbl: np.zeros(3) for lbl, _lo, _hi in features.TURN_BUCKETS}
     # Per-window game/health telemetry (reset each report alongside the loss means):
     # game endings (truncation/draw), mirror seat balance, scenario vs full-game
     # episode lengths, forced-decision dilution, and the collect/update wall-clock split.
@@ -392,6 +399,10 @@ def train(cfg: Config, models: Models | None = None, log=print,
         est = dict(last_pre_est)                         # pre-update (held-out) calibration
         if not cfg.train_public:                         # pub head disabled -> its calib is meaningless
             est = {k: v for k, v in est.items() if not k.startswith("pub_")}
+        est.pop("_calib_sums", None)
+        if calib_turn[0].sum() > 0:
+            # by-turn keys (critic_turn + buckets) over the whole window, not the last batch
+            est.update(calib_from_sums(calib_turn, calib_bucket))
         gmae = (guesser_mae(m, last_batch)
                 if (last_batch is not None and m.guesser is not None) else float("nan"))
         v3 = cfg.critic_view in features.PUBLIC_FAMILY
@@ -616,6 +627,9 @@ def train(cfg: Config, models: Models | None = None, log=print,
         for k in KEYS:
             acc[k] = 0.0
         win_iters = win_T = 0
+        calib_turn[:] = 0.0
+        for v in calib_bucket.values():
+            v[:] = 0.0
         for k in OPP_CATS:
             opp_mix[k] = 0
         for k in AWIN_KINDS:
@@ -1055,6 +1069,11 @@ def train(cfg: Config, models: Models | None = None, log=print,
             if teacher_ref is not None and done < kl_until:
                 kl_now = cfg.kl_teacher_coef * (1.0 - (done - handoff_start) / cfg.kl_teacher_iters)
             last_pre_est = estimator_metrics(m, batch)   # score BEFORE fitting this batch
+            cs = last_pre_est.get("_calib_sums")
+            if cs:                                       # window by-turn calibration sums
+                calib_turn += np.asarray(cs["turn"])
+                for lbl, v in cs["bucket"].items():
+                    calib_bucket[lbl] += v
             ppo_stats = ppo_update(batch, m.actor, m.critic, opt_ppo, cfg, ent, rng_seed=done,
                                    ref_actor=teacher_ref, kl_ref_coef=kl_now,
                                    train_actor=not freeze)

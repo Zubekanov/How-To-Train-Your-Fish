@@ -84,3 +84,38 @@ def test_estimator_metrics_per_turn_buckets():
     assert len(ct["n"]) == 40 and ct["n"][0] == 8 and ct["n"][4] == 8 and ct["n"][11] == 8 and ct["n"][39] == 8
     assert ct["n"][1] == 0 and ct["brier"][1] is None
     assert abs(sum(ct["n"][i] * ct["brier"][i] for i in range(40) if ct["n"][i]) / n - est["critic_brier"]) < 1e-3
+
+
+def test_calib_from_sums_matches_per_batch():
+    """Window aggregation: folding one batch's _calib_sums through calib_from_sums
+    reproduces the per-batch by-turn keys exactly; summing the batch with itself
+    doubles every n and leaves every mean unchanged."""
+    import numpy as np
+    from fishrl.data.features import HANDS_DIM, TURN_BUCKETS, TURN_MAX, turn_index_for
+    from fishrl.eval.metrics import calib_from_sums, estimator_metrics
+    torch.manual_seed(0)
+    m = build_models(_cfg())
+    n = 45
+    pub = torch.zeros(n, HANDS_DIM)
+    # includes turn-0 pre-game decisions: in slot 1 of critic_turn, outside every bucket
+    turns = torch.tensor([0, 1, 5, 12, 25, 40, 3, 17, 33] * 5, dtype=torch.float32)
+    pub[:, turn_index_for("hands")] = turns / 40.0
+    batch = {"valid": torch.ones(n, dtype=torch.bool), "y_p1": (torch.rand(n) > 0.5).float(),
+             "pub": pub, "god": torch.zeros(n, 1)}
+    est = estimator_metrics(m, batch)
+    cs = est["_calib_sums"]
+    one = calib_from_sums(np.asarray(cs["turn"]), cs["bucket"])
+    assert one["critic_turn"] == est["critic_turn"]
+    for lbl, _lo, _hi in TURN_BUCKETS:
+        assert one[f"critic_n_{lbl}"] == est[f"critic_n_{lbl}"]
+        assert abs(one[f"critic_brier_{lbl}"] - est[f"critic_brier_{lbl}"]) < 1e-6
+        assert abs(one[f"critic_acc_{lbl}"] - est[f"critic_acc_{lbl}"]) < 1e-6
+    # turn-0 rows pool into slot 1 but are outside the buckets
+    assert est["critic_turn"]["n"][0] == 10 and est["critic_n_t1_10"] == 15
+    two = calib_from_sums(np.asarray(cs["turn"]) * 2,
+                          {k: np.asarray(v) * 2 for k, v in cs["bucket"].items()})
+    assert two["critic_turn"]["n"] == [2 * v for v in est["critic_turn"]["n"]]
+    assert two["critic_turn"]["brier"] == est["critic_turn"]["brier"]
+    for lbl, _lo, _hi in TURN_BUCKETS:
+        assert two[f"critic_n_{lbl}"] == 2 * est[f"critic_n_{lbl}"]
+        assert abs(two[f"critic_brier_{lbl}"] - est[f"critic_brier_{lbl}"]) < 1e-6

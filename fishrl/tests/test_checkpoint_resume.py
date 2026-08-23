@@ -117,7 +117,9 @@ def test_train_writes_stats_report(tmp_path):
     assert rec["it"] == 1 and rec["source"] == "live"
     for k in ("policy_loss", "critic_loss", "entropy", "gmae"):
         assert k in rec
-    assert not any(k.startswith("wr_") for k in rec)   # win-rates are NOT on report rows
+    # win-rate POINT ESTIMATES are not on report rows (they live in "evals"); the
+    # harvested [wins, games] counts (wr_train, since the relay work) are allowed.
+    assert not any(k.startswith("wr_") for k in rec if k != "wr_train")
     assert len(data["evals"]) == 1              # the inline panel went to the eval array instead
     ev = data["evals"][0]
     assert ev["it"] == 1 and ev["source"] == "inline" and "heuristic" in ev
@@ -131,3 +133,33 @@ def test_resume_rejects_encoder_mismatch(tmp_path):
     bad = _cfg(iters=2, seed=1, actor_encoder="entity")   # saved actor encoder was "flat"
     with pytest.raises(ValueError, match="encoder mismatch"):
         train(bad, build_models(bad), resume_path=latest, checkpoint_path=latest)
+
+
+@slow
+def test_v3_report_row_by_turn_calibration(tmp_path):
+    """v3 rows carry window-AGGREGATED by-turn calibration: critic_turn totals cover
+    every batch scored in the window (3 iterations here), and the bucket keys are
+    consistent with the slot array (buckets exclude turn-0 pre-game decisions)."""
+    import json
+
+    from fishrl.train import stats as stats_io
+
+    latest = ckpt.latest_path(str(tmp_path))
+    # max_decisions must let games FINISH: truncated games carry no outcome (valid=0),
+    # and with none finished estimator_metrics returns {"n": 0} -> critic_turn null.
+    cfg = _cfg(iters=3, seed=5, warmup_games=0, report_winrate_games=0,
+               max_decisions=800, belief_mode="bookkeeper", critic_view="public")
+    train(cfg, build_models(cfg), checkpoint_path=latest)
+    with open(stats_io.stats_path(str(tmp_path))) as f:
+        data = json.load(f)
+    rec = data["reports"][-1]
+    assert rec["iters"] == 3
+    ct = rec["critic_turn"]
+    slot_n = sum(ct["n"])
+    bucket_n = sum(rec[f"critic_n_{lbl}"] for lbl in ("t1_10", "t11_20", "t21_30", "t31p"))
+    assert slot_n > 0 and bucket_n <= slot_n          # turn-0 rows pool in slots only
+    # every slot with data has a brier; empty slots are None
+    assert all((b is None) == (n == 0) for n, b in zip(ct["n"], ct["brier"]))
+    # slot-weighted brier == overall row brier is only true batch-wise pre-aggregation;
+    # but each aggregated slot mean must stay in [0, 1]
+    assert all(b is None or 0.0 <= b <= 1.0 for b in ct["brier"])

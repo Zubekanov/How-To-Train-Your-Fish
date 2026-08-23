@@ -355,7 +355,7 @@ def main():
         print("final win-rates:",
               panel_winrates(models, n_games=100, use_belief=cfg.use_belief,
                              max_decisions=cfg.max_decisions), flush=True)
-        print("estimators:", estimator_metrics(models, collect_eval_batch(models, n_games=8)), flush=True)
+        print("estimators:", {k: v for k, v in estimator_metrics(models, collect_eval_batch(models, n_games=8)).items() if not k.startswith("_")}, flush=True)
 
 
 if __name__ == "__main__":

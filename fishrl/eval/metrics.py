@@ -80,12 +80,14 @@ def estimator_metrics(models, batch) -> dict:
             turn = torch.round(feat[:, turn_index_for(view)].cpu()[keep] * 40.0)   # column first: no 2 GB copy
             sq = (cp - y) ** 2
             hit = ((cp > 0.5).float() == y).float()
+            bsum = {}
             for label, lo, hi in TURN_BUCKETS:
                 s = (turn >= lo) & (turn <= hi)
                 n_b = int(s.sum())
                 out[f"critic_n_{label}"] = n_b
                 out[f"critic_brier_{label}"] = float(sq[s].mean()) if n_b else float("nan")
                 out[f"critic_acc_{label}"] = float(hit[s].mean()) if n_b else float("nan")
+                bsum[label] = (n_b, float(sq[s].sum()), float(hit[s].sum()))
             # turn-by-turn: index t-1 for turns 1..TURN_MAX-1, the last slot pools TURN_MAX+
             # (bincount on the same tensors -- one pass, no extra forward)
             tb = turn.clamp(1, TURN_MAX).long() - 1
@@ -97,6 +99,16 @@ def estimator_metrics(models, batch) -> dict:
                 "n": [int(v) for v in n_t.tolist()],
                 "brier": [round(float(b / c), 4) if c > 0 else None for b, c in zip(sq_t, n_t)],
                 "acc": [round(float(h / c), 4) if c > 0 else None for h, c in zip(hit_t, n_t)],
+            }
+            # Raw sums for WINDOW aggregation (train_loop accumulates these across every
+            # batch scored in a report window, then folds them back through
+            # calib_from_sums). One batch's ~360 games give only ~250 effective samples
+            # per turn cell -- decisions within a game share the outcome (ICC ~0.96) --
+            # so per-batch by-turn numbers streak; the window pools ~2 orders more games.
+            out["_calib_sums"] = {
+                "turn": (out["critic_turn"]["n"], [float(v) for v in sq_t.tolist()],
+                         [float(v) for v in hit_t.tolist()]),
+                "bucket": bsum,
             }
             # deterministic-transition jump: |V(s') - V(s)| in p1 win-prob over consecutive
             # decisions of the SAME seat in the SAME game with no opponent decision in
@@ -127,6 +139,27 @@ def estimator_metrics(models, batch) -> dict:
     return {"n": int(y.numel()),
             "priv_acc": acc(cp), "pub_acc": acc(pub),
             "priv_brier": brier(cp), "pub_brier": brier(pub)}
+
+
+def calib_from_sums(turn_sums, bucket_sums) -> dict:
+    """Fold accumulated _calib_sums (added element-wise over any number of batches)
+    back into the by-turn report keys: the critic_turn arrays plus the TURN_BUCKETS
+    keys. Same definitions as the per-batch path -- a single batch's sums reproduce
+    estimator_metrics' own numbers (bucket sums are kept separately because turn-0
+    pre-game decisions pool into slot 1 but are outside every bucket)."""
+    from fishrl.data.features import TURN_BUCKETS
+    n_t, sq_t, hit_t = turn_sums
+    out = {"critic_turn": {
+        "n": [int(v) for v in n_t],
+        "brier": [round(float(s / c), 4) if c > 0 else None for s, c in zip(sq_t, n_t)],
+        "acc": [round(float(h / c), 4) if c > 0 else None for h, c in zip(hit_t, n_t)],
+    }}
+    for label, _lo, _hi in TURN_BUCKETS:
+        n_b, sq_b, hit_b = bucket_sums[label]
+        out[f"critic_n_{label}"] = int(n_b)
+        out[f"critic_brier_{label}"] = float(sq_b / n_b) if n_b else float("nan")
+        out[f"critic_acc_{label}"] = float(hit_b / n_b) if n_b else float("nan")
+    return out
 
 
 def guesser_mae(models, batch) -> float:

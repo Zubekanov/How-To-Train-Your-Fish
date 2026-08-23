@@ -27,7 +27,7 @@ def main():
                  minibatch=256, max_decisions=2000, device=device)
     models = train(cfg, build_models(cfg))
     batch = collect_eval_batch(models, n_games=8)
-    print("estimators:", estimator_metrics(models, batch))
+    print("estimators:", {k: v for k, v in estimator_metrics(models, batch).items() if not k.startswith("_")})
     print("guesser MAE:", round(guesser_mae(models, batch), 4))
     print("win-rate vs random:   ", winrate_vs_random(models, n_games=20))
     print("win-rate vs heuristic:", winrate_vs_heuristic(models, n_games=20))

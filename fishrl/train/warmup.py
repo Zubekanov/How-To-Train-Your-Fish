@@ -19,6 +19,8 @@ from fishrl.train.losses import guesser_poisson, outcome_bce
 
 
 def warmup(guesser, critic, public_est, cfg, seed: int = 0) -> dict:
+    if cfg.warmup_games <= 0:
+        return {"skipped": "warmup_games=0"}
     rng = np.random.default_rng(seed)
     mode = getattr(cfg, "belief_mode", None) or ("guesser" if guesser is not None else "none")
     view = getattr(cfg, "critic_view", "god")
@@ -29,7 +31,8 @@ def warmup(guesser, critic, public_est, cfg, seed: int = 0) -> dict:
     batch = buf.compute(cfg.gamma, cfg.lam)
     M = batch["x_act"].shape[0]
     dev = device_of(critic)
-    feat_key = "pub" if view == "public" else "god"
+    from fishrl.data.features import PUBLIC_FAMILY
+    feat_key = "pub" if view in PUBLIC_FAMILY else "god"   # "hands" rides pub too
 
     opt_g = torch.optim.Adam(guesser.parameters(), lr=cfg.lr_guesser) if guesser is not None else None
     opt_c = torch.optim.Adam(critic.parameters(), lr=cfg.lr_ppo)

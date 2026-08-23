@@ -97,6 +97,28 @@ class Step:
                                # the label domain of the public critic's parity aux head
 
 
+# Actions that are pure bookkeeping inside one decision chain (paying, picking a
+# target, choosing a text-change pair): the next decision of the same seat after one
+# of these carries NO new information, so V should not move across it. PLAY_HAND /
+# PASS / END_TURN are deliberately excluded: the opponent's forced pass is not a
+# recorded decision, so "no opponent decision between" can still span a spell
+# resolving -- a legitimate value change (penalising it at lam=50 flattened the
+# cast signal and stalled the h1.3 climb, 2026-08-23).
+PAY_KINDS = ("TAP_LAND", "ALLOC_MANA", "PICK_SINGLE", "PICK_A", "PICK_B", "PICK_NONE",
+             "TEXT_CHANGE", "COMMIT", "PLAY_ORDER")
+_PAY_TABLE = None
+
+
+def pay_action_table() -> np.ndarray:
+    """bool[A.N]: action id is a PAY_KINDS bookkeeping action."""
+    global _PAY_TABLE
+    if _PAY_TABLE is None:
+        from fishrl.spaces import action_space as A
+        _PAY_TABLE = np.array([str(A.decode(i)).split(",")[0].strip("(' ") in PAY_KINDS
+                               for i in range(A.N)], dtype=np.bool_)
+    return _PAY_TABLE
+
+
 # column name -> Step attribute, for the big per-step arrays
 _COL_ATTR = {"x_act": "x_act", "mask": "mask", "god": "god_feat", "pub": "pub_feat",
              "guess_in": "guess_in", "cnt": "cnt_target"}
@@ -319,9 +341,12 @@ class RolloutBuffer:
         # for Config.critic_td_mix. Lives in [-1, 1] like the outcome it blends with.
         ret_p1 = np.zeros(T, dtype=np.float32)
         # index of the next decision of the SAME seat in the SAME game with no opponent
-        # decision in between (steps are appended in decision order), else -1: the
-        # deterministic tap/float/pay/cast chains the critic-jump telemetry scores.
+        # decision in between (steps are appended in decision order) AND whose action
+        # here is a PAY_KINDS bookkeeping step, else -1: the information-free
+        # tap/pick/commit chains the critic-jump telemetry and critic_consistency use.
         det_next = np.full(T, -1, dtype=np.int64)
+        action = self.scalar("action")
+        is_pay = pay_action_table()[action]
         segments: dict[tuple, list[int]] = {}
         for i in range(T):
             segments.setdefault((int(game_id[i]), bool(seat_p1[i])), []).append(i)
@@ -338,7 +363,7 @@ class RolloutBuffer:
             ret_p1[ia] = sgn * ret
             nxt = ia[1:]
             here = ia[:-1]
-            adjacent = nxt == here + 1
+            adjacent = (nxt == here + 1) & is_pay[here]
             det_next[here[adjacent]] = nxt[adjacent]
             if p1 and p1_adv_weight != 1.0:
                 a = a * p1_adv_weight
@@ -357,7 +382,7 @@ class RolloutBuffer:
             "persp": torch.as_tensor(x_act[:, :OBS_DIM], dtype=torch.float32),
             "prev_guess": torch.as_tensor(self.column("guess_in"), dtype=torch.float32),
             "mask": torch.as_tensor(self.column("mask")).to(torch.float32),
-            "action": torch.as_tensor(self.scalar("action"), dtype=torch.long),
+            "action": torch.as_tensor(action, dtype=torch.long),
             "old_logp": torch.as_tensor(self.scalar("logp"), dtype=torch.float32),
             "adv": torch.as_tensor(adv, dtype=torch.float32),
             "ret_p1": torch.as_tensor(ret_p1, dtype=torch.float32),

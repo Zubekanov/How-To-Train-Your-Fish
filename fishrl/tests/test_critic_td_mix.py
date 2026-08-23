@@ -15,9 +15,14 @@ from fishrl.train.train_loop import build_models
 from fishrl.tests.test_critic_epochs import _batch, _cfg
 
 
+def _tap():
+    from fishrl.spaces import action_space as A
+    return A.aid("TAP_LAND", 0)
+
+
 def _step(seat, value, winner, gid=0):
     return Step(seat=seat, x_act=np.zeros(4, dtype=np.float32), mask=np.ones(2, dtype=np.int8),
-                action=0, logp=0.0, value=value, god_feat=np.zeros(2, dtype=np.float32),
+                action=_tap(), logp=0.0, value=value, god_feat=np.zeros(2, dtype=np.float32),
                 pub_feat=np.zeros(2, dtype=np.float32), guess_in=np.zeros(2, dtype=np.float32),
                 cnt_target=np.zeros(2, dtype=np.float32), winner=winner, game_id=gid)
 
@@ -30,8 +35,10 @@ def test_buffer_ret_p1_and_det_next():
     for s, v, w, g in seq:
         buf.add(_step(s, v, w, g))
     b = buf.compute(0.99, 0.9)
-    # det_next: same game, same seat, adjacent rows only
+    # det_next: same game, same seat, adjacent rows, and a PAY_KINDS action here
     assert b["det_next"].tolist() == [1, -1, -1, -1, 5, -1]
+    buf.steps[0].action = 0                                  # a non-pay action: no pair
+    assert buf.compute(0.99, 0.9)["det_next"].tolist() == [-1, -1, -1, -1, 5, -1]
     # ret_p1 = seat sign * lambda-return, independent of the p1 weight / normalisation
     _, r0 = gae(np.array([0.2, 0.1, 0.0], np.float32), np.array([0, 0, -1.0], np.float32), 0.99, 0.9)
     _, r2 = gae(np.array([-0.1], np.float32), np.array([1.0], np.float32), 0.99, 0.9)     # p2 frame: p2 won

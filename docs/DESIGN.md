@@ -736,7 +736,15 @@ forward — the number that should fall when `b > 0`. Resume-tunable launcher fl
 (2026-08-23, 30 rows):** jump back at 0.018, Brier +.007, acc −2pp, no late-turn sharpening —
 reverted to 0. Replaced by **`critic_consistency`**: `λ·(p(s)−p(s′))²` on same-turn `det_next`
 pairs (both ends are the critic's own output, so it cannot move calibration). λ = 1 was inert;
-λ = 50 cut the jump to 0.011 / 0.032 (−40%) on its first row with Brier/acc inside the band.
+λ = 50 cut the jump to 0.011 / 0.032 (−40%) on its first row with Brier/acc inside the band —
+and then **stalled the h1.3 climb** (.413 → .39 plateau from it≈78.7k). The `det_next` pairs had
+included PLAY_HAND/PASS/END_TURN first actions: the opponent's forced pass is not a recorded
+decision, so "no opponent decision between" spanned a spell *resolving*, and λ = 50 flattened the
+legitimate cast value. The batch itself was verified bit-identical (Step-free vs Step-backed on
+real games). `det_next` is now restricted to `PAY_KINDS` bookkeeping actions (tap / mana /
+target pick / text-change choice / commit / play order, ~31% of decisions); the jump telemetry
+shares the definition. Deployed with λ = 0 for a clean recovery read; re-enable on the restricted
+pairs afterwards.
 
 **`obs_counts` (2026-08-22, cloud it≈64k):** a COUNT_DIM=22 block on the globals tail of the actor
 input (after the bookkeeper belief: per-name cards the viewer cannot see + graveyard/40 + exile/8)

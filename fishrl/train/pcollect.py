@@ -310,24 +310,6 @@ _SHM_TRANSPORT = os.name == "posix"           # POSIX shm persists until unlink;
 _SHM_KEYS = ("x_act", "pub", "mask", "guess_in", "cnt", "god")   # frees it with the last handle
 
 
-def _raise_fd_limit(want: int = 65536) -> None:
-    """Zero-copy decode keeps one fd per mapped game block until its views die
-    (the mmap dup's the fd); two iterations of 360 games overlap at the take() seam,
-    plus ~300 worker pipes -- the default 1024 soft limit crashed the trainer
-    (2026-08-22). Lift the soft limit toward the hard one."""
-    if os.name != "posix":
-        return
-    try:
-        import resource
-        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-        new = min(max(soft, want), hard) if hard != resource.RLIM_INFINITY else max(soft, want)
-        if new > soft:
-            resource.setrlimit(resource.RLIMIT_NOFILE, (new, hard))
-            print(f"[pcollect] RLIMIT_NOFILE {soft} -> {new}", flush=True)
-    except Exception as e:                         # noqa: BLE001
-        print(f"[pcollect] could not raise RLIMIT_NOFILE: {e!r}", flush=True)
-
-
 def sweep_stale_shm(root: str = "/dev/shm") -> int:
     """Unlink fishrl_<owner>_<worker>_<n> blocks whose owner trainer is dead."""
     if os.name != "posix" or not os.path.isdir(root):

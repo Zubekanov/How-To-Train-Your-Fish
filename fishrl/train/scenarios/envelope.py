@@ -41,6 +41,9 @@ UNDOING = "Day's Undoing"
 # regardless of turn. Values from the 2026-08-21 per-turn snapshot census.
 ENVELOPE = {
     #            turn      life p(20,16,12,8,4)         lands   nonisl  hand    lib       gy
+    # "1-5" measured 2026-08-24 from 600 traced v3-vs-1.3 games (turns 3-5, ~28k
+    # decisions): life 20 in ~98%, hand p10-p90 5-7, library 61-64, fish 0/1.
+    "1-5":    dict(turn=(3, 5),   life=(.97, .03, .00, .00, .00), lands=(2, 5),  hand=(5, 7), lib=(58, 65), gy=(0, 4)),
     "6-10":   dict(turn=(6, 10),  life=(.85, .10, .04, .01, .00), lands=(2, 4),  hand=(3, 6), lib=(55, 62), gy=(2, 8)),
     "11-16":  dict(turn=(11, 16), life=(.75, .12, .08, .04, .01), lands=(4, 7),  hand=(1, 6), lib=(41, 56), gy=(6, 18)),
     "17-24":  dict(turn=(17, 24), life=(.62, .15, .11, .08, .04), lands=(5, 10), hand=(1, 6), lib=(25, 47), gy=(11, 31)),

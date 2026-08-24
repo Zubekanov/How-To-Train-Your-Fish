@@ -149,3 +149,50 @@ def test_samples_stay_inside_the_envelope_bands():
         assert set(lives) <= set(LIFE_LEVELS)
         assert np.mean([v == 20 for v in lives]) >= 0.4
         assert max(v for x in ps for v in x["fish"].values()) <= 2
+
+
+def test_fof_split_starts_with_fof_on_the_stack_and_reaches_the_split():
+    from fishrl.train.scenarios.constructed import FofSplit
+    env = ScenarioEnv(_small(FofSplit), max_decisions=2000)
+    for seed in range(6):
+        env.reset(seed=seed); g = env.g
+        assert g.active_player == "p2" and g.priority_player == "p1"
+        assert len(g.stack) == 1 and g.stack[0].controller == "p2"
+        assert g.objects[g.stack[0].source_instance_id].name == "Fact or Fiction"
+        assert len(g.library) >= 5, "FoF must have a full top five to reveal"
+        # p1 passing resolves it (p2 already passed): the SPLIT lands on p1, and the
+        # revealed five are literally the top of the constructed library
+        top5 = [c.instance_id for c in g.library[:5]]
+        E.pass_priority(g, "p1")
+        assert g.pending is not None and g.pending.type == "fof_split"
+        assert g.pending.player == "p1"
+        assert sorted(g.pending.context["revealed"]) == sorted(top5)
+
+
+def test_fof_pick_holds_the_spell_with_mana_up():
+    from fishrl.train.scenarios.constructed import FofPick
+    env = ScenarioEnv(_small(FofPick), max_decisions=2000)
+    for seed in range(6):
+        env.reset(seed=seed); g = env.g
+        assert "Fact or Fiction" in _names(g, g.players["p1"].hand)
+        untapped = sum(1 for i in g.players["p1"].battlefield
+                       if is_land(g.objects[i]) and not g.objects[i].tapped)
+        assert untapped >= 4, "must be able to actually cast it"
+        assert not g.stack
+
+
+def test_opening_race_is_an_early_game():
+    from fishrl.train.scenarios.constructed import OpeningRace
+    scn = _small(OpeningRace)
+    env = ScenarioEnv(scn, max_decisions=2000)
+    fish_rel = []
+    for seed in range(12):
+        env.reset(seed=seed); g = env.g
+        assert g.turn_number <= 6
+        assert g.players["p1"].life in (20, 16) and g.players["p2"].life in (20, 16)
+        band = ENVELOPE["1-5"]
+        # zone conservation may clamp a couple below the band's low edge
+        assert band["lib"][0] - 4 <= scn.last["library"] <= band["lib"][1]
+        assert band["hand"][0] <= min(scn.last["hand"].values())
+        fish_rel.append((_fish(g, "p1"), _fish(g, "p2")))
+    assert any(a < b for a, b in fish_rel), "behind-on-fish starts must occur"

@@ -144,7 +144,10 @@ class Config:
                                  "response_window_bend": 1.0, "protect_the_fish": 1.0,
                                  "removal_in_hand": 1.0, "deckout_short": 1.0,
                                  "deckout_with_fish": 1.0, "lethal_on_board": 1.0,
-                                 "steer_the_top": 1.0, "undoing_call": 1.0})
+                                 "steer_the_top": 1.0, "undoing_call": 1.0,
+                                 # FoF split/pick + opening race (2026-08-24)
+                                 "fof_split": 1.0, "fof_pick": 1.0,
+                                 "opening_race": 1.0})
     # scenarios_in_pool only: a flat multiplier on every scenario member's PFSP
     # sampling weight (composes with the per-scenario scenario_weights prior).
     # Scenario episodes are far shorter than full games (~1/4 the decisions), so

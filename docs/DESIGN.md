@@ -340,6 +340,17 @@ natural game result. Members: `fish_war`, `response_window` (+`_bend`), `protect
 (first-blood race, passing with an instant up, removal aimed at lands, the parity endgame).
 v3-best starting win rates 0.15–0.57.
 
+Added 2026-08-24 (weakness mine at it=80k, re-measured flat at it=98.5k): `fof_split` — p2's
+Fact or Fiction on the stack; the revealed five are the actual top of the envelope-built
+library (fully random, no authored pile), p1 splits, the v1.3 seat picks. ~20% of the agent's
+splits were the degenerate 0–5 at BOTH checkpoints (game wr .27 vs .51 for 2–3 splits) while
+overall wr climbed .41→.53 — the split is 5–6 `PICK` toggles whose payoff routes through the
+opponent's choice, and general training demonstrably doesn't reach it. `fof_pick` — the same
+resolution from the caster's seat (FoF + 4 untapped in hand; cast timing stays a free
+decision). `opening_race` — new measured `"1-5"` envelope bucket (turns 3–5, life 20 ~98%,
+hand 5–7, lib 58–65); half the starts behind on fish, for the 26% of losses decided before
+v ever reaches 0.5.
+
 **Scenario win-rates are a curriculum signal, never a success metric** (`config.py:90-91`). Judge
 progress on the full-game vs-heuristic eval only.
 

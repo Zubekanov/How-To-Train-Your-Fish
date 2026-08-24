@@ -20,6 +20,15 @@ Which gap each one aims at (Field Guide / Critic's Ledger, 2026-08-21):
   lethal_on_board   survive_lethal with real boards and the real terminator
   steer_the_top     Mystical Tutor value-negative; put-back / split leaks
   undoing_call      Day's Undoing cast 50% more than v1.3, worse when it resolves
+
+2026-08-24 additions (weakness mine at it=80k, re-measured flat at it=98.5k):
+  fof_split         ~20% of the agent's Fact-or-Fiction splits are 0-5 (all five to
+                    the caster) at both checkpoints -- 18.5k iterations of general
+                    training moved everything except this; splits are 5-6 PICK
+                    toggles whose payoff routes through the opponent's pile choice
+  fof_pick          the same resolution from the caster's seat: cast timing + pick
+  opening_race      26% of losses never reach v>=0.5 and are decided by turn 5 (opp
+                    first fish); every earlier bucket started at turn 6+
 """
 from __future__ import annotations
 
@@ -167,5 +176,46 @@ class UndoingCall(Constructed):
         return Overrides(library=(2, 10), p1_hand_require=(UNDOING,))
 
 
+class FofSplit(Constructed):
+    """p2's Fact or Fiction is on the stack, p1 holding priority: answer it, or let
+    it resolve and split the ACTUAL top five of the library -- fully random, whatever
+    the envelope-built deck happens to hold (no authored pile) -- after which the
+    v1.3 seat picks. Unlike response_window, p1's hand is NOT seeded with instants,
+    so the spell usually resolves and the reps land on the split itself."""
+    name = "fof_split"; pool_seed = 1111
+    skeleton = staticmethod(p2_main_stack)
+    buckets = ("11-16", "17-24", "25+")
+
+    def overrides(self, rng):
+        return Overrides(stack_spell={"choices": {"Fact or Fiction": 1.0}})
+
+
+class FofPick(Constructed):
+    """The caster's seat of the same resolution: p1 holds Fact or Fiction with the
+    mana to cast it (nothing forces the cast -- timing stays a decision); when it
+    resolves the v1.3 seat splits with its richest-first stopgap and p1 picks."""
+    name = "fof_pick"; pool_seed = 1112
+    skeleton = staticmethod(any_main)
+    buckets = ("11-16", "17-24")
+
+    def overrides(self, rng):
+        return Overrides(p1_hand_require=("Fact or Fiction",), p1_untapped_min=4)
+
+
+class OpeningRace(Constructed):
+    """Turns 3-5 of the fish race: mostly full life, opening-sized hands, the race
+    for the first resolved fish under way -- half the time already lost (opponent
+    fish up, none of ours). Mulligans can't be practiced here (the hand is kept by
+    construction); the target is the deploy/hold/answer sequencing that decides the
+    26% of losses which never see v>=0.5."""
+    name = "opening_race"; pool_seed = 1113
+    buckets = ("1-5",)
+
+    def overrides(self, rng):
+        rel = str(rng.choice(["behind", "level", "ahead"], p=[0.5, 0.3, 0.2]))
+        return Overrides(fish_relation=rel)
+
+
 CONSTRUCTED = (FishWar, ResponseWindow, ResponseWindowBend, ProtectTheFish, RemovalInHand,
-               DeckoutShort, DeckoutWithFish, LethalOnBoard, SteerTheTop, UndoingCall)
+               DeckoutShort, DeckoutWithFish, LethalOnBoard, SteerTheTop, UndoingCall,
+               FofSplit, FofPick, OpeningRace)

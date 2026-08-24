@@ -400,9 +400,11 @@ def train(cfg: Config, models: Models | None = None, log=print,
         if not cfg.train_public:                         # pub head disabled -> its calib is meaningless
             est = {k: v for k, v in est.items() if not k.startswith("pub_")}
         est.pop("_calib_sums", None)
-        if calib_turn[0].sum() > 0:
-            # by-turn keys (critic_turn + buckets) over the whole window, not the last batch
-            est.update(calib_from_sums(calib_turn, calib_bucket))
+        # Window aggregate kept as a SEPARATE field (critic_turn_win): critic_turn and
+        # the bucket keys stay last-batch (the streaky, per-360-game read Joseph wants
+        # on the graph); the ~50k-game window arrays ride alongside for the rigorous view.
+        win_cal = (calib_from_sums(calib_turn, calib_bucket)
+                   if calib_turn[0].sum() > 0 else None)
         gmae = (guesser_mae(m, last_batch)
                 if (last_batch is not None and m.guesser is not None) else float("nan"))
         v3 = cfg.critic_view in features.PUBLIC_FAMILY
@@ -520,6 +522,10 @@ def train(cfg: Config, models: Models | None = None, log=print,
                        for k in (f"critic_brier_{lbl}", f"critic_acc_{lbl}", f"critic_n_{lbl}")},
                     # turn-by-turn arrays (index t-1; last slot pools TURN_MAX+), same forward
                     "critic_turn": est.get("critic_turn"),
+                    # same arrays aggregated over EVERY batch scored this window (~50k
+                    # games vs the last batch's 360): the low-noise companion series --
+                    # per-batch cells are ~250 effective samples (ICC~0.96 within game)
+                    "critic_turn_win": (win_cal or {}).get("critic_turn"),
                     # deterministic-transition |dV| (same seat, same game, same turn, no
                     # opponent decision between): mean / p90 / pair count
                     "critic_jump_mean": est.get("critic_jump_mean"),

@@ -137,9 +137,9 @@ def test_resume_rejects_encoder_mismatch(tmp_path):
 
 @slow
 def test_v3_report_row_by_turn_calibration(tmp_path):
-    """v3 rows carry window-AGGREGATED by-turn calibration: critic_turn totals cover
-    every batch scored in the window (3 iterations here), and the bucket keys are
-    consistent with the slot array (buckets exclude turn-0 pre-game decisions)."""
+    """v3 rows carry BOTH by-turn calibration series: critic_turn stays the last
+    batch's (the high-variance visual read), critic_turn_win aggregates every batch
+    scored in the window (3 iterations here) -- so its totals can only be larger."""
     import json
 
     from fishrl.train import stats as stats_io
@@ -154,12 +154,12 @@ def test_v3_report_row_by_turn_calibration(tmp_path):
         data = json.load(f)
     rec = data["reports"][-1]
     assert rec["iters"] == 3
-    ct = rec["critic_turn"]
-    slot_n = sum(ct["n"])
+    ct, ctw = rec["critic_turn"], rec["critic_turn_win"]
+    # per-batch: bucket keys came off the SAME batch (turn-0 rows pool in slots only)
     bucket_n = sum(rec[f"critic_n_{lbl}"] for lbl in ("t1_10", "t11_20", "t21_30", "t31p"))
-    assert slot_n > 0 and bucket_n <= slot_n          # turn-0 rows pool in slots only
-    # every slot with data has a brier; empty slots are None
-    assert all((b is None) == (n == 0) for n, b in zip(ct["n"], ct["brier"]))
-    # slot-weighted brier == overall row brier is only true batch-wise pre-aggregation;
-    # but each aggregated slot mean must stay in [0, 1]
-    assert all(b is None or 0.0 <= b <= 1.0 for b in ct["brier"])
+    assert sum(ct["n"]) > 0 and bucket_n <= sum(ct["n"])
+    # window series covers the per-batch one and never loses rows
+    assert sum(ctw["n"]) >= sum(ct["n"])
+    for arr in (ct, ctw):
+        assert all((b is None) == (n == 0) for n, b in zip(arr["n"], arr["brier"]))
+        assert all(b is None or 0.0 <= b <= 1.0 for b in arr["brier"])

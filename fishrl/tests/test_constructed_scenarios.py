@@ -210,6 +210,43 @@ def test_deckout_stack_is_a_small_library_with_a_draw_spell():
         assert not g.stack
 
 
+def test_read_the_target_randomises_the_stack_target():
+    from fishrl.train.scenarios.constructed import ReadTheTarget
+    env = ScenarioEnv(_small(ReadTheTarget), max_decisions=2000)
+    kinds = []
+    for seed in range(14):
+        env.reset(seed=seed); g = env.g
+        assert len(g.stack) == 1 and g.stack[0].controller == "p2"
+        spell = g.objects[g.stack[0].source_instance_id]
+        assert spell.name in ("Crystal Spray", "Mind Bend", "Metamorphose")
+        assert g.stack[0].targets, "the spell must be targeted"
+        tid = g.stack[0].targets[0]["id"]
+        assert tid in g.players["p1"].battlefield, "targets p1's permanent"
+        assert _fish(g, "p1") >= 1, "both target classes must be live"
+        kinds.append("fish" if E._is_creature(g.objects[tid]) else "land")
+        untapped = sum(1 for i in g.players["p1"].battlefield
+                       if is_land(g.objects[i]) and not g.objects[i].tapped)
+        assert untapped >= 2
+    assert "fish" in kinds and "land" in kinds, f"both target kinds must occur: {kinds}"
+
+
+def test_tutor_fetch_and_arrange_the_top_hold_the_card():
+    from fishrl.train.scenarios.constructed import ArrangeTheTop, TutorFetch
+    env = ScenarioEnv(_small(TutorFetch), max_decisions=2000)
+    for seed in range(6):
+        env.reset(seed=seed); g = env.g
+        assert "Mystical Tutor" in _names(g, g.players["p1"].hand)
+        untapped = sum(1 for i in g.players["p1"].battlefield
+                       if is_land(g.objects[i]) and not g.objects[i].tapped)
+        assert untapped >= 2 and not g.stack
+    env = ScenarioEnv(_small(ArrangeTheTop), max_decisions=2000)
+    for seed in range(6):
+        env.reset(seed=seed); g = env.g
+        assert any(n in ("Ponder", "Brainstorm", "Predict")
+                   for n in _names(g, g.players["p1"].hand))
+        assert g.active_player == "p1" and not g.stack
+
+
 def test_opening_race_is_an_early_game():
     from fishrl.train.scenarios.constructed import OpeningRace
     scn = _small(OpeningRace)

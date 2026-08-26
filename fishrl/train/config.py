@@ -149,7 +149,10 @@ class Config:
                                  "fof_split": 1.0, "fof_pick": 1.0,
                                  "opening_race": 1.0,
                                  # plateau mine (2026-08-26)
-                                 "hold_the_answer": 1.0, "deckout_stack": 1.0})
+                                 "hold_the_answer": 1.0, "deckout_stack": 1.0,
+                                 # obs_ctx warm-up batch (2026-08-26)
+                                 "read_the_target": 1.0, "tutor_fetch": 1.0,
+                                 "arrange_the_top": 1.0})
     # scenarios_in_pool only: a flat multiplier on every scenario member's PFSP
     # sampling weight (composes with the per-scenario scenario_weights prior).
     # Scenario episodes are far shorter than full games (~1/4 the decisions), so

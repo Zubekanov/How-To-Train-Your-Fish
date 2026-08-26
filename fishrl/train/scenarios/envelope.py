@@ -89,7 +89,7 @@ class Overrides:
                  p1_life_min=None, p1_life_max=None, lethal_on_p1=False,
                  p1_hand_require=(), p1_hand_require_one_of=(), p2_hand_require=(),
                  library=None, p1_untapped_min=0, p2_islands=None,
-                 stack_spell=None, top_known_to_p1=False):
+                 stack_spell=None, stack_target=None, top_known_to_p1=False):
         self.p1_fish, self.p2_fish = p1_fish, p2_fish
         self.total_fish_min, self.fish_relation = total_fish_min, fish_relation
         self.p1_life_min, self.p1_life_max, self.lethal_on_p1 = p1_life_min, p1_life_max, lethal_on_p1
@@ -100,6 +100,7 @@ class Overrides:
         self.p1_untapped_min = p1_untapped_min
         self.p2_islands = p2_islands
         self.stack_spell = stack_spell        # {"choices": {name: prob}} -> p2 spell put on the stack
+        self.stack_target = stack_target      # None (fish-first legacy) | "fish" | "land"
         self.top_known_to_p1 = top_known_to_p1
 
 
@@ -281,7 +282,7 @@ def envelope_sample(g, rng, bucket: str, ov: Overrides | None = None) -> dict:
         if p.held_step and p.held_step[0] == old:
             p.held_step = [turn, p.held_step[1]]
     if stack_iid is not None:
-        _put_spell_on_stack(g, "p2", stack_iid, rng)
+        _put_spell_on_stack(g, "p2", stack_iid, rng, target=ov.stack_target)
 
     # ── invariants ────────────────────────────────────────────────────────────
     for s in ("p1", "p2"):
@@ -295,10 +296,13 @@ def envelope_sample(g, rng, bucket: str, ov: Overrides | None = None) -> dict:
             "stack": stack_name}
 
 
-def _put_spell_on_stack(g, caster: str, iid: str, rng) -> None:
+def _put_spell_on_stack(g, caster: str, iid: str, rng, target: str | None = None) -> None:
     """p2 has cast `iid` and passed priority to p1 (the skeleton's priority state).
     Uses the engine's own play_card so the log, zone and knowledge bookkeeping are
-    the real thing; targets are chosen legally for the board."""
+    the real thing; targets are chosen legally for the board. `target` forces the
+    class of the chosen target ("fish" / "land"; falls back to what exists) — the
+    read_the_target scenario randomises it so the obs_ctx stack-target channel is
+    the decisive input (2026-08-26)."""
     o = g.objects[iid]
     put_hand(g, caster, iid)
     if o.name == "Vision Charm":
@@ -309,11 +313,13 @@ def _put_spell_on_stack(g, caster: str, iid: str, rng) -> None:
     so.stack_id = f"scn{int(rng.integers(1 << 30)):08x}"
     if o.name in ("Mind Bend", "Crystal Spray", "Metamorphose"):
         opp = "p1" if caster == "p2" else "p2"
-        fish = [i for i in g.players[opp].battlefield if E._is_creature(g.objects[i])]
-        tgt = fish[int(rng.integers(len(fish)))] if fish else None
-        if tgt is None:                                   # no fish to aim at: any permanent
-            perms = list(g.players[opp].battlefield)
-            tgt = perms[int(rng.integers(len(perms)))]
+        perms = list(g.players[opp].battlefield)
+        fish = [i for i in perms if E._is_creature(g.objects[i])]
+        lands = [i for i in perms if is_land(g.objects[i])]
+        pool = (lands if target == "land" and lands
+                else fish if target == "fish" and fish
+                else fish or perms)
+        tgt = pool[int(rng.integers(len(pool)))]
         so.targets = [{"type": "object", "id": tgt}]
         g.log[-1] = g.log[-1].rstrip(".") + f" targeting {g.objects[tgt].name}."
     # pay for it: tap the caster's lands

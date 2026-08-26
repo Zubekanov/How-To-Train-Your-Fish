@@ -40,6 +40,22 @@ Which gap each one aims at (Field Guide / Critic's Ledger, 2026-08-21):
   deckout_stack     the draw-race endgame vs 1.3's aggro-deckout mode: a draw spell
                     in hand at library 4-14, where committing it to the stack at
                     the wrong time is what 52/140 deckout losses died to
+
+2026-08-26 obs_ctx warm-up batch (observability audit fix pack): scenarios where
+the NEWLY VISIBLE channels are the decisive information, concentrating reps on
+the zero-initialised context columns:
+  read_the_target   p2 text-changer on the stack with the TARGET randomised
+                    between p1's fish and p1's land -- the right response depends
+                    exactly on the stack-target channel that was bit-identical
+                    before obs_ctx (the audit's widest hole, 28.9 rows/game)
+  tutor_fetch       Mystical Tutor in hand with mana up: the search's fetch
+                    choice only became meaningful with the name-sorted PICK remap
+                    + eligible-counts channel (fetches were provably uninformed;
+                    "Tutor value-negative" was this)
+  arrange_the_top   Ponder/Brainstorm/Predict in the mid-late game: top-of-library
+                    arrangement, whose later picks only became informed with the
+                    builder-arrangement mirror (a Ponder reorder previously had
+                    only its first pick informed)
 """
 from __future__ import annotations
 
@@ -259,6 +275,50 @@ class DeckoutStack(Constructed):
                          p1_untapped_min=2)
 
 
+class ReadTheTarget(Constructed):
+    """A p2 text-changer on the stack whose TARGET is randomised between p1's fish
+    (55%) and p1's land (45%), with an instant + mana up: whether to spend the
+    answer depends exactly on what the spell is aimed at -- the stack-target
+    channel the nets could not see before obs_ctx. p1 always has a fish so both
+    target classes are live."""
+    name = "read_the_target"; pool_seed = 1116
+    skeleton = staticmethod(p2_main_stack)
+    buckets = ("11-16", "17-24")
+
+    def overrides(self, rng):
+        spell = str(rng.choice(["Crystal Spray", "Mind Bend", "Metamorphose"],
+                               p=[0.45, 0.3, 0.25]))
+        tgt = "fish" if rng.random() < 0.55 else "land"
+        return Overrides(stack_spell={"choices": {spell: 1.0}}, stack_target=tgt,
+                         p1_fish={1: 0.8, 2: 0.2},
+                         p1_hand_require_one_of=INSTANTS, p1_untapped_min=2)
+
+
+class TutorFetch(Constructed):
+    """Mystical Tutor in hand with the mana to cast it: the fetch decision --
+    which instant/sorcery to put on top -- only became learnable with the
+    name-sorted search order + eligible-counts channel. Timing stays free."""
+    name = "tutor_fetch"; pool_seed = 1117
+    skeleton = staticmethod(any_main)
+    buckets = ("11-16", "17-24", "25+")
+
+    def overrides(self, rng):
+        return Overrides(p1_hand_require=("Mystical Tutor",), p1_untapped_min=2)
+
+
+class ArrangeTheTop(Constructed):
+    """A top-arranger (Ponder / Brainstorm / Predict) in hand in the mid-late
+    game, where the next few draws decide: the reorder/putback sub-decisions
+    only became informed with the builder-arrangement mirror."""
+    name = "arrange_the_top"; pool_seed = 1118
+    buckets = ("17-24", "25+")
+
+    def overrides(self, rng):
+        return Overrides(p1_hand_require_one_of=("Ponder", "Brainstorm", "Predict"),
+                         p1_untapped_min=1)
+
+
 CONSTRUCTED = (FishWar, ResponseWindow, ResponseWindowBend, ProtectTheFish, RemovalInHand,
                DeckoutShort, DeckoutWithFish, LethalOnBoard, SteerTheTop, UndoingCall,
-               FofSplit, FofPick, OpeningRace, HoldTheAnswer, DeckoutStack)
+               FofSplit, FofPick, OpeningRace, HoldTheAnswer, DeckoutStack,
+               ReadTheTarget, TutorFetch, ArrangeTheTop)

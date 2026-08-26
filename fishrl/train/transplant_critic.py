@@ -25,7 +25,7 @@ def transplant(src: str, dst: str) -> dict:
     pd = ckpt.load_checkpoint(dst, map_location="cpu")
     cs = config_from_checkpoint(ps["config"], device="cpu")
     cd = config_from_checkpoint(pd["config"], device="cpu")
-    for k in ("critic_view", "critic_encoder", "card_dim", "obs_counts", "belief_mode"):
+    for k in ("critic_view", "critic_encoder", "card_dim", "obs_counts", "obs_split", "belief_mode"):
         assert getattr(cs, k) == getattr(cd, k), f"config mismatch on {k}: {getattr(cs, k)} vs {getattr(cd, k)}"
     sc, dc = ps["models"]["critic"], pd["models"]["critic"]
     assert set(sc) == set(dc), "critic state_dict keys differ"

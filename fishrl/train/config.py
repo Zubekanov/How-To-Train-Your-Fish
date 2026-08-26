@@ -147,7 +147,9 @@ class Config:
                                  "steer_the_top": 1.0, "undoing_call": 1.0,
                                  # FoF split/pick + opening race (2026-08-24)
                                  "fof_split": 1.0, "fof_pick": 1.0,
-                                 "opening_race": 1.0})
+                                 "opening_race": 1.0,
+                                 # plateau mine (2026-08-26)
+                                 "hold_the_answer": 1.0, "deckout_stack": 1.0})
     # scenarios_in_pool only: a flat multiplier on every scenario member's PFSP
     # sampling weight (composes with the per-scenario scenario_weights prior).
     # Scenario episodes are far shorter than full games (~1/4 the decisions), so
@@ -354,6 +356,13 @@ class Config:
     # belief_mode="bookkeeper" + critic_view="hands". Architecture-defining (persisted);
     # added to a live run by fishrl/train/widen_counts.py (in place, zero-init columns).
     obs_counts: bool = False
+    # FoF split-context block appended after the count block (actor tail + hands
+    # critic): the live pile arrangement during a Fact-or-Fiction resolution — see
+    # fishrl.data.features SPLIT_DIM. Without it both nets are provably blind to
+    # the split they are making (2026-08-26 mine). Needs obs_counts (+ bookkeeper /
+    # hands). Architecture-defining (persisted); added to a live run by
+    # fishrl/train/widen_split.py (in place, zero-init columns).
+    obs_split: bool = False
     actor_encoder: str | None = None
     # critic defaults to entity: it's the measured on-policy calibration winner
     # (Brier 0.261 vs flat 0.342), off the deployment path, and ~free now that the

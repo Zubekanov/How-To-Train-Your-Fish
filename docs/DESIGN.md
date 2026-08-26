@@ -351,6 +351,17 @@ decision). `opening_race` — new measured `"1-5"` envelope bucket (turns 3–5,
 hand 5–7, lib 58–65); half the starts behind on fish, for the 26% of losses decided before
 v ever reaches 0.5.
 
+Added 2026-08-26 (plateau mine at it=122.7k; journal `2026-08-26-weakness-mine-122k.md`):
+`hold_the_answer` — the agent at its own main, empty stack, a text-change instant in hand and
+NO opposing fish to aim it at: the measured habit is to cast it anyway at sorcery speed
+(Vision Charm err +0.083 / 22.5% catastrophic, Crystal Spray +0.054, Mind Bend +0.053 vs
+v1.3, stable it=107k→122k) — and the same casts are ~free in MIRROR games, so self-play
+supplies no pressure; only the v1.3 seat punishes the telegraph. `deckout_stack` — library
+4–14 with a draw spell seeded in hand: v1.3's aggro-deckout mode chains on top of draw spells
+committed to the stack at a small library (52/140 of its deckout kills), so the stack-timing
+skill is trained by natural punishment. (`opening_race` verdict at 122.7k: worked — losses
+decided before v reached 0.5 fell 16.9% → 3.6% of losses.)
+
 **Scenario win-rates are a curriculum signal, never a success metric** (`config.py:90-91`). Judge
 progress on the full-game vs-heuristic eval only.
 
@@ -769,6 +780,25 @@ league selves widened — function-identical at the seam, no reset, KL anchor un
 expected value is actor-side (deckout-window decisions), unmeasurable offline. Same day, the
 graveyard overflow fill became value-first (AK, one per instant/sorcery name, newest of the
 rest) — `encoder.graveyard_order`, bit-identical below 32 cards.
+
+**`obs_split` (2026-08-26, cloud it≈122.7k):** a SPLIT_DIM=64 block after the count block on the
+same two tails (actor input + hands critic): 4 who-acts flags + per-name counts of pile 1 /
+pile 2 / still-unassigned during a Fact-or-Fiction resolution. Motivation: the five revealed
+cards leave the library and live only in `pending.context`, and the splitter's in-progress
+arrangement lived only in the env-side `CompoundBuilder` — NEITHER net could see the split being
+made. Measured at it=122.7k: critic V exactly flat across the five `PICK` toggles (mean |dV|
+0.0000, n=1,587) with the whole ~0.14 swing landing after the opponent's pile choice, so GAE
+handed every toggle identical advantage and could not localize the wrong pick — the mechanism
+behind the 0–5 degenerate-split rate sitting frozen (17% vs h1.3 / 44% mirror) across three
+checkpoints of training and 330k `fof_split` scenario games while the critic's PRICING of the
+outcome sharpened (−0.086 → −0.171). The builder now mirrors its live arrangement into the
+pending context (the engine's own `update_fof_split` + an env-owned `assigned` key), the block
+is filled from `g` alone (`features.split_context_block`; viewer-oriented flags on the actor
+tail, p1-oriented for the critic), and the collectors' compound-substep encode dedupe re-encodes
+while `features.split_live(g)` (the one pending whose context changes within a `decision_id`).
+Added to the live run by `fishrl/train/widen_split.py` — the same zero-column in-place widening
+as `widen_counts` (the block is all-zero outside a FoF resolution, so the seam is
+function-identical everywhere else).
 
 ### 3.3 The eval row — `stats.json → evals[]`
 

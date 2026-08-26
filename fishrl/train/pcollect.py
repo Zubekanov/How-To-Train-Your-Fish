@@ -114,6 +114,7 @@ def _winit(lite: dict) -> None:
         features.set_public_view(lite["critic_view"])
     masking.set_text_change_mode(lite.get("text_change_mode", "full"))
     features.set_count_block(lite.get("obs_counts", False))
+    features.set_split_block(lite.get("obs_split", False))
     _G["owner_pid"] = int(lite.get("owner_pid", 0))
     _G["pool_names"] = list(lite.get("pool_names") or [])
     _G["pool_bytes"] = int(lite.get("pool_bytes", 0))
@@ -548,6 +549,7 @@ class ParallelCollector:
                 "belief_mode": cfg.belief_mode, "critic_view": cfg.critic_view,
                 "text_change_mode": cfg.text_change_mode,
                 "obs_counts": bool(getattr(cfg, "obs_counts", False)),
+                "obs_split": bool(getattr(cfg, "obs_split", False)),
                 "scenario_names": scen_names,
                 "owner_pid": os.getpid(),
                 "affinity": parse_affinity(getattr(cfg, "collect_affinity", ""))}

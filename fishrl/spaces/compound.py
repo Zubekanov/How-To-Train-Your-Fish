@@ -163,6 +163,13 @@ class CompoundBuilder:
             if len(self.assigned) == len(self.items):
                 p1 = [x for x in self.items if x not in self.pile2]
                 return self._finalize(E.complete_fof_split(g, self.player, p1, self.pile2))
+            # Mirror the live arrangement into the pending context (the engine's own
+            # in-progress API + an env-owned `assigned` key) so the feature encoders
+            # can see the piles FORMING — without this, critic V is provably flat
+            # across the five PICK toggles and GAE hands every toggle the same
+            # advantage (measured 2026-08-26; the 0-5 degenerate-split pathology).
+            E.update_fof_split(g, self.player, self.pile2)
+            g.pending.context["assigned"] = list(self.assigned)
             return False
         return False  # pragma: no cover
 

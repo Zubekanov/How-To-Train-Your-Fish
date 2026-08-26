@@ -181,6 +181,35 @@ def test_fof_pick_holds_the_spell_with_mana_up():
         assert not g.stack
 
 
+def test_hold_the_answer_has_the_instant_and_no_target_yet():
+    from fishrl.train.scenarios.constructed import HoldTheAnswer
+    env = ScenarioEnv(_small(HoldTheAnswer), max_decisions=2000)
+    for seed in range(6):
+        env.reset(seed=seed); g = env.g
+        assert any(n in ("Vision Charm", "Crystal Spray", "Mind Bend")
+                   for n in _names(g, g.players["p1"].hand))
+        assert _fish(g, "p2") == 0, "the answer must have no fish target yet"
+        untapped = sum(1 for i in g.players["p1"].battlefield
+                       if is_land(g.objects[i]) and not g.objects[i].tapped)
+        assert untapped >= 2, "the sorcery-speed temptation must be live"
+        assert g.active_player == "p1" and not g.stack
+
+
+def test_deckout_stack_is_a_small_library_with_a_draw_spell():
+    from fishrl.train.scenarios.constructed import DeckoutStack
+    env = ScenarioEnv(_small(DeckoutStack), max_decisions=2000)
+    for seed in range(6):
+        env.reset(seed=seed); g = env.g
+        assert 4 <= len(g.library) <= 14
+        assert any(n in ("Accumulated Knowledge", "Brainstorm", "Predict",
+                         "Fact or Fiction", "Crystal Spray")
+                   for n in _names(g, g.players["p1"].hand))
+        untapped = sum(1 for i in g.players["p1"].battlefield
+                       if is_land(g.objects[i]) and not g.objects[i].tapped)
+        assert untapped >= 2
+        assert not g.stack
+
+
 def test_opening_race_is_an_early_game():
     from fishrl.train.scenarios.constructed import OpeningRace
     scn = _small(OpeningRace)

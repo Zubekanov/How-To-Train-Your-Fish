@@ -81,7 +81,11 @@ def build_models(cfg: Config) -> Models:
     if counts:
         assert cfg.belief_mode == "bookkeeper" and cfg.critic_view == "hands", "obs_counts rides the bookkeeper belief and the hands critic"
     features.set_count_block(counts)
-    extra = features.COUNT_DIM if counts else 0
+    split = bool(getattr(cfg, "obs_split", False))
+    if split:
+        assert counts, "obs_split rides on top of obs_counts (same tail, same nets)"
+    features.set_split_block(split)
+    extra = (features.COUNT_DIM if counts else 0) + (features.SPLIT_DIM if split else 0)
     return Models(
         MaskedActor(cfg.head_hidden("actor"), cfg.enc_for("actor"), cfg.card_dim,
                     in_dim=ACTOR_IN + extra).to(dev),
@@ -122,6 +126,7 @@ def config_from_checkpoint(cd: dict, **overrides) -> Config:
         critic_deckout_aux=float(cd.get("critic_deckout_aux", 0.0)),
         text_change_mode=cd.get("text_change_mode", "full"),
         obs_counts=bool(cd.get("obs_counts", False)),
+        obs_split=bool(cd.get("obs_split", False)),
         hidden=tuple(cd.get("hidden", (256, 256))),
         actor_hidden=tuple(ah) if ah is not None else None,
         critic_hidden=tuple(cd.get("critic_hidden", (512, 512, 256))),
@@ -359,7 +364,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                        "belief_mode": cfg.belief_mode, "critic_view": cfg.critic_view,
                        "critic_deckout_aux": cfg.critic_deckout_aux,
                        "text_change_mode": cfg.text_change_mode,
-                       "obs_counts": cfg.obs_counts},
+                       "obs_counts": cfg.obs_counts, "obs_split": cfg.obs_split},
             "done": done, "elapsed": total_elapsed(), "frozen_it": frozen_it,
             "handoff_start": handoff_start,
             "warmup_done": True,

@@ -29,6 +29,17 @@ Which gap each one aims at (Field Guide / Critic's Ledger, 2026-08-21):
   fof_pick          the same resolution from the caster's seat: cast timing + pick
   opening_race      26% of losses never reach v>=0.5 and are decided by turn 5 (opp
                     first fish); every earlier bucket started at turn 6+
+
+2026-08-26 additions (plateau mine at it=122.7k, journal 2026-08-26):
+  hold_the_answer   text-change instants cast from the agent's OWN main with an
+                    empty stack cost err +0.05..+0.08 vs v1.3 (Vision Charm 22.5%
+                    catastrophic) while the same casts are ~free in mirror games --
+                    the copy never punishes the telegraph, so self-play supplies no
+                    pressure; here the answer is in hand, no target exists yet, and
+                    v1.3 punishes casting it into nothing
+  deckout_stack     the draw-race endgame vs 1.3's aggro-deckout mode: a draw spell
+                    in hand at library 4-14, where committing it to the stack at
+                    the wrong time is what 52/140 deckout losses died to
 """
 from __future__ import annotations
 
@@ -216,6 +227,38 @@ class OpeningRace(Constructed):
         return Overrides(fish_relation=rel)
 
 
+class HoldTheAnswer(Constructed):
+    """The agent at its OWN main, empty stack, holding a text-change instant with
+    the mana to cast it -- and the opponent has no fish yet, so the cast has no
+    good target. The measured habit (err +0.083 Vision Charm / +0.054 Crystal
+    Spray / +0.053 Mind Bend, stable it=107k..122k) is to cast anyway at sorcery
+    speed; v1.3 punishes that, the agent's own copy does not. The right line is
+    usually to hold for the instant window."""
+    name = "hold_the_answer"; pool_seed = 1114
+    buckets = ("11-16", "17-24")
+
+    def overrides(self, rng):
+        return Overrides(p1_hand_require_one_of=("Vision Charm", "Crystal Spray", "Mind Bend"),
+                         p2_fish=0, p1_untapped_min=2)
+
+
+class DeckoutStack(Constructed):
+    """The draw-race endgame: library 4-14, both clocks live, a draw spell in the
+    agent's hand. v1.3's aggro-deckout mode chains on top of draw spells committed
+    to the stack at a small library (52/140 of its deckout kills at it=107k), so
+    mistimed commitments are punished naturally -- the skill is stack timing and
+    parity counting, not a terminal don't-cast rule."""
+    name = "deckout_stack"; pool_seed = 1115
+    skeleton = staticmethod(any_main)
+    buckets = ("lib12",)
+
+    def overrides(self, rng):
+        return Overrides(library=(4, 14),
+                         p1_hand_require_one_of=("Accumulated Knowledge", "Brainstorm",
+                                                 "Predict", "Fact or Fiction", "Crystal Spray"),
+                         p1_untapped_min=2)
+
+
 CONSTRUCTED = (FishWar, ResponseWindow, ResponseWindowBend, ProtectTheFish, RemovalInHand,
                DeckoutShort, DeckoutWithFish, LethalOnBoard, SteerTheTop, UndoingCall,
-               FofSplit, FofPick, OpeningRace)
+               FofSplit, FofPick, OpeningRace, HoldTheAnswer, DeckoutStack)

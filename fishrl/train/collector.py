@@ -13,7 +13,7 @@ import torch
 from fishrl.data.buffer import RolloutBuffer, Step
 from fishrl.data.features import (
     GOD_DIM, PUBLIC_FAMILY, bookkeeper_counts, encode_critic_pub, encode_god,
-    opponent_hand_counts,
+    opponent_hand_counts, split_live,
 )
 from fishrl.models import device_of
 from fishrl.obs import vocab as V
@@ -277,7 +277,10 @@ def collect_vs_opponent(learner, opponent, n_games, base_seed, critic=None,
             if seat == lseat:
                 g = env.g
                 did = env.decision_id
-                if did != cache_id:                        # engine advanced -> fresh encode
+                # split_live: a fof_split's pending context changes WITHIN one
+                # decision_id (the builder mirrors its arrangement), so the
+                # compound-substep dedupe must re-encode those rows.
+                if did != cache_id or split_live(g):       # engine advanced -> fresh encode
                     cache_id = did
                     cache_god = encode_god(g) if critic_view == "god" else _ZERO_GOD
                     cache_pub = encode_critic_pub(g)
@@ -350,7 +353,8 @@ def collect_games(belief_env, act_fn, n_games, base_seed, critic=None,
             x = obs["observation"]
             g = belief_env.g
             did = belief_env.decision_id
-            if did != cache_id:                       # engine advanced -> fresh encode
+            # split_live: fof_split context mutates within a decision_id (see above)
+            if did != cache_id or split_live(g):      # engine advanced -> fresh encode
                 cache_id = did
                 cache_god = encode_god(g) if critic_view == "god" else _ZERO_GOD
                 cache_pub = encode_critic_pub(g)

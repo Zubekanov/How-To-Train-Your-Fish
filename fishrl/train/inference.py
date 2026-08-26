@@ -280,6 +280,7 @@ def _serve_main(shm_name: str, nslots: int, conn, lite: dict) -> None:
     from fishrl.models.policy import MaskedActor, actor_in
 
     features.set_count_block(lite.get("obs_counts", False))
+    features.set_split_block(lite.get("obs_split", False))
     dev = lite["device"] if (not str(lite["device"]).startswith("cuda")
                              or torch.cuda.is_available()) else "cpu"
     ah = tuple(lite.get("actor_hidden") or lite["hidden"])
@@ -378,7 +379,8 @@ class InferenceServer:
                   child, {k: lite[k] for k in
                           ("hidden", "actor_hidden", "card_dim",
                            "enc_actor", "enc_guesser")}
-                  | {"device": lite["device"], "obs_counts": lite.get("obs_counts", False)}),
+                  | {"device": lite["device"], "obs_counts": lite.get("obs_counts", False),
+                     "obs_split": lite.get("obs_split", False)}),
             daemon=True)
         self.proc.start()
 

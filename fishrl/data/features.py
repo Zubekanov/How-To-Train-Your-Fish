@@ -79,6 +79,30 @@ COUNT_DIM = V.N_NAMES + 2
 _COUNTS = False
 
 
+# ── FoF split-context block (Config.obs_split, 2026-08-26) ────────────────────
+# During a Fact-or-Fiction resolution the five revealed cards leave the library
+# (they live only in g.pending.context) and the splitter's in-progress pile
+# arrangement lived only in the env-side CompoundBuilder — so NEITHER the actor
+# NOR the critic could see what was being split: measured at it=122.7k, critic V
+# is EXACTLY flat across the five PICK toggles (mean |dV| 0.0000, n=1,587) with
+# the whole ~0.14 swing landing after the opponent's pile choice, and the 0-5
+# degenerate-split rate sat frozen (17% vs h1.3 / 44% mirror) across three
+# checkpoints while the critic's pricing of it sharpened. The builder now mirrors
+# its live arrangement into the pending context (engine's own update_fof_split +
+# an env-owned "assigned" key), and this block encodes it:
+#   [4]        who acts: split by p1 / split by p2 / choose by p1 / choose by p2
+#              (viewer-oriented me/opp for the actor's tail)
+#   [N_NAMES]  pile-1 per-name counts (assigned so far / offered pile 1)
+#   [N_NAMES]  pile-2 per-name counts
+#   [N_NAMES]  still-unassigned per-name counts (zeros at fof_choose)
+# All zeros outside a FoF resolution — so a zero-column widening of a trained net
+# (fishrl/train/widen_split.py) is function-identical everywhere else, exactly
+# like the count block. Appended AFTER the count block on the actor's belief tail
+# and the hands critic's features; versioned in the checkpoint config (obs_split).
+SPLIT_DIM = 4 + 3 * V.N_NAMES
+_SPLIT = False
+
+
 def set_count_block(enabled: bool) -> None:
     global _COUNTS
     _COUNTS = bool(enabled)
@@ -88,13 +112,56 @@ def count_block_on() -> bool:
     return _COUNTS
 
 
+def set_split_block(enabled: bool) -> None:
+    global _SPLIT
+    _SPLIT = bool(enabled)
+
+
+def split_block_on() -> bool:
+    return _SPLIT
+
+
+def split_live(g) -> bool:
+    """True while a fof_split arrangement is in progress — the one pending whose
+    context (and therefore the split block) changes WITHIN a decision_id, so the
+    collectors' compound-substep encode dedupe must not reuse the cached row."""
+    p = getattr(g, "pending", None)
+    return _SPLIT and p is not None and p.type == "fof_split"
+
+
+def split_context_block(g, viewer: str | None = None) -> np.ndarray:
+    """The SPLIT_DIM block for the current state. `viewer=None` gives the critic's
+    p1-oriented flags; a seat gives the actor's me/opp orientation."""
+    out = np.zeros(SPLIT_DIM, dtype=np.float32)
+    pend = getattr(g, "pending", None)
+    if pend is None or pend.type not in ("fof_split", "fof_choose"):
+        return out
+    ctx = pend.context or {}
+    mine = (pend.player == ("p1" if viewer is None else viewer))
+    out[(0 if mine else 1) + (0 if pend.type == "fof_split" else 2)] = 1.0
+    if pend.type == "fof_split":
+        revealed = ctx.get("revealed", ())
+        assigned = set(ctx.get("assigned", ()))          # env-owned mirror of the builder
+        pile2 = set(i for i in ctx.get("pile2", ()) if i in assigned)
+        pile1 = [i for i in revealed if i in assigned and i not in pile2]
+        unassigned = [i for i in revealed if i not in assigned]
+    else:
+        pile1, pile2 = ctx.get("pile1_ids", ()), ctx.get("pile2_ids", ())
+        unassigned = ()
+    _name_counts_into(g, pile1, out[4:4 + V.N_NAMES])
+    _name_counts_into(g, pile2, out[4 + V.N_NAMES:4 + 2 * V.N_NAMES])
+    _name_counts_into(g, unassigned, out[4 + 2 * V.N_NAMES:4 + 3 * V.N_NAMES])
+    return out
+
+
 def belief_dim() -> int:
-    """Width of the actor's belief tail: the 20-dim bookkeeper (+ COUNT_DIM when on)."""
-    return V.N_NAMES + (COUNT_DIM if _COUNTS else 0)
+    """Width of the actor's belief tail: the 20-dim bookkeeper (+ COUNT_DIM when on,
+    + SPLIT_DIM when on)."""
+    return V.N_NAMES + (COUNT_DIM if _COUNTS else 0) + (SPLIT_DIM if _SPLIT else 0)
 
 
 def hands_dim() -> int:
-    return HANDS_DIM + (COUNT_DIM if _COUNTS else 0)
+    return HANDS_DIM + (COUNT_DIM if _COUNTS else 0) + (SPLIT_DIM if _SPLIT else 0)
 
 
 def pub_dim_for(view: str) -> int:
@@ -214,11 +281,16 @@ def bookkeeper_counts(g, viewer: str) -> np.ndarray:
         belief = known
     else:
         belief = (known + fill * remaining / rtot).astype(np.float32)
-    if not _COUNTS:
+    if not _COUNTS and not _SPLIT:
         return belief
-    # count block: what the viewer cannot see, by name (library + unknown opp hand)
-    return np.concatenate([belief, remaining, np.asarray(_zone_counts_tail(g), dtype=np.float32)]
-                          ).astype(np.float32, copy=False)
+    # count block: what the viewer cannot see, by name (library + unknown opp hand);
+    # split block: the live FoF pile arrangement (viewer-oriented flags)
+    parts = [belief]
+    if _COUNTS:
+        parts += [remaining, np.asarray(_zone_counts_tail(g), dtype=np.float32)]
+    if _SPLIT:
+        parts.append(split_context_block(g, viewer))
+    return np.concatenate(parts).astype(np.float32, copy=False)
 
 
 def _player_scalars(life, hand_count, bf_cards, pool, mulligans, has_lost) -> list:
@@ -404,7 +476,9 @@ def encode_hands(g) -> np.ndarray:
     gv += list(deckout_clock(g, "p1"))
     if _COUNTS:
         gv += list(library_counts(g)) + _zone_counts_tail(g)
-    out[_HANDS_ROWS * CARD_F:] = gv
+    out[_HANDS_ROWS * CARD_F:_HANDS_ROWS * CARD_F + len(gv)] = gv
+    if _SPLIT:
+        out[-SPLIT_DIM:] = split_context_block(g)      # p1-oriented (critic)
     return out
 
 

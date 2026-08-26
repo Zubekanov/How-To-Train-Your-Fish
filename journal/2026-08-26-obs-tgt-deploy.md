@@ -58,7 +58,18 @@ keys, `widen_tgt.py` (K=482 both nets, backup .pre-tgt.pt).
 - Full suite 337 passed, 7 skipped.
 - Rehearsal on the real-checkpoint copy (it=122716, split+ctx): widen_tgt
   +482/+482, 8 league selves, seam OK; 2-update resume smoke clean.
-- Box: STOP → widen_tgt → relaunch (see addendum below for the live numbers).
+- Box: STOP (trainer checkpointed within seconds) → widen_tgt at **it=127,116**
+  (+482/+482, 8 league selves, seam OK, backup latest.pt.pre-tgt.pt) →
+  relaunch. First post-widen window at it=127,245: kl=0.0134 (baseline),
+  critic acc .69 / brier .20, aux 0.612, 513.7 it/h, no errors.
+
+**Deploy-protocol lesson:** never chain the wait-for-exit loop and the widen in
+ONE ssh command line. The loop's `pgrep -f 'python -m [f]ishrl.train'` matched
+its own shell because the same command line contained the literal
+`python -m fishrl.train.widen_tgt` from the chained widen — the `[f]` bracket
+trick protects the pattern from itself, not from a sibling command. The trainer
+had stopped in seconds; the "slow stop" was the loop spinning on itself.
+Ship/stop, wait, and widen/relaunch stay separate calls.
 
 ## Success checks (append to the next mine's list)
 

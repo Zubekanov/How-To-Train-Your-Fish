@@ -160,6 +160,12 @@ def main():
     ap.add_argument("--text-change", choices=["full", "guided", "auto"], default=None,
                     help="choose_text_change action space: full 25-way (legacy), guided "
                          "{EFFECT, NO-OP}, or auto (EFFECT forced). FRESH-only.")
+    ap.add_argument("--obs-ctx", action="store_true", default=None,
+                    help="append the decision-context pack (stack targets / search eligibility / "
+                         "builder arrangements / blocker focus + critic step/pending/combat/pay) "
+                         "to the actor input + hands critic (features.CTX_DIM). Also gates the "
+                         "name-sorted search/graveyard PICK remap. FRESH-only; a live run gets it "
+                         "via python -m fishrl.train.widen_ctx. Needs --obs-split.")
     ap.add_argument("--obs-split", action="store_true", default=None,
                     help="append the FoF split-context block to the actor input + hands critic "
                          "(features.SPLIT_DIM). FRESH-only; a live run gets it via "
@@ -322,6 +328,8 @@ def main():
             v3["obs_counts"] = True
         if args.obs_split:
             v3["obs_split"] = True
+        if args.obs_ctx:
+            v3["obs_ctx"] = True
         cfg = Config(encoder=args.encoder, seed=args.seed,
                      actor_hidden=_parse_hidden(args.actor_hidden),
                      card_dim=args.card_dim, **per_net, **v3, **common)

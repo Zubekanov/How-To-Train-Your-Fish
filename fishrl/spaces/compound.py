@@ -105,6 +105,19 @@ class CompoundBuilder:
                     m[A.aid("PICK_B", i)] = 1   # pile 2
         return m
 
+    def _mirror(self, g, *, a=None, b=None, last=None, focus=None) -> None:
+        """Mirror the in-progress arrangement into the pending context so the
+        feature encoders can see it (Config.obs_ctx; the fof_split pending has
+        its own mirror below via the engine's update_fof_split). Env-owned keys
+        the engine never reads; cheap plain-list writes."""
+        if g is None or g.pending is None or g.pending.context is None:
+            return
+        ctx = g.pending.context
+        if a is not None: ctx["placed_a"] = list(a)
+        if b is not None: ctx["placed_b"] = list(b)
+        if last is not None: ctx["last_placed"] = last
+        if focus is not None: ctx["focus"] = focus
+
     # ── feeding sub-actions ──────────────────────────────────────────────────
     def feed(self, g, action: int) -> bool:
         """Apply one sub-action. Returns True iff the builder finalized (and the
@@ -120,6 +133,7 @@ class CompoundBuilder:
             self.assigned.add(iid)
             if len(self.assigned) == len(self.items):
                 return self._finalize(E.complete_scry(g, self.player, self.top, self.bottom))
+            self._mirror(g, a=self.top, b=self.bottom, last=iid)
             return False
         if t == "reorder":
             if name == "SHUFFLE":
@@ -127,6 +141,7 @@ class CompoundBuilder:
             self.order.append(self.items[i])
             if len(self.order) == len(self.items):
                 return self._finalize(E.complete_reorder(g, self.player, self.order))
+            self._mirror(g, a=self.order, last=self.items[i])
             return False
         if t in ("putback", "bottom", "discard"):
             self.order.append(self.items[i])
@@ -136,6 +151,7 @@ class CompoundBuilder:
                 if t == "bottom":
                     return self._finalize(E.bottom_cards(g, self.player, self.order))
                 return self._finalize(E.discard_to_hand_size(g, self.player, self.order))
+            self._mirror(g, a=self.order, last=self.items[i])
             return False
         if t == "declare_attackers":
             if name == "COMMIT":
@@ -143,17 +159,20 @@ class CompoundBuilder:
             iid = self.items[i]
             if iid not in self.attacking:        # add-only (the mask never re-offers a chosen one)
                 self.attacking.append(iid)
+                self._mirror(g, a=self.attacking, last=iid)
             return False
         if t == "declare_blockers":
             if name == "COMMIT":
                 return self._finalize(E.declare_blockers(g, self.player, self.blocks))
             if name == "PICK_B":
                 self.sel_attacker = i
+                self._mirror(g, focus=i)
                 return False
             if name == "PICK_A" and self.sel_attacker is not None:
                 attacker = self.attackers[self.sel_attacker]
                 self.blocks.setdefault(attacker, []).append(self.items[i])
                 self.used_blockers.add(i)
+                self._mirror(g, a=[self.items[k] for k in self.used_blockers], last=self.items[i])
             return False
         if t == "fof_split":
             iid = self.items[i]

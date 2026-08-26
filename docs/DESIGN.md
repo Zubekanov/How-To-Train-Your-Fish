@@ -800,6 +800,25 @@ Added to the live run by `fishrl/train/widen_split.py` — the same zero-column 
 as `widen_counts` (the block is all-zero outside a FoF resolution, so the seam is
 function-identical everywhere else).
 
+**`obs_ctx` (2026-08-26, the observability audit's fix pack):** the audit
+(journal `2026-08-26-observability-audit.md`) aliasing-proved four more blind spots. The pack
+appends CTX_DIM=133 to the actor tail (viewer-oriented) and CTX_DIM+CRITIC_CTX_EXTRA to the
+hands critic: (a) the top-two stack objects' TARGETS (name + owner + creature/land/on-stack
+flags — an opponent Spray at my fish vs my land was bit-identical before, incl. the mask;
+28.9 response rows/game); (b) `search_library` eligible per-name counts (searcher-only — the
+library is hidden from the other seat); (c) builder ARRANGEMENTS mirrored into
+`pending.context` by the CompoundBuilder for scry/reorder/putback/bottom/discard/attackers
+(pile counts + last-placed; a Ponder reorder previously had only its first pick informed);
+(d) the blocker focus. The critic extra carries step/pending one-hots + p1-oriented combat +
+pay — context the actor always had in its perspective globals but the hands view lacked
+(mid-combat states were aliased for V). The same flag gates `masking.pick_list`: the
+`search_library` / `choose_graveyard` PICK_SINGLE order becomes NAME-SORTED (stable index
+semantics; the engine order was blind — Mystical Tutor's fetches were provably uninformed,
+which explains the old "Tutor value-negative" result — and the graveyard order desynced from
+the value-first encoded rows at gy>32). An action-semantics change that costs nothing: the
+replaced behaviour was aliased. In-place migration: `fishrl/train/widen_ctx.py` (per-net K:
+actor +133, critic +174).
+
 ### 3.3 The eval row — `stats.json → evals[]`
 
 Written by `fishrl.eval.parallel_panel`, out-of-band on a timer, reading `latest.pt` so it never

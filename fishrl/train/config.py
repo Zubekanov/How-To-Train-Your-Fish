@@ -363,6 +363,15 @@ class Config:
     # hands). Architecture-defining (persisted); added to a live run by
     # fishrl/train/widen_split.py (in place, zero-init columns).
     obs_split: bool = False
+    # Decision-context pack from the 2026-08-26 observability audit: stack-spell
+    # targets, search eligibility, builder arrangements (scry/reorder/putback/
+    # attackers), blocker focus — on the actor tail AND the hands critic; the
+    # critic additionally gets step/pending/combat/pay context. Also gates the
+    # name-sorted PICK_SINGLE remap for search_library/choose_graveyard
+    # (masking.pick_list). See fishrl.data.features CTX_DIM. Needs obs_split
+    # (tail column order). Architecture-defining (persisted); added to a live
+    # run by fishrl/train/widen_ctx.py (in place, zero-init columns).
+    obs_ctx: bool = False
     actor_encoder: str | None = None
     # critic defaults to entity: it's the measured on-policy calibration winner
     # (Brier 0.261 vs flat 0.342), off the deployment path, and ~free now that the

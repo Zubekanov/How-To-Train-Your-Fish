@@ -114,9 +114,9 @@ def atomic_mask(g, viewer: str) -> np.ndarray:
         # NB: no TARGET_CANCEL — targets are mandatory and chosen before paying, so
         # cancelling would be a free, reversible abort of the cast.
     elif t == "choose_graveyard":
-        _single_pick_mask(ctx.get("eligible", []), m, allow_none=ctx.get("may", True))
+        _single_pick_mask(pick_list(g, t, ctx), m, allow_none=ctx.get("may", True))
     elif t == "search_library":
-        _single_pick_mask(ctx.get("eligible", []), m, allow_none=True)
+        _single_pick_mask(pick_list(g, t, ctx), m, allow_none=True)
     elif t == "put_from_hand":
         _single_pick_mask(ctx.get("eligible", []), m, allow_none=True)
     elif t == "name_card":
@@ -131,6 +131,30 @@ def _single_pick_mask(items, m, *, allow_none: bool) -> None:
         m[A.aid("PICK_SINGLE", k)] = 1
     if allow_none:
         m[A.aid("PICK_NONE")] = 1
+
+
+def pick_list(g, ptype: str, ctx: dict) -> list:
+    """The ordered candidate list a PICK_SINGLE index resolves against. Shared by
+    the mask (here) and `apply.py` so the contract cannot drift.
+
+    With the obs_ctx pack on (2026-08-26 observability audit), `search_library`
+    and `choose_graveyard` eligibles are NAME-SORTED: the engine's order was
+    library/graveyard order — unencoded and therefore blind for searches (the
+    perspective view shows only the top-8 library rows), and desynced from the
+    value-first encoded graveyard rows at gy>32. Name order gives every index a
+    stable meaning the net can decode from its eligible/graveyard name counts.
+    The SET is unchanged, so 'every unmasked action is accepted' holds; ties
+    (same-name copies) keep engine order — copies are interchangeable. Legacy
+    era (flag off) keeps the raw engine order."""
+    items = list(ctx.get("eligible", []))
+    if ptype in ("search_library", "choose_graveyard"):
+        from fishrl.data.features import ctx_block_on
+        if ctx_block_on():
+            obj = g.objects
+            order = sorted(range(len(items)),
+                           key=lambda k: ((obj[items[k]].name if items[k] in obj else "~"), k))
+            return [items[k] for k in order]
+    return items
 
 
 def _full_text_change_mask(ctx: dict, m) -> None:

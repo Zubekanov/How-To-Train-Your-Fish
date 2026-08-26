@@ -154,14 +154,163 @@ def split_context_block(g, viewer: str | None = None) -> np.ndarray:
     return out
 
 
+# ── decision-context pack (Config.obs_ctx, 2026-08-26 observability audit) ────
+# The audit (journal 2026-08-26-observability-audit.md) aliasing-proved four more
+# blind spots: stack-spell TARGETS invisible to actor+critic+mask (an opponent
+# Spray at my fish vs my land = bit-identical encodings; 28.9 response rows/g),
+# Mystical Tutor searches blind (eligible mapping unencoded beyond the top-8
+# library rows), compound ARRANGEMENTS beyond FoF blind (scry/reorder/putback:
+# only a progress scalar; a Ponder reorder has only its first pick informed),
+# and the blocker focus env-side only. This pack closes them:
+#   CTX (shared, appended to the actor belief tail viewer-oriented and to the
+#        hands critic p1-oriented):
+#     [2 x 25]  top-two stack objects' targets: name one-hot(20) + is-player +
+#               controller-is-viewer + is-bf-creature + is-bf-land + is-on-stack
+#     [20]      search_library eligible per-name counts (searcher/critic only —
+#               the library is hidden from the non-searcher)
+#     [61]      builder arrangement: pileA counts(20) + pileB counts(20) +
+#               last-placed one-hot(21) — mirrored into pending.context by the
+#               CompoundBuilder for scry (top/bottom), reorder/putback/bottom/
+#               discard (placed order) and declare_attackers; zeros during
+#               fof_split (obs_split's block owns that pending)
+#     [2]       blocker focus: has_focus + (focused attacker index+1)/CMP_K
+#   CRITIC_CTX_EXTRA (hands tail only — the actor already carries these in its
+#   perspective globals): step one-hot + pending one-hot + combat(4, p1-
+#   oriented) + pay(5 incl. payer_is_p1).
+# All zeros outside the relevant pendings, so widen_ctx.py's zero-column
+# widening is function-identical at the seam (the obs_split pattern). The same
+# flag gates two env-side MASK-ORDER remaps (masking.pick_list): search_library
+# and choose_graveyard eligibles become name-sorted, giving PICK_SINGLE indices
+# stable learnable semantics (the old order was engine/library order — blind —
+# and the graveyard one desynced from the value-first encoded rows at gy>32).
+CTX_STACK_OBJ = V.N_NAMES + 5
+CTX_DIM = 2 * CTX_STACK_OBJ + V.N_NAMES + (2 * V.N_NAMES + V.N_NAMES + 1) + 2
+CRITIC_CTX_EXTRA = V.N_STEPS + V.N_PENDING + 4 + 5
+_CTX = False
+
+# pendings whose builder arrangement is mirrored into context (fof_split is
+# handled by the obs_split block; declare_blockers mirrors focus + used blockers)
+CTX_BUILDER_TYPES = ("scry", "reorder", "putback", "bottom", "discard",
+                     "declare_attackers", "declare_blockers")
+
+
+def set_ctx_block(enabled: bool) -> None:
+    global _CTX
+    _CTX = bool(enabled)
+
+
+def ctx_block_on() -> bool:
+    return _CTX
+
+
+def ctx_live(g) -> bool:
+    """True while a pending whose CONTEXT mutates within one decision_id is up
+    (builder mirrors + blocker focus) — the collectors' compound-substep encode
+    dedupe must re-encode these rows, like split_live."""
+    p = getattr(g, "pending", None)
+    return _CTX and p is not None and p.type in CTX_BUILDER_TYPES
+
+
+def _target_slot(g, so, viewer: str, out: np.ndarray) -> None:
+    """One stack object's target into a CTX_STACK_OBJ slice (zeros if untargeted)."""
+    tgts = getattr(so, "targets", None) or []
+    if not tgts:
+        return
+    t = tgts[0]
+    o = V.N_NAMES
+    if t.get("type") == "player":
+        out[o + 0] = 1.0
+        out[o + 1] = float(t.get("id") == viewer)
+        return
+    iid = t.get("id")
+    obj = g.objects.get(iid)
+    if obj is None:
+        return
+    idx = V.NAME_INDEX.get(obj.name)
+    if idx is not None:
+        out[idx] = 1.0
+    out[o + 1] = float(getattr(obj, "controller", None) == viewer)
+    on_bf = any(iid in g.players[p].battlefield for p in ("p1", "p2"))
+    tl = (obj.type_line or "")
+    out[o + 2] = float(on_bf and "Creature" in tl)
+    out[o + 3] = float(on_bf and "Land" in tl)
+    out[o + 4] = float(any(s.source_instance_id == iid for s in g.stack))
+
+
+def ctx_block(g, viewer: str | None = None) -> np.ndarray:
+    """The CTX_DIM pack for the current state. `viewer=None` gives the critic's
+    p1 orientation; a seat gives the actor's."""
+    out = np.zeros(CTX_DIM, dtype=np.float32)
+    vw = viewer or "p1"
+    # stack targets: top two objects (top last)
+    for slot, so in enumerate(reversed(g.stack[-2:])):
+        base = slot * CTX_STACK_OBJ
+        _target_slot(g, so, vw, out[base:base + CTX_STACK_OBJ])
+    k = 2 * CTX_STACK_OBJ
+    pend = getattr(g, "pending", None)
+    ctx = (pend.context or {}) if pend is not None else {}
+    # search eligibility (hidden info: searcher's eyes only; the critic sees it)
+    if (pend is not None and pend.type == "search_library"
+            and (viewer is None or pend.player == viewer)):
+        _name_counts_into(g, ctx.get("eligible", ()), out[k:k + V.N_NAMES])
+    k += V.N_NAMES
+    # builder arrangement (the acting seat's own in-progress state; critic sees it)
+    if (pend is not None and pend.type in CTX_BUILDER_TYPES
+            and (viewer is None or pend.player == viewer)):
+        _name_counts_into(g, ctx.get("placed_a", ()), out[k:k + V.N_NAMES])
+        _name_counts_into(g, ctx.get("placed_b", ()), out[k + V.N_NAMES:k + 2 * V.N_NAMES])
+        last = ctx.get("last_placed")
+        lo = g.objects.get(last) if last else None
+        li = V.NAME_INDEX.get(lo.name) if lo is not None else None
+        out[k + 2 * V.N_NAMES + (li if li is not None else V.N_NAMES)] = 1.0
+        if pend.type == "declare_blockers":
+            focus = ctx.get("focus")
+            if focus is not None:
+                out[k + 3 * V.N_NAMES + 1] = 1.0
+                out[k + 3 * V.N_NAMES + 2] = (int(focus) + 1) / 20.0
+    return out
+
+
+def critic_ctx_extra(g) -> np.ndarray:
+    """Hands-critic-only context: step/pending one-hots + p1-oriented combat +
+    pay sub-state (the actor's perspective globals already carry all of these)."""
+    out = np.zeros(CRITIC_CTX_EXTRA, dtype=np.float32)
+    si = V.STEP_INDEX.get(g.current_step, 0)
+    out[si] = 1.0
+    k = V.N_STEPS
+    pend = getattr(g, "pending", None)
+    if pend is not None:
+        pi = V.PENDING_INDEX.get(pend.type)
+        if pi is not None:
+            out[k + pi] = 1.0
+    k += V.N_PENDING
+    atk = g.combat.attackers or {}
+    out[k + 0] = float(any(a in g.players["p1"].battlefield for a in atk))
+    out[k + 1] = float(any(info.get("target") == "p1" for info in atk.values()))
+    out[k + 2] = len(atk) / 20.0
+    out[k + 3] = sum(len(info.get("blockers", [])) for info in atk.values()) / 20.0
+    k += 4
+    if pend is not None and pend.type == "pay":
+        ctx = pend.context or {}
+        need = ctx.get("need", {})
+        out[k + 0] = need.get("U", 0) / 4.0
+        out[k + 1] = sum(need.values()) / 6.0
+        out[k + 2] = ctx.get("generic", 0) / 6.0
+        out[k + 3] = 1.0
+        out[k + 4] = float(pend.player == "p1")
+    return out
+
+
 def belief_dim() -> int:
     """Width of the actor's belief tail: the 20-dim bookkeeper (+ COUNT_DIM when on,
-    + SPLIT_DIM when on)."""
-    return V.N_NAMES + (COUNT_DIM if _COUNTS else 0) + (SPLIT_DIM if _SPLIT else 0)
+    + SPLIT_DIM when on, + CTX_DIM when on)."""
+    return (V.N_NAMES + (COUNT_DIM if _COUNTS else 0) + (SPLIT_DIM if _SPLIT else 0)
+            + (CTX_DIM if _CTX else 0))
 
 
 def hands_dim() -> int:
-    return HANDS_DIM + (COUNT_DIM if _COUNTS else 0) + (SPLIT_DIM if _SPLIT else 0)
+    return (HANDS_DIM + (COUNT_DIM if _COUNTS else 0) + (SPLIT_DIM if _SPLIT else 0)
+            + ((CTX_DIM + CRITIC_CTX_EXTRA) if _CTX else 0))
 
 
 def pub_dim_for(view: str) -> int:
@@ -281,15 +430,18 @@ def bookkeeper_counts(g, viewer: str) -> np.ndarray:
         belief = known
     else:
         belief = (known + fill * remaining / rtot).astype(np.float32)
-    if not _COUNTS and not _SPLIT:
+    if not _COUNTS and not _SPLIT and not _CTX:
         return belief
     # count block: what the viewer cannot see, by name (library + unknown opp hand);
-    # split block: the live FoF pile arrangement (viewer-oriented flags)
+    # split block: the live FoF pile arrangement; ctx pack: stack targets / search
+    # eligibility / builder arrangement / blocker focus (all viewer-oriented)
     parts = [belief]
     if _COUNTS:
         parts += [remaining, np.asarray(_zone_counts_tail(g), dtype=np.float32)]
     if _SPLIT:
         parts.append(split_context_block(g, viewer))
+    if _CTX:
+        parts.append(ctx_block(g, viewer))
     return np.concatenate(parts).astype(np.float32, copy=False)
 
 
@@ -476,9 +628,15 @@ def encode_hands(g) -> np.ndarray:
     gv += list(deckout_clock(g, "p1"))
     if _COUNTS:
         gv += list(library_counts(g)) + _zone_counts_tail(g)
-    out[_HANDS_ROWS * CARD_F:_HANDS_ROWS * CARD_F + len(gv)] = gv
+    k = _HANDS_ROWS * CARD_F
+    out[k:k + len(gv)] = gv
+    k += len(gv)
     if _SPLIT:
-        out[-SPLIT_DIM:] = split_context_block(g)      # p1-oriented (critic)
+        out[k:k + SPLIT_DIM] = split_context_block(g)          # p1-oriented (critic)
+        k += SPLIT_DIM
+    if _CTX:
+        out[k:k + CTX_DIM] = ctx_block(g)
+        out[k + CTX_DIM:k + CTX_DIM + CRITIC_CTX_EXTRA] = critic_ctx_extra(g)
     return out
 
 

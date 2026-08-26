@@ -62,10 +62,14 @@ def apply_atomic(g, viewer: str, action: int) -> bool:
             return E.complete_targets(g, viewer, [], cancel=True)
         return E.complete_targets(g, viewer, [ctx["legal"][i]])
     elif t == "choose_graveyard":
-        pick = None if name == "PICK_NONE" else ctx["eligible"][i]
+        # pick_list = the SAME ordering the mask was built over (name-sorted when
+        # the obs_ctx pack is on) -- shared so mask and apply cannot drift
+        from fishrl.spaces.masking import pick_list
+        pick = None if name == "PICK_NONE" else pick_list(g, t, ctx)[i]
         return E.complete_graveyard_choice(g, viewer, pick)
     elif t == "search_library":
-        pick = None if name == "PICK_NONE" else ctx["eligible"][i]
+        from fishrl.spaces.masking import pick_list
+        pick = None if name == "PICK_NONE" else pick_list(g, t, ctx)[i]
         return E.complete_library_search(g, viewer, pick)
     elif t == "put_from_hand":
         pick = None if name == "PICK_NONE" else ctx["eligible"][i]

@@ -58,6 +58,26 @@ still frozen, a warm v4 restart (bootstrap from the current actor, all blocks
 on from iteration 0, freeze/KL handoff; ~2-3 days of budget to re-climb per the
 v3 experience). Deferring the restart costs nothing — the run keeps improving.
 
+## Warm-up scenario batch (same day, 3a573f5, live from it=123,912)
+
+Three scenarios where the newly visible channels are the DECISIVE information,
+concentrating reps on the zero-initialised context columns (Joseph's ask):
+
+- `read_the_target` (0.6): p2 text-changer on the stack with the TARGET
+  randomised fish 55% / land 45% (new envelope `stack_target` override; p1
+  always has a fish so both classes are live), instant + mana up — whether to
+  spend the answer depends exactly on the stack-target channel.
+- `tutor_fetch` (0.4): Mystical Tutor + mana, timing free — the fetch choice
+  only became learnable with the name-sorted PICK remap + eligible counts.
+- `arrange_the_top` (0.4): Ponder/Brainstorm/Predict in the mid-late game —
+  reorder/putback reps under the builder-arrangement mirror.
+
+First window (it=124,050): read_the_target=828 games (wr .74), tutor_fetch=1,123
+(.56), arrange_the_top=814 (.46); all 18 scenario members drawing; trainer
+healthy (kl 0.0136, 548 it/h). The read_the_target starting wr will be worth
+watching per TARGET class once mined — the .74 aggregate can hide answering
+land-hits it should ignore.
+
 ## Success checks for the next mine (superset of the obs_split list)
 
 1. Per-toggle |dV| across split toggles (must leave 0.0000) — now also across

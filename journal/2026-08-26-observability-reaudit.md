@@ -58,3 +58,49 @@ work proposed before the next mine reads out the behavioural checks.
 
 Probe script: scratchpad audit2.py (session-local; reconstructable from
 test_obs_split.py / test_obs_ctx.py plus the frequency counts above).
+
+## Correction + depth benchmark (same day, after Joseph's review)
+
+**S1 materiality was WRONG.** Same-name fish targeting matters: the fizzle
+line — in response to opponent's Crystal Spray at my fish, kill THAT fish so
+the Spray's targets are all illegal on resolution (CR 608.2b, engine.py:1064)
+and the spell is countered, denying the cantrip draw. Executing it requires
+knowing WHICH fish is targeted; currently aliased. Needs a fix, not a shrug.
+
+**Stack-depth benchmark** (122.7k mines; "choice" = nlegal>=2):
+
+| depth d | vs 1.3 choices | mirror choices |
+|---|---|---|
+| 0 | 229,988 | 373,313 |
+| 1 | 55,840 | 85,233 |
+| 2 | 10,573 | 24,735 |
+| 3 | 2,779 | 6,067 |
+| 4 | 327 | 1,044 |
+| 5 | 79 | 135 |
+| 6-7 | 2 | 17 |
+
+Choices at depth >=3 (buried targets under top-2 sight): 1.06% vs 1.3 / 1.48%
+mirror. Extending target sight to top-4 leaves only depth >=5 blind = 0.027% /
+0.031%. Per-game max depth: 19% of vs-1.3 games and 40% of mirror games reach
+depth 4+; ~5-7% reach 5+. The base obs already carries 6 stack SOURCE rows +
+a depth scalar — only the target channel truncates at 2. **Recommendation:
+top-4 target slots.**
+
+**choose_targets ordinal, restated:** not aliased (the caster-first eligible
+order is fully determined by visible state — unlike pre-fix search_library
+where hidden library order made it provably unlearnable), but the index→card
+resolution is an implicit program the net must learn: "count legal candidates
+in caster-first zone order". Candidates are mostly same-name (Dandâns,
+Islands), so name-sorting would NOT help here, and it would be an
+action-semantics change on a 7.2/g decision a trained policy relies on.
+The encoding-only fix is a pointer block: for eligible index i, the
+(side, battlefield-slot) it resolves to — lookup instead of derivation, no
+semantics change.
+
+**Proposed obs_tgt pack (not yet approved), all in-place widenable:**
+- A. Target slots 2 -> 4 (+2×25 dims) — from the benchmark.
+- B. Per-target-slot row pointer: side bit + bf-slot one-hot (34) — resolves
+  same-name fish; makes the Spray-fizzle line visible (+4×35).
+- C. choose_targets index->row pointer block, first 8 eligible indices ×
+  (side + bf-slot one-hot) (+8×35 = 280).
+~470 dims total on both nets, same widen pattern as counts/split/ctx.

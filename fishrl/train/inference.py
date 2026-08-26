@@ -282,6 +282,7 @@ def _serve_main(shm_name: str, nslots: int, conn, lite: dict) -> None:
     features.set_count_block(lite.get("obs_counts", False))
     features.set_split_block(lite.get("obs_split", False))
     features.set_ctx_block(lite.get("obs_ctx", False))
+    features.set_tgt_block(lite.get("obs_tgt", False))
     dev = lite["device"] if (not str(lite["device"]).startswith("cuda")
                              or torch.cuda.is_available()) else "cpu"
     ah = tuple(lite.get("actor_hidden") or lite["hidden"])
@@ -382,7 +383,8 @@ class InferenceServer:
                            "enc_actor", "enc_guesser")}
                   | {"device": lite["device"], "obs_counts": lite.get("obs_counts", False),
                      "obs_split": lite.get("obs_split", False),
-                     "obs_ctx": lite.get("obs_ctx", False)}),
+                     "obs_ctx": lite.get("obs_ctx", False),
+                     "obs_tgt": lite.get("obs_tgt", False)}),
             daemon=True)
         self.proc.start()
 

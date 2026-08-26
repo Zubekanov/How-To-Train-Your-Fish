@@ -89,11 +89,16 @@ def build_models(cfg: Config) -> Models:
     if ctx:
         assert split, "obs_ctx rides on top of obs_split (tail column order)"
     features.set_ctx_block(ctx)
+    tgt = bool(getattr(cfg, "obs_tgt", False))
+    if tgt:
+        assert ctx, "obs_tgt rides on top of obs_ctx (tail column order)"
+    features.set_tgt_block(tgt)
     extra = (features.COUNT_DIM if counts else 0) + (features.SPLIT_DIM if split else 0)
     # the ctx pack widths differ per net: the critic additionally carries the
     # step/pending/combat/pay context the actor already has in its globals
-    extra_a = extra + (features.CTX_DIM if ctx else 0)
-    extra_c = extra + ((features.CTX_DIM + features.CRITIC_CTX_EXTRA) if ctx else 0)
+    extra_a = extra + (features.CTX_DIM if ctx else 0) + (features.TGT_DIM if tgt else 0)
+    extra_c = extra + ((features.CTX_DIM + features.CRITIC_CTX_EXTRA) if ctx else 0) \
+        + (features.TGT_DIM if tgt else 0)
     return Models(
         MaskedActor(cfg.head_hidden("actor"), cfg.enc_for("actor"), cfg.card_dim,
                     in_dim=ACTOR_IN + extra_a).to(dev),
@@ -136,6 +141,7 @@ def config_from_checkpoint(cd: dict, **overrides) -> Config:
         obs_counts=bool(cd.get("obs_counts", False)),
         obs_split=bool(cd.get("obs_split", False)),
         obs_ctx=bool(cd.get("obs_ctx", False)),
+        obs_tgt=bool(cd.get("obs_tgt", False)),
         hidden=tuple(cd.get("hidden", (256, 256))),
         actor_hidden=tuple(ah) if ah is not None else None,
         critic_hidden=tuple(cd.get("critic_hidden", (512, 512, 256))),
@@ -374,7 +380,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                        "critic_deckout_aux": cfg.critic_deckout_aux,
                        "text_change_mode": cfg.text_change_mode,
                        "obs_counts": cfg.obs_counts, "obs_split": cfg.obs_split,
-                       "obs_ctx": cfg.obs_ctx},
+                       "obs_ctx": cfg.obs_ctx, "obs_tgt": cfg.obs_tgt},
             "done": done, "elapsed": total_elapsed(), "frozen_it": frozen_it,
             "handoff_start": handoff_start,
             "warmup_done": True,

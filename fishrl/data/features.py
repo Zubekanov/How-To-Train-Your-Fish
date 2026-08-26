@@ -194,9 +194,100 @@ CTX_BUILDER_TYPES = ("scry", "reorder", "putback", "bottom", "discard",
                      "declare_attackers", "declare_blockers")
 
 
+# ── choose_targets candidate pack (Config.obs_tgt, 2026-08-26 re-audit) ───────
+# The re-audit's two residual holes (journal 2026-08-26-observability-reaudit.md):
+# (1) choose_targets is an ORDINAL decision — PICK_SINGLE k indexes the pending's
+# caster-first `legal` list, and nothing encoded says what index k IS, so the net
+# must re-derive "the kth legal candidate" by counting board rows (learnable only
+# as crude statistics: "opponent's stuff sits at the bottom of the list");
+# (2) same-name candidates were interchangeable to the encoding even when their
+# STATUS differed — in particular WHICH of my fish an opponent Spray targets,
+# which gates the fizzle line (kill the targeted fish -> CR 608.2b counters the
+# Spray and denies its draw).  This pack encodes, per candidate INDEX, a compact
+# feature vector of the card that index resolves to:
+#   [2 x 25]           stack objects 3-4 from the top: same _target_slot layout
+#                      as the ctx pack's top-two (depth benchmark: sight to 4
+#                      leaves 0.03% of real choices with a buried target)
+#   [TGT_SLOTS x 12]   per legal-list index: valid + controller-is-viewer +
+#                      is-bf-creature + is-bf-land + is-on-stack + tapped +
+#                      attacking + blocking + targeted-by-top-stack +
+#                      targeted-by-2nd-stack + text-altered + name-idx/20
+# TGT_SLOTS=36 covers every observed list (max 35 across 3,600 mined games; the
+# lists are permanents + stack spells, no player targets in this pool). No
+# action-semantics change (unlike the search remap) — indices keep their engine
+# meaning, the net just gets to SEE them. All zeros outside a choose_targets
+# pending (the deep-stack slots outside stack depth >= 3), so widen_tgt.py's
+# zero-column widening is function-identical at the seam.
+TGT_SLOT_F = 12
+TGT_SLOTS = 36
+TGT_DIM = 2 * CTX_STACK_OBJ + TGT_SLOTS * TGT_SLOT_F
+_TGT = False
+
+
 def set_ctx_block(enabled: bool) -> None:
     global _CTX
     _CTX = bool(enabled)
+
+
+def set_tgt_block(enabled: bool) -> None:
+    global _TGT
+    _TGT = bool(enabled)
+
+
+def tgt_block_on() -> bool:
+    return _TGT
+
+
+def _stack_target_id(g, back: int):
+    """Instance id targeted by the stack object `back` from the top (1 = top)."""
+    if len(g.stack) < back:
+        return None
+    tgts = getattr(g.stack[-back], "targets", None) or []
+    return tgts[0].get("id") if tgts else None
+
+
+def tgt_block(g, viewer: str | None = None) -> np.ndarray:
+    """The TGT_DIM pack. `viewer=None` gives the critic's p1 orientation; a seat
+    gives the actor's. The candidate section fills only for the choosing seat
+    (and the critic) — the list is public information, but it is only
+    decision-relevant to the seat holding the pending."""
+    out = np.zeros(TGT_DIM, dtype=np.float32)
+    vw = viewer or "p1"
+    # stack targets, objects 3 and 4 from the top (the ctx pack carries 1-2)
+    for slot, so in enumerate(reversed(g.stack[-4:-2])):
+        base = slot * CTX_STACK_OBJ
+        _target_slot(g, so, vw, out[base:base + CTX_STACK_OBJ])
+    pend = getattr(g, "pending", None)
+    if (pend is None or pend.type != "choose_targets"
+            or not (viewer is None or pend.player == viewer)):
+        return out
+    legal = (pend.context or {}).get("legal") or ()
+    atk = g.combat.attackers or {}
+    blocking = {b for info in atk.values() for b in info.get("blockers", ())}
+    t_top, t_2nd = _stack_target_id(g, 1), _stack_target_id(g, 2)
+    on_stack = {s.source_instance_id for s in g.stack}
+    on_bf = {i for p in ("p1", "p2") for i in g.players[p].battlefield}
+    k = 2 * CTX_STACK_OBJ
+    for i, iid in enumerate(legal[:TGT_SLOTS]):
+        b = k + i * TGT_SLOT_F
+        out[b + 0] = 1.0
+        o = g.objects.get(iid)
+        if o is None:
+            continue
+        tl = o.type_line or ""
+        out[b + 1] = float(getattr(o, "controller", None) == vw)
+        out[b + 2] = float(iid in on_bf and "Creature" in tl)
+        out[b + 3] = float(iid in on_bf and "Land" in tl)
+        out[b + 4] = float(iid in on_stack and iid not in on_bf)
+        out[b + 5] = float(bool(getattr(o, "tapped", False)))
+        out[b + 6] = float(iid in atk)
+        out[b + 7] = float(iid in blocking)
+        out[b + 8] = float(iid == t_top)
+        out[b + 9] = float(iid == t_2nd)
+        out[b + 10] = float(bool(getattr(o, "text_changes", None)))
+        ni = V.NAME_INDEX.get(o.name)
+        out[b + 11] = 0.0 if ni is None else (ni + 1) / (V.N_NAMES + 1)
+    return out
 
 
 def ctx_block_on() -> bool:
@@ -305,12 +396,12 @@ def belief_dim() -> int:
     """Width of the actor's belief tail: the 20-dim bookkeeper (+ COUNT_DIM when on,
     + SPLIT_DIM when on, + CTX_DIM when on)."""
     return (V.N_NAMES + (COUNT_DIM if _COUNTS else 0) + (SPLIT_DIM if _SPLIT else 0)
-            + (CTX_DIM if _CTX else 0))
+            + (CTX_DIM if _CTX else 0) + (TGT_DIM if _TGT else 0))
 
 
 def hands_dim() -> int:
     return (HANDS_DIM + (COUNT_DIM if _COUNTS else 0) + (SPLIT_DIM if _SPLIT else 0)
-            + ((CTX_DIM + CRITIC_CTX_EXTRA) if _CTX else 0))
+            + ((CTX_DIM + CRITIC_CTX_EXTRA) if _CTX else 0) + (TGT_DIM if _TGT else 0))
 
 
 def pub_dim_for(view: str) -> int:
@@ -430,11 +521,12 @@ def bookkeeper_counts(g, viewer: str) -> np.ndarray:
         belief = known
     else:
         belief = (known + fill * remaining / rtot).astype(np.float32)
-    if not _COUNTS and not _SPLIT and not _CTX:
+    if not _COUNTS and not _SPLIT and not _CTX and not _TGT:
         return belief
     # count block: what the viewer cannot see, by name (library + unknown opp hand);
     # split block: the live FoF pile arrangement; ctx pack: stack targets / search
-    # eligibility / builder arrangement / blocker focus (all viewer-oriented)
+    # eligibility / builder arrangement / blocker focus; tgt pack: choose_targets
+    # candidate features + deep stack targets (all viewer-oriented)
     parts = [belief]
     if _COUNTS:
         parts += [remaining, np.asarray(_zone_counts_tail(g), dtype=np.float32)]
@@ -442,6 +534,8 @@ def bookkeeper_counts(g, viewer: str) -> np.ndarray:
         parts.append(split_context_block(g, viewer))
     if _CTX:
         parts.append(ctx_block(g, viewer))
+    if _TGT:
+        parts.append(tgt_block(g, viewer))
     return np.concatenate(parts).astype(np.float32, copy=False)
 
 
@@ -636,7 +730,11 @@ def encode_hands(g) -> np.ndarray:
         k += SPLIT_DIM
     if _CTX:
         out[k:k + CTX_DIM] = ctx_block(g)
-        out[k + CTX_DIM:k + CTX_DIM + CRITIC_CTX_EXTRA] = critic_ctx_extra(g)
+        k += CTX_DIM
+        out[k:k + CRITIC_CTX_EXTRA] = critic_ctx_extra(g)
+        k += CRITIC_CTX_EXTRA
+    if _TGT:
+        out[k:k + TGT_DIM] = tgt_block(g)                  # p1-oriented (critic)
     return out
 
 

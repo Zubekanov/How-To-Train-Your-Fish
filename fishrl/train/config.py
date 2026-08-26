@@ -375,6 +375,16 @@ class Config:
     # (tail column order). Architecture-defining (persisted); added to a live
     # run by fishrl/train/widen_ctx.py (in place, zero-init columns).
     obs_ctx: bool = False
+    # choose_targets candidate pack (2026-08-26 re-audit): per legal-list index,
+    # compact features of the card that PICK_SINGLE index resolves to (class /
+    # controller / tapped / combat / targeted-by-stack / text-altered), plus
+    # stack-target sight extended to the top FOUR objects (depth benchmark).
+    # Turns the ordinal index->card mapping into a lookup with NO action-
+    # semantics change; makes the Spray-fizzle line (kill the targeted fish to
+    # deny the draw) visible. See fishrl.data.features TGT_DIM. Needs obs_ctx
+    # (tail column order). Architecture-defining (persisted); added to a live
+    # run by fishrl/train/widen_tgt.py (in place, zero-init columns).
+    obs_tgt: bool = False
     actor_encoder: str | None = None
     # critic defaults to entity: it's the measured on-policy calibration winner
     # (Brier 0.261 vs flat 0.342), off the deployment path, and ~free now that the

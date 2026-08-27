@@ -67,7 +67,18 @@ engine on those.
 3. **Concede** exists for humans and not the model — never optimal in a
    zero-sum ±1 game; listed for completeness.
 
-## Proposal (not yet approved): wire TAP_LAND at priority
+## DECISION (Joseph, same day): omit the wiring
+
+"99.99% of scenarios where you want to cast something with floated mana, you
+could just cast in response for almost the same result." — casting the instant
+in the response window pays from the still-untapped lands directly; the float
+is a two-step version of the same line. The residual differences (committing
+before seeing the resolution; stack-order) don't justify widening the priority
+action set. Tap-to-float at priority is now a DELIBERATE omission — future
+action-space audits should not re-propose it. The proposal below is kept for
+the record only.
+
+## Proposal (REJECTED — see decision above): wire TAP_LAND at priority
 
 Mask: offer TAP_LAND i at your own priority for untapped addressable lands
 (mirrors engine legality exactly — no context gating, per the no-guided-masks

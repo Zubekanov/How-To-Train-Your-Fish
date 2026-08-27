@@ -65,7 +65,15 @@ moved AND actor behaviors moved (splits, targeting, response conditioning,
 fetch selection) within ~12k iterations of the widens. Ride the lineage;
 --rearm-kl / entropy re-heat / v4 stay shelved.
 
-## Proposal (not yet approved)
+## Proposal — REJECTED (Joseph, same day)
+
+deny_the_draw omitted: "a super situational and niche play that is worth
+learning naturally such that the agent judges when it wants to do it rather
+than instructing it to." The fizzle line stays a WATCH item (occurrence rate
+at future mines — 5 across 3,600 games today), not a curriculum item. Kept
+below for the record.
+
+## Original proposal (for the record)
 
 - `deny_the_draw` scenario: opponent Crystal Spray on the stack targeting one
   of my TWO fish, answer spell (Bend/Spray/Metamorphose... engine-legal

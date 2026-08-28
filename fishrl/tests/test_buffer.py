@@ -158,6 +158,21 @@ def test_collect_games_buffers_the_consumed_previous_guess():
     assert buf.games and len(buf.games) == 1
 
 
+def test_collect_games_meta_carries_first_player_and_turns():
+    # 2026-08-29 full-population telemetry: the per-game meta rides first_player,
+    # end turn_number and the deckout flag so the trainer can aggregate
+    # on-the-play winrate / game pace / ending mix over ALL training games.
+    env = BeliefAugmentedEnv(_CountingGuesser(), max_decisions=200)
+    buf = collect_games(env, random_act_fn(np.random.default_rng(3)), 2, 20,
+                        critic=None, max_decisions=200)
+    assert len(buf.meta) == len(buf.games) == 2
+    for gm in buf.meta:
+        assert set(gm) >= {"truncated", "deckout", "first", "turns"}
+        assert gm["first"] in ("p1", "p2")
+        assert gm["turns"] >= 1
+        assert isinstance(gm["deckout"], bool)
+
+
 def test_collect_games_records_zero_step_games():
     # buf.games must carry one entry per game even if a game yields steps for only
     # one seat or ends early — league updates count games, not transitions.

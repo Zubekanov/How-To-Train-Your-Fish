@@ -45,6 +45,13 @@ from fishrl.train.config import Config
 from fishrl.train import sysstats
 from fishrl.train.pfsp import SCRIPTED_KINDS, LeagueMember, PFSPLeague
 from fishrl.train.ppo import aux_update, ppo_update
+from fishrl.spaces import action_space as A
+
+# The two PLAY_ORDER action ids (0=play first, 1=draw first): the window
+# choose-first telemetry counts the policy's own roll-winner choices over the
+# full training population (see the gwin cf_* keys).
+_CF_FIRST = A.aid("PLAY_ORDER", 0)
+_CF_SECOND = A.aid("PLAY_ORDER", 1)
 
 
 @dataclass
@@ -289,6 +296,14 @@ def train(cfg: Config, models: Models | None = None, log=print,
                # scenario games split by seat mode (scenario_selfplay_frac):
                # decided games / p1 wins, self-play seats vs the v1.3 engine seat
                "scen_self_g", "scen_self_w", "scen_scr_g", "scen_scr_w",
+               # full-population game telemetry (2026-08-29): on-the-play winrate
+               # over decided MIRROR games (first_player from the game meta -- the
+               # eval panel's seat-diag n=48 was the only source before), deckout
+               # share of decided games, summed end turn_number, learner wr in
+               # pool games vs PAST SELVES (PFSP-weighted: a training-pressure
+               # gauge, not an anchor), and the policy's PLAY_ORDER choices.
+               "play_dec", "play_w", "deck_g", "turn_sum",
+               "past_g", "past_w", "cf_first", "cf_total",
                "forced_steps", "collect_s", "update_s", "book_s")
     gwin = {k: 0.0 for k in GW_KEYS}
     # Per-report opponent composition: games played vs each opponent category, so the
@@ -453,7 +468,14 @@ def train(cfg: Config, models: Models | None = None, log=print,
         scen_total = sum(scen_mix.values())
         grand_total = mix_total + scen_total             # all games this window, incl. scenarios
         trained_frac = (opp_mix["self"] + opp_mix["pastself"]) / mix_total
-        opp_str = f" | opp trained={trained_frac:.2f}"
+        # Learner wr vs PAST SELVES this window (decided pool games, PFSP-weighted:
+        # the sampler deliberately overweights opponents the learner loses to, so
+        # this reads training PRESSURE, not an anchor skill level) + the policy's
+        # play-first choice rate over every PLAY_ORDER decision in the window.
+        past_wr = (gwin["past_w"] / gwin["past_g"]) if gwin["past_g"] else nan
+        cf_frac = (gwin["cf_first"] / gwin["cf_total"]) if gwin["cf_total"] else nan
+        opp_str = (f" | opp trained={trained_frac:.2f}"
+                   f" past={past_wr:.2f}({int(gwin['past_g'])}) cf={cf_frac:.2f}")
         # Window game telemetry (see GW_KEYS): episode lengths split full-game vs
         # scenario, ending mix, mirror seat balance, forced-decision dilution, and
         # the collect share of wall-clock.
@@ -466,6 +488,13 @@ def train(cfg: Config, models: Models | None = None, log=print,
         trunc_rate = (gwin["trunc"] / games) if games else nan
         draw_rate = (gwin["draw"] / games) if games else nan
         seat_p1 = (gwin["mirror_p1"] / gwin["mirror_dec"]) if gwin["mirror_dec"] else nan
+        # Full-population per-window rates (2026-08-29): decided-game deckout share,
+        # mean end turn, and the mirror on-the-play winrate (n ~= mirror_dec — the
+        # panel's seat-diag n=48 was the only play/draw source before this).
+        dec_games = games - int(gwin["trunc"]) - int(gwin["draw"])
+        deckout_frac = (gwin["deck_g"] / dec_games) if dec_games else nan
+        turns_mean = (gwin["turn_sum"] / games) if games else nan
+        play_wr = (gwin["play_w"] / gwin["play_dec"]) if gwin["play_dec"] else nan
         fdec = (gwin["forced_steps"] / win_T) if win_T else nan
         wall = gwin["collect_s"] + gwin["update_s"] + gwin["book_s"]
         collect_frac = (gwin["collect_s"] / wall) if wall > 0 else nan
@@ -480,7 +509,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
         game_str = (
             f" | games={games} len={len_full:.1f} slen={len_scen:.1f} "
             f"trunc={trunc_rate:.2f} draw={draw_rate:.2f} "
-            f"seat_p1={seat_p1:.2f} fdec={fdec:.2f} | wall collect={collect_frac:.2f} book={book_frac:.2f} gns_b={gns_b:.0f}"
+            f"deckout={deckout_frac:.2f} turns={turns_mean:.1f} "
+            f"seat_p1={seat_p1:.2f} play={play_wr:.2f} fdec={fdec:.2f} | wall collect={collect_frac:.2f} book={book_frac:.2f} gns_b={gns_b:.0f}"
             + (f" worker gap/play={wt['worker_gap_s']:.2f}/{wt['worker_play_s']:.2f}s" if wt else "")
         )
         if v3:
@@ -568,6 +598,12 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 "games": games, "dec_per_game": len_full, "scen_dec_per_game": len_scen,
                 "trunc_rate": trunc_rate, "draw_rate": draw_rate,
                 "mirror_p1_wr": seat_p1, "forced_dec_frac": fdec,
+                # full-population game telemetry (2026-08-29): counts ride along so
+                # readers can block-aggregate across windows like wr_train
+                "deckout_frac": deckout_frac, "turns_per_game": turns_mean,
+                "play_wr_train": play_wr, "play_n": int(gwin["play_dec"]),
+                "past_wr": past_wr, "past_n": int(gwin["past_g"]),
+                "choose_first_frac_train": cf_frac, "choose_n": int(gwin["cf_total"]),
                 "collect_s": gwin["collect_s"], "update_s": gwin["update_s"],
                 "collect_frac": collect_frac, "book_s": gwin["book_s"], "book_frac": book_frac,
                 # gradient noise scale (actor, epoch-0 minibatch grads): critical batch in
@@ -984,6 +1020,13 @@ def train(cfg: Config, models: Models | None = None, log=print,
                         opp_mix["self"] += 1
                         gwin["mirror_dec"] += sum(1 for w in gbuf.games if w in ("p1", "p2"))
                         gwin["mirror_p1"] += sum(1 for w in gbuf.games if w == "p1")
+                        # on-the-play winrate over the full mirror population
+                        # (both seats the same policy -> first-mover edge, clean)
+                        for w, gm in zip(gbuf.games, gbuf.meta):
+                            fp = gm.get("first")
+                            if w in ("p1", "p2") and fp:
+                                gwin["play_dec"] += 1
+                                gwin["play_w"] += w == fp
                     elif tag in ("pool_scen", "carve_scen"):
                         scen_mix[member.name] = scen_mix.get(member.name, 0) + 1
                         gwin["scen_games"] += 1
@@ -999,6 +1042,9 @@ def train(cfg: Config, models: Models | None = None, log=print,
                         opp_mix["pastself" if member.kind == "self" else member.kind] += 1
                         if won in ("p1", "p2"):
                             league.update(member, won == lseat)
+                            if member.kind == "self":       # window wr vs past selves
+                                gwin["past_g"] += 1         # (PFSP-weighted pressure gauge)
+                                gwin["past_w"] += won == lseat
                         if member.kind in AWIN_KINDS:       # harvest: all games / strict wins
                             _harvest_count(awin[member.kind], gbuf.games, lseat)
                     buf.merge(gbuf)
@@ -1011,6 +1057,11 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 # self-play games at this point). Drift from 0.5 = seat exploitation.
                 gwin["mirror_dec"] += sum(1 for w in buf.games if w in ("p1", "p2"))
                 gwin["mirror_p1"] += sum(1 for w in buf.games if w == "p1")
+                for w, gm in zip(buf.games, buf.meta):          # on-the-play (mirror)
+                    fp = gm.get("first")
+                    if w in ("p1", "p2") and fp:
+                        gwin["play_dec"] += 1
+                        gwin["play_w"] += w == fp
                 pool_rng = np.random.default_rng(cfg.seed + 900_000 + done)
                 for pidx in range(n_pool):
                     oseed = cfg.seed + 500_000 + done * cfg.games_per_iter + pidx * 17
@@ -1022,6 +1073,11 @@ def train(cfg: Config, models: Models | None = None, log=print,
                                              critic_view=cfg.critic_view)
                         gwin["mirror_dec"] += sum(1 for w in gbuf.games if w in ("p1", "p2"))
                         gwin["mirror_p1"] += sum(1 for w in gbuf.games if w == "p1")
+                        for w, gm in zip(gbuf.games, gbuf.meta):
+                            fp = gm.get("first")
+                            if w in ("p1", "p2") and fp:
+                                gwin["play_dec"] += 1
+                                gwin["play_w"] += w == fp
                         buf.merge(gbuf)
                         continue
                     if member.kind == "scenario":               # pool-mode curriculum game:
@@ -1065,6 +1121,9 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     # biased the EMA upward exactly against fast-killing opponents).
                     if gbuf.games and gbuf.games[-1] in ("p1", "p2"):
                         league.update(member, gbuf.games[-1] == lseat)
+                        if member.kind == "self":            # window wr vs past selves
+                            gwin["past_g"] += 1
+                            gwin["past_w"] += gbuf.games[-1] == lseat
                     if member.kind in AWIN_KINDS:            # harvest: all games / strict wins
                         _harvest_count(awin[member.kind], gbuf.games, lseat)
                     buf.merge(gbuf)
@@ -1105,6 +1164,15 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     gwin["trunc"] += 1
                 elif w is None:
                     gwin["draw"] += 1
+                elif gm.get("deckout"):                    # decided by empty-library draw
+                    gwin["deck_g"] += 1
+                gwin["turn_sum"] += gm.get("turns", 0)     # game pace (end turn_number)
+            if len(buf):
+                # The policy's own PLAY_ORDER choices, full population (the eval-side
+                # choose_first_frac reads the same decision from fresh diag games only).
+                acts = buf.scalar("action")
+                gwin["cf_first"] += int((acts == _CF_FIRST).sum())
+                gwin["cf_total"] += int(((acts == _CF_FIRST) | (acts == _CF_SECOND)).sum())
             gwin["forced_steps"] += int((buf.column("mask").sum(axis=1) == 1).sum()) if len(buf) else 0
             iter_collect_s = time.perf_counter() - t_collect
             gwin["collect_s"] += iter_collect_s

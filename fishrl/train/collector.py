@@ -73,7 +73,7 @@ def actor_act_fn(actor):
 
 
 def _stamp_game(buf: RolloutBuffer, start: int, winner, truncated: bool = False,
-                deckout: bool = False) -> None:
+                deckout: bool = False, first: str = "", turns: int = 0) -> None:
     """Back-fill one finished game's outcome onto its steps and register the game.
 
     Every step gets the winner label plus a buffer-local game_id so GAE segments
@@ -83,7 +83,12 @@ def _stamp_game(buf: RolloutBuffer, start: int, winner, truncated: bool = False,
     flags an empty-library-draw ending (the parity aux head's label domain). The
     winner is ALSO recorded in `buf.games` even when the game produced zero learner
     steps — league win-rate updates must count games the learner lost before its
-    first decision."""
+    first decision.
+
+    `first` (g.first_player) and `turns` (g.turn_number at the end) ride in the
+    per-game meta so the trainer's window telemetry can aggregate on-the-play
+    win-rate, deckout share, and game pace over the FULL training population
+    instead of the eval panel's small fresh samples (2026-08-29)."""
     gid = len(buf.games)
     for i in range(start, len(buf.steps)):
         buf.steps[i].winner = winner
@@ -91,7 +96,8 @@ def _stamp_game(buf: RolloutBuffer, start: int, winner, truncated: bool = False,
         buf.steps[i].truncated = truncated
         buf.steps[i].deckout_end = deckout
     buf.games.append(winner)
-    buf.meta.append({"truncated": truncated})
+    buf.meta.append({"truncated": truncated, "deckout": deckout,
+                     "first": first, "turns": turns})
 
 
 def fill_critic_values(buf: RolloutBuffer, critic, batch: int = 8192,
@@ -195,7 +201,8 @@ def collect_heuristic_games(guesser, actor, n_games, base_seed, critic=None,
         winner = match.g.result.get("winner")
         _stamp_game(buf, start, winner,
                     truncated=winner is None and match.g.result.get("status") == "ongoing",
-                    deckout=_deckout_ended(match.g))
+                    deckout=_deckout_ended(match.g),
+                    first=match.g.first_player, turns=int(match.g.turn_number))
     if critic is not None:
         fill_critic_values(buf, critic, view=critic_view)
     return buf
@@ -328,7 +335,8 @@ def collect_vs_opponent(learner, opponent, n_games, base_seed, critic=None,
         winner = env.winner
         _stamp_game(buf, start, winner,
                     truncated=winner is None and env.g.result.get("status") == "ongoing",
-                    deckout=_deckout_ended(env.g))
+                    deckout=_deckout_ended(env.g),
+                    first=env.g.first_player, turns=int(env.g.turn_number))
     if critic is not None:
         fill_critic_values(buf, critic, view=critic_view)
     return buf
@@ -380,7 +388,8 @@ def collect_games(belief_env, act_fn, n_games, base_seed, critic=None,
         winner = belief_env.winner            # scenario terminator result, or engine winner
         _stamp_game(buf, start, winner,
                     truncated=winner is None and belief_env.g.result.get("status") == "ongoing",
-                    deckout=_deckout_ended(belief_env.g))
+                    deckout=_deckout_ended(belief_env.g),
+                    first=belief_env.g.first_player, turns=int(belief_env.g.turn_number))
     if critic is not None:
         fill_critic_values(buf, critic, view=critic_view)  # batched, off the hot path
     return buf

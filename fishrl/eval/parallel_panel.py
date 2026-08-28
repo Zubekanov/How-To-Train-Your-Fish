@@ -375,6 +375,9 @@ def parallel_panel(ckpt_path: str, n_games: int = 100, max_workers: int | None =
         "heuristic12": combined["heuristic12"],   # of them is what best.pt's maximin
         "heuristic13": combined["heuristic13"],   # gate keys on (best_score)
         "frozen": (mw / dec) if dec else 0.5,
+        # raw frozen-match counts so follow-mode cycles can be block-aggregated
+        # (n_frozen=50 per cycle -> +-7pp alone; 8 cycles -> +-2.5pp)
+        "frozen_w": int(mw), "frozen_n": int(dec),
         "n": n_games, "workers": workers,
         "anchor_n": anchor_n, "harvest_from": harvest_from,
         "it": int(pl.get("done", 0)), "frozen_it": int(pl.get("frozen_it", 0)),
@@ -419,10 +422,10 @@ def run_once(args, ckpt_path: str, allow_harvest: bool) -> None:
     """One panel + one eval row, the historic one-shot behaviour."""
     from fishrl.train import stats as stats_io
 
+    stats = stats_io.load(args.ckpt_dir)
     harvest, harvest_from = None, None
     if allow_harvest and not args.no_harvest:
-        harvest, harvest_from = find_harvest(stats_io.load(args.ckpt_dir),
-                                             args.harvest_max_age_seconds, time.time())
+        harvest, harvest_from = find_harvest(stats, args.harvest_max_age_seconds, time.time())
     if harvest is not None:
         counts = " ".join(f"{k}={harvest.get(k, [0, 0])[0]}/{harvest.get(k, [0, 0])[1]}"
                           for k in HARVEST_ANCHORS)
@@ -442,8 +445,20 @@ def run_once(args, ckpt_path: str, allow_harvest: bool) -> None:
         "heuristic": r["heuristic"], "heuristic11": r["heuristic11"],
         "heuristic12": r["heuristic12"], "heuristic13": r["heuristic13"],
         "anchor_n": r["anchor_n"], "harvest_from": r["harvest_from"],
+        "frozen_w": r.get("frozen_w"), "frozen_n": r.get("frozen_n"),
         "new_best": bool(r.get("new_best")), "source": "eval",
     }
+    # Rolling frozen aggregate: this cycle + the last 7 rows that carry counts
+    # (each cycle runs in a one-shot child, so the window is rebuilt from the
+    # stats file rather than kept in memory). The frozen anchor refreshes to
+    # near-current each cycle, so pooling across cycles measures "vs recent
+    # selves" -- the right canary semantics, at ~8x the sample.
+    prev = [e for e in stats.get("evals", []) if e.get("frozen_n")][-7:]
+    fz_w = sum(int(e["frozen_w"]) for e in prev) + int(r.get("frozen_w") or 0)
+    fz_n = sum(int(e["frozen_n"]) for e in prev) + int(r.get("frozen_n") or 0)
+    if fz_n:
+        row["frozen_agg"] = fz_w / fz_n
+        row["frozen_agg_n"] = fz_n
     if "seat" in r:                                      # learned seat / play-draw split
         sd = r["seat"]
         row["seat_p1_wr"] = sd["seat_p1_wr"]
@@ -460,9 +475,11 @@ def run_once(args, ckpt_path: str, allow_harvest: bool) -> None:
     seat = (f" | seat p1={r['seat']['seat_p1_wr']:.3f} p2={r['seat']['seat_p2_wr']:.3f} "
             f"play={r['seat']['play_wr']:.3f} draw={r['seat']['draw_wr']:.3f}"
             if "seat" in r else "")
+    fz8 = (f" frozen8={row['frozen_agg']:.3f}({row['frozen_agg_n']})"
+           if "frozen_agg" in row else "")
     print(
         f"[eval it={r['it']} @{r['elapsed_h']:.2f}h n={r['n']} w={r['workers']} "
-        f"took={r['took_s']:.1f}s] WR frozen@{r['frozen_it']}={r['frozen']:.3f} "
+        f"took={r['took_s']:.1f}s] WR frozen@{r['frozen_it']}={r['frozen']:.3f}{fz8} "
         f"random={r['random']:.3f} attacker={r['attacker']:.3f} heuristic={r['heuristic']:.3f} "
         f"heuristic11={r['heuristic11']:.3f} heuristic12={r['heuristic12']:.3f} "
         f"heuristic13={r['heuristic13']:.3f}"

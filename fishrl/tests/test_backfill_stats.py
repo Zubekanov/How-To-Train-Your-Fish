@@ -52,6 +52,16 @@ _STATUS_ERA3 = (
     "calib critic(acc=0.61,brier=0.23) aux=0.693 | "
     "opp trained=0.55 | games=96 len=41.0 slen=13.2 trunc=0.00 draw=0.00 "
     "seat_p1=0.49 fdec=0.22 | wall collect=0.85 | WR via eval timer")
+# The 2026-08-29 full-population telemetry era: deckout/turns between draw= and
+# seat_p1=, play= after seat_p1=, past=/cf= after opp trained=.
+_STATUS_ERA4 = (
+    "2026-08-29T10:00:00+10:00 [status 250.0h it=163000 (+130, 520.0/h) T=12000000] "
+    "pi=-0.006 V=0.490 H=0.425 kl=0.0130 clip=0.07 | "
+    "calib critic(acc=0.72,brier=0.18) aux=0.610 brier/t=0.22/0.18/0.16/0.16 "
+    "jump=0.019/0.047 | "
+    "opp trained=0.95 past=0.47(3181) cf=1.00 | games=47520 len=335.0 slen=150.0 "
+    "trunc=0.00 draw=0.00 deckout=0.31 turns=21.4 seat_p1=0.50 play=0.52 fdec=0.17 | "
+    "wall collect=0.14 book=0.07 gns_b=nan | WR via eval timer")
 
 
 def test_parse_league_shares_sum_to_one():
@@ -173,6 +183,20 @@ def test_parse_status_v3_era_critic_line():
     # and the legacy fixtures carry no v3 keys
     r_old = parse_status([_STATUS])[0][0]
     assert "critic_acc" not in r_old and r_old["gmae"] == 0.18
+
+
+def test_parse_status_era4_full_population_telemetry():
+    r = parse_status([_STATUS_ERA4])[0][0]
+    assert r["it"] == 163000 and r["critic_acc"] == 0.72
+    assert r["deckout_frac"] == 0.31 and r["turns_per_game"] == 21.4
+    assert r["mirror_p1_wr"] == 0.50 and r["play_wr_train"] == 0.52
+    assert r["past_wr"] == 0.47 and r["past_n"] == 3181
+    assert r["choose_first_frac_train"] == 1.00
+    assert r["games"] == 47520 and r["collect_frac"] == 0.14
+    # earlier eras carry none of the new keys but still parse in full
+    r3 = parse_status([_STATUS_ERA3])[0][0]
+    assert "deckout_frac" not in r3 and "play_wr_train" not in r3
+    assert "past_wr" not in r3 and r3["mirror_p1_wr"] == 0.49
 
 
 def test_parse_status_merges_league_mix():

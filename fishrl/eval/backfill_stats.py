@@ -56,7 +56,13 @@ _GAME_TELEM = re.compile(
     r"games=(?P<games>\d+)\s+len=(?P<len>[-\d.naif]+)\s+slen=(?P<slen>[-\d.naif]+)\s+"
     r"trunc=(?P<trunc>[-\d.naif]+)\s+draw=(?P<draw>[-\d.naif]+)\s+"
     r"(?:fatk_p1=\d+\s+fatk_p2=\d+\s+)?"
-    r"seat_p1=(?P<seat>[-\d.naif]+)\s+fdec=(?P<fdec>[-\d.naif]+)\s+\|\s+"
+    # 2026-08-29 full-population telemetry: deckout share / mean end turn between
+    # draw= and seat_p1=, play= (mirror on-the-play wr) after seat_p1= -- all
+    # optional so every earlier era still parses
+    r"(?:deckout=(?P<deck>[-\d.naif]+)\s+turns=(?P<turns>[-\d.naif]+)\s+)?"
+    r"seat_p1=(?P<seat>[-\d.naif]+)\s+"
+    r"(?:play=(?P<play>[-\d.naif]+)\s+)?"
+    r"fdec=(?P<fdec>[-\d.naif]+)\s+\|\s+"
     r"wall\s+collect=(?P<wcol>[-\d.naif]+)")
 
 # optional inline win-rate tail (older lines had it; newer say "WR via eval timer"). Captures the
@@ -70,8 +76,11 @@ _STATUS_WR = re.compile(
     r"\(n=(?P<n>\d+),\s+eval\s+(?P<es>[\d.]+)s\)")
 
 # Opponent-mix tail of a `[status ...]` line: `... gmae=0.18 | opp trained=0.92 | ...`. Newer
-# lines carry it; older ones don't (-> opp_trained stays None).
-_OPP = re.compile(r"opp trained=(?P<opp>[\d.]+)")
+# lines carry it; older ones don't (-> opp_trained stays None). The 2026-08-29 era
+# appends `past=0.47(3181) cf=1.00` (wr vs past selves + play-first choice rate).
+_OPP = re.compile(r"opp trained=(?P<opp>[\d.]+)"
+                  r"(?:\s+past=(?P<past>[-\d.naif]+)\((?P<pastn>\d+)\)"
+                  r"\s+cf=(?P<cf>[-\d.naif]+))?")
 
 # `[league it=12755] games=1216 trained=0.92 (self=912 past=205 heuristic=89 attacker=5
 #  random=5) | <per-opponent win-rate table>` -- the per-category counts behind opp_trained.
@@ -211,6 +220,9 @@ def parse_status(lines, league=None) -> tuple:
             "clip_frac": _f(m.group("clip")),
             "opp_trained": _f(o.group("opp")) if o else None,
         }
+        if o and o.group("past") is not None:            # 2026-08-29 era tokens
+            rec.update({"past_wr": _f(o.group("past")), "past_n": int(o.group("pastn")),
+                        "choose_first_frac_train": _f(o.group("cf"))})
         if m.group("cacc") is not None:                  # v3-era line: one critic + aux
             rec.update({"critic_acc": _f(m.group("cacc")),
                         "critic_brier": _f(m.group("cbri")),
@@ -232,6 +244,11 @@ def parse_status(lines, league=None) -> tuple:
                 "mirror_p1_wr": _f(gt.group("seat")), "forced_dec_frac": _f(gt.group("fdec")),
                 "collect_frac": _f(gt.group("wcol")),
             })
+            if gt.group("deck") is not None:             # 2026-08-29 era tokens
+                rec.update({"deckout_frac": _f(gt.group("deck")),
+                            "turns_per_game": _f(gt.group("turns"))})
+            if gt.group("play") is not None:
+                rec["play_wr_train"] = _f(gt.group("play"))
         rec.update(league.get(it, {k: None for k in _OPP_KEYS}))
         rec["source"] = "journald"
         reports.append(rec)

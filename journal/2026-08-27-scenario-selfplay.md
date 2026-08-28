@@ -46,7 +46,16 @@ the policy path, frac=0 reproduces today's behaviour on a registered
 scenario. Full suite 341 passed / 7 skipped. Resume smoke on the real
 checkpoint with --scenario-selfplay 0.6 (see box numbers below).
 
-## Expected effects to watch at the next mine (~150k)
+## Deployed (b6d00ca; box resumed it=155,430, 2026-08-28)
+
+First full window (it=155,549): 18,734 scenario games, `selfplay 0.60
+wr self=0.46(11,295) script=0.60(7,439)` — the split renders and the two
+win-rates behave exactly as predicted (self ~= seat-advantage conversion near
+0.5; script = skill vs 1.3). Trainer healthy: kl 0.0131, 474.7 it/h, calib
+critic acc .74 / brier .18. Note the box had reached ~155k by deploy time —
+the next mine window moves to ~165-170k.
+
+## Expected effects to watch at the next mine (~165-170k)
 
 - Scenario transitions per game roughly double in self-play mode (both seats).
 - deckout_stack: the agent must LEARN the punisher role 1.3 used to script.

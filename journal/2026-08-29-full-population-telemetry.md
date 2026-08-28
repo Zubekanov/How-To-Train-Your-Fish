@@ -59,3 +59,20 @@ fixture). 2-iter parallel CPU smoke rendered every token with real values
 (`past=nan(0)` correct for a league with no selves yet). Deployed with the
 standard ship+STOP+relaunch; box resumed at it=162,402, GPU 97%. Telemetry-
 only: no rng consumption, no obs change, no era seam in game construction.
+
+## First live window (it=162,523)
+
+`opp trained=0.95 past=0.51(5890) cf=1.00 | ... deckout=0.27 turns=32.8
+seat_p1=0.50 play=0.51` and the panel's `frozen8=0.520(50)` (window grows to
+n~400 over 8 cycles — pre-deploy rows carry no counts). First readings:
+
+- **play=0.51 (n~19k mirror games)**: the true on-the-play edge is ~1pp —
+  the seat-diag n=48 series that bounced 0.40-0.62 was almost all noise.
+- **past=0.51(5890)**: exactly the ~6k games/window predicted; ~0.5 vs the
+  difficulty-seeking PFSP mix is the expected equilibrium reading.
+- **cf=1.00**: the policy chooses play-first essentially always in training
+  games — the training-side confirmation of the external audit's 99.95%.
+- **deckout=0.27**: first live full-population game-ending mode share.
+- **turns=32.8**: averaged over ALL games incl. scenario starts (constructed
+  boards begin at later turn numbers), vs ~23 in a full-game-only smoke —
+  read it as a same-definition series, not an absolute.

@@ -242,7 +242,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
 
     Logging is consolidated into a status line emitted every cfg.report_every_seconds
     (plus a final line) -- see module docstring."""
-    from fishrl.eval.metrics import calib_from_sums, estimator_metrics, guesser_mae, panel_winrates
+    from fishrl.eval.metrics import (calib_from_sums, estimator_metrics, guesser_mae,
+                                     jump_from_sums, panel_winrates)
     from fishrl.train.warmup import warmup
     from fishrl.data import features
     from fishrl.spaces import masking
@@ -288,6 +289,14 @@ def train(cfg: Config, models: Models | None = None, log=print,
     # by-turn graph; pooling the window's ~50k games removes them.
     calib_turn = np.zeros((3, features.TURN_MAX))
     calib_bucket = {lbl: np.zeros(3) for lbl, _lo, _hi in features.TURN_BUCKETS}
+    # Window det-transition |dV| sums (n / sum / 1000-bin hist): the jump telemetry
+    # pooled over every batch scored this report instead of the last one (2026-08-29).
+    jwin = {"n": 0, "sum": 0.0, "hist": np.zeros(1000)}
+    # Per-scenario WINDOW win/game counts: the [scenario] wr table used to print the
+    # PFSP EMA (alpha 0.1 == ~10-game memory) beside a CUMULATIVE game count -- a
+    # sampler signal masquerading as a winrate. The EMA stays the sampler's input
+    # (stats scenario_wr); the printed table and scenario_wr_win are true window rates.
+    scen_win: dict = {}
     # Per-window game/health telemetry (reset each report alongside the loss means):
     # game endings (truncation/draw), mirror seat balance, scenario vs full-game
     # episode lengths, forced-decision dilution, and the collect/update wall-clock split.
@@ -441,6 +450,13 @@ def train(cfg: Config, models: Models | None = None, log=print,
         if not cfg.train_public:                         # pub head disabled -> its calib is meaningless
             est = {k: v for k, v in est.items() if not k.startswith("pub_")}
         est.pop("_calib_sums", None)
+        est.pop("_jump_sums", None)
+        # Window-pooled |dV| jump (same move as the calib headline): the per-batch
+        # numbers stay as *_batch companions.
+        win_jump = jump_from_sums(jwin["n"], jwin["sum"], jwin["hist"]) if jwin["n"] else None
+        j_mean = (win_jump or est).get("critic_jump_mean", float("nan"))
+        j_p90 = (win_jump or est).get("critic_jump_p90", float("nan"))
+        j_n = (win_jump or est).get("critic_jump_n")
         # Window aggregate kept as a SEPARATE field (critic_turn_win): critic_turn and
         # the bucket keys stay last-batch (the streaky, per-360-game read Joseph wants
         # on the graph); the ~50k-game window arrays ride alongside for the rigorous view.
@@ -529,7 +545,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 f"calib critic(acc={c_acc:.2f},"
                 f"brier={c_brier:.2f}) "
                 f"aux={mean.get('deckout_aux_loss', nan):.3f} brier/t={by_turn} "
-                f"jump={est.get('critic_jump_mean', nan):.3f}/{est.get('critic_jump_p90', nan):.3f}"
+                f"jump={j_mean:.3f}/{j_p90:.3f}"
             )
             head_str = ""
         else:
@@ -591,10 +607,13 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     # per-batch cells are ~250 effective samples (ICC~0.96 within game)
                     "critic_turn_win": (win_cal or {}).get("critic_turn"),
                     # deterministic-transition |dV| (same seat, same game, same turn, no
-                    # opponent decision between): mean / p90 / pair count
-                    "critic_jump_mean": est.get("critic_jump_mean"),
-                    "critic_jump_p90": est.get("critic_jump_p90"),
-                    "critic_jump_n": est.get("critic_jump_n"),
+                    # opponent decision between): mean / p90 / pair count -- window-
+                    # pooled since 2026-08-29, last batch rides as *_batch
+                    "critic_jump_mean": j_mean,
+                    "critic_jump_p90": j_p90,
+                    "critic_jump_n": j_n,
+                    "critic_jump_mean_batch": est.get("critic_jump_mean"),
+                    "critic_jump_p90_batch": est.get("critic_jump_p90"),
                     "critic_consist_loss": mean.get("critic_consist_loss")}
                    if v3 else
                    {"guesser_loss": mean["guesser_loss"], "public_loss": mean["public_loss"],
@@ -647,9 +666,12 @@ def train(cfg: Config, models: Models | None = None, log=print,
                         "wr_script": (gwin["scen_scr_w"] / gwin["scen_scr_g"]) if gwin["scen_scr_g"] else None}}
                    if (gwin["scen_self_g"] or gwin["scen_scr_g"]) else {}),
                 # PFSP curriculum win-rate EMA per scenario (the sampler's difficulty
-                # signal, NOT a skill measure) — mirrors the [scenario] line's wr table
-                # so the website replica gets it over HTTP instead of journald.
+                # signal, NOT a skill measure: alpha 0.1 == ~10-game memory).
                 "scenario_wr": {mm.name: mm.wr for mm in scen_members},
+                # TRUE per-scenario window rates as [wins, decided games] — the wide-
+                # sample companion (2026-08-29); this is what the [scenario] wr table
+                # prints now.
+                "scenario_wr_win": {k: list(v) for k, v in sorted(scen_win.items())},
                 # Same for the scripted league anchors, keyed by profile name —
                 # mirrors the [league] line's wr table. Matters most for the
                 # versioned heuristics (heuristic_1_1/_1_2/_1_3), which have
@@ -707,8 +729,14 @@ def train(cfg: Config, models: Models | None = None, log=print,
         if scen_members and (cfg.scenario_frac > 0 or cfg.scenarios_in_pool):
             counts = " ".join(f"{mm.name}={scen_mix.get(mm.name, 0)}"
                               for mm in scen_members)
-            wrs = " ".join(f"{mm.name}={mm.wr:.2f}({mm.games})"
-                           for mm in sorted(scen_members, key=lambda mm: mm.wr))
+            # WINDOW win-rates (wins/decided this report -- n in parens is the window
+            # sample). The PFSP EMA (10-game memory) still drives sampling and rides
+            # in stats scenario_wr; printing it here beside a cumulative count made
+            # a sampler signal look like a noisy winrate (2026-08-29).
+            wrs = " ".join(f"{k}={w / g:.2f}({g})"
+                           for k, (w, g) in sorted(scen_win.items(),
+                                                   key=lambda kv: kv[1][0] / kv[1][1])
+                           if g)
             # per-seat-mode split (scenario_selfplay_frac): self-play wr = the
             # constructed seat's advantage-conversion rate, script wr = vs v1.3
             sg, ssg = int(gwin["scen_self_g"]), int(gwin["scen_scr_g"])
@@ -732,6 +760,10 @@ def train(cfg: Config, models: Models | None = None, log=print,
         for k in GW_KEYS:
             gwin[k] = 0.0
         scen_mix.clear()
+        scen_win.clear()
+        jwin["n"] = 0
+        jwin["sum"] = 0.0
+        jwin["hist"][:] = 0.0
         frozen = _snapshot(m)            # roll the anchor forward to the current policy
         league.add_snapshot(m, done)     # add this report's policy as a past-self member
         frozen_it = done
@@ -1042,6 +1074,9 @@ def train(cfg: Config, models: Models | None = None, log=print,
                         if won in ("p1", "p2"):
                             (league if tag == "pool_scen" else scen_league).update(
                                 member, won == "p1")
+                            sw = scen_win.setdefault(member.name, [0, 0])
+                            sw[0] += won == "p1"
+                            sw[1] += 1
                             # lseat holds the GAME SEED for scen metas -> per-mode wr
                             mk = "scen_self" if selfplay_mode(lseat) else "scen_scr"
                             gwin[mk + "_g"] += 1
@@ -1105,6 +1140,9 @@ def train(cfg: Config, models: Models | None = None, log=print,
                         gwin["scen_T"] += len(gbuf)
                         if gbuf.games and gbuf.games[-1] in ("p1", "p2"):
                             league.update(member, gbuf.games[-1] == "p1")
+                            sw = scen_win.setdefault(member.name, [0, 0])
+                            sw[0] += gbuf.games[-1] == "p1"
+                            sw[1] += 1
                         buf.merge(gbuf)
                         continue
                     opp_mix["pastself" if member.kind == "self" else member.kind] += 1
@@ -1160,6 +1198,9 @@ def train(cfg: Config, models: Models | None = None, log=print,
                         # learner never got a decision before it ended
                         if sbuf.games and sbuf.games[-1] in ("p1", "p2"):
                             scen_league.update(member, sbuf.games[-1] == "p1")
+                            sw = scen_win.setdefault(sname, [0, 0])
+                            sw[0] += sbuf.games[-1] == "p1"
+                            sw[1] += 1
                             mk = "scen_self" if selfplay_mode(sseed) else "scen_scr"
                             gwin[mk + "_g"] += 1
                             gwin[mk + "_w"] += sbuf.games[-1] == "p1"
@@ -1211,6 +1252,11 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 calib_turn += np.asarray(cs["turn"])
                 for lbl, v in cs["bucket"].items():
                     calib_bucket[lbl] += v
+            js = last_pre_est.get("_jump_sums")
+            if js:                                       # window |dV| jump sums
+                jwin["n"] += js[0]
+                jwin["sum"] += js[1]
+                jwin["hist"] += js[2]
             ppo_stats = ppo_update(batch, m.actor, m.critic, opt_ppo, cfg, ent, rng_seed=done,
                                    ref_actor=teacher_ref, kl_ref_coef=kl_now,
                                    train_actor=not freeze)

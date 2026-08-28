@@ -130,6 +130,13 @@ def estimator_metrics(models, batch) -> dict:
                     out["critic_jump_n"] = int(jump.numel())
                     out["critic_jump_mean"] = float(jump.mean())
                     out["critic_jump_p90"] = float(torch.quantile(jump, 0.9))
+                    # raw sums for WINDOW aggregation (same contract as _calib_sums):
+                    # |dV| lives in [0,1], so a 1000-bin histogram reproduces any
+                    # quantile to +-0.001 -- the window pools every batch scored
+                    # this report instead of the last one (2026-08-29)
+                    out["_jump_sums"] = (int(jump.numel()), float(jump.sum()),
+                                         torch.histc(jump, bins=1000, min=0.0,
+                                                     max=1.0).numpy())
                 else:
                     out["critic_jump_n"] = 0
                     out["critic_jump_mean"] = float("nan")
@@ -170,6 +177,21 @@ def calib_from_sums(turn_sums, bucket_sums) -> dict:
         out[f"critic_brier_{label}"] = float(sq_b / n_b) if n_b else float("nan")
         out[f"critic_acc_{label}"] = float(hit_b / n_b) if n_b else float("nan")
     return out
+
+
+def jump_from_sums(n: int, total: float, hist) -> dict:
+    """Fold accumulated _jump_sums (n / sum / 1000-bin histogram over [0,1],
+    added element-wise across batches) into the critic_jump keys. The p90 is
+    the upper edge of the bin where the cumulative count crosses 0.9n --
+    exact to one bin width (0.001)."""
+    import numpy as np
+    if not n:
+        return {"critic_jump_n": 0, "critic_jump_mean": float("nan"),
+                "critic_jump_p90": float("nan")}
+    c = np.cumsum(np.asarray(hist))
+    k = int(np.searchsorted(c, 0.9 * n))
+    return {"critic_jump_n": int(n), "critic_jump_mean": float(total / n),
+            "critic_jump_p90": float((k + 1) / len(c))}
 
 
 def guesser_mae(models, batch) -> float:

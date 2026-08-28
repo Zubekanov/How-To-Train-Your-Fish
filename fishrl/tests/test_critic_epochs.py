@@ -86,6 +86,29 @@ def test_estimator_metrics_per_turn_buckets():
     assert abs(sum(ct["n"][i] * ct["brier"][i] for i in range(40) if ct["n"][i]) / n - est["critic_brier"]) < 1e-3
 
 
+def test_jump_from_sums_reproduces_quantiles():
+    """Window |dV| aggregation (2026-08-29): the 1000-bin histogram fold gives the
+    mean exactly and any quantile to one bin width; empty windows come back NaN."""
+    import numpy as np
+    from fishrl.eval.metrics import jump_from_sums
+    rng = np.random.default_rng(0)
+    j = rng.uniform(0.0, 0.2, size=5000)                 # realistic |dV| scale
+    hist = torch.histc(torch.tensor(j, dtype=torch.float32), bins=1000,
+                       min=0.0, max=1.0).numpy()
+    out = jump_from_sums(len(j), float(j.sum()), hist)
+    assert out["critic_jump_n"] == 5000
+    assert abs(out["critic_jump_mean"] - j.mean()) < 1e-6
+    assert abs(out["critic_jump_p90"] - np.quantile(j, 0.9)) < 2e-3
+    # summing a window with itself doubles n and moves neither statistic
+    two = jump_from_sums(2 * len(j), 2 * float(j.sum()), hist * 2)
+    assert two["critic_jump_n"] == 10000
+    assert abs(two["critic_jump_mean"] - out["critic_jump_mean"]) < 1e-9
+    assert two["critic_jump_p90"] == out["critic_jump_p90"]
+    empty = jump_from_sums(0, 0.0, np.zeros(1000))
+    assert empty["critic_jump_n"] == 0
+    assert empty["critic_jump_mean"] != empty["critic_jump_mean"]  # NaN
+
+
 def test_calib_from_sums_matches_per_batch():
     """Window aggregation: folding one batch's _calib_sums through calib_from_sums
     reproduces the per-batch by-turn keys exactly; summing the batch with itself

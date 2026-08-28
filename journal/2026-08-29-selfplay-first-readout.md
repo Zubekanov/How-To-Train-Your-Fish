@@ -15,16 +15,18 @@ anchor_n (train harvest + topup) — the only way these winrates are readable.
 | h1.2 | .7782 | .7846 | .7797 | .7826 | .7811 (n=18.3k) |
 | h1.3 | .7005 | .7139 | .7043 | .7078 | .7061 (n=22.7k) |
 
-- h1.3 pre→post: −0.78pp, z≈1.8 (not significant at 95%, but every anchor
-  moved the same direction, −0.3 to −0.8pp — a small real effect is likely).
-- Equally important: the pre window was itself a RISING streak (+1.3pp over
-  the window before it, z≈3.2). Post is FLAT, and post-b > post-a on h1.3
-  (.7043→.7078) — reads as "slope stalled + tiny retrace", not a decline in
-  progress. No collapse anywhere; kl 0.0128-0.0134, H 0.42-0.43, aux 0.61,
-  critic acc ~0.72 all steady.
-- In-scenario telemetry stable: wr_script 0.59-0.61 (same as the deploy
-  window's 0.60 — no measured skill loss vs the 1.3 script where it still
-  plays), wr_self 0.46-0.47 flat.
+- CORRECTED (Joseph's pushback, same day): window-mean comparison was the
+  wrong instrument on a trending series — each report point is ~380-470
+  games (±2.3pp SE), so the pre AGGREGATE was diluting a real slope, and the
+  first-pass "hot streak" narrative was wrong. Weighted trend fit
+  (140k→deploy): slope +2.34 ± 0.37pp per 10k its, fitted level at deploy
+  0.720. Post aggregate 0.706 (n=22.7k, se=0.003) = **−1.4pp below the
+  fitted deploy-day level** and −2.2pp below trend continuation; post slope
+  +1.2pp/10k = growth HALVED, still positive. This is a real step down at
+  the seam plus a slower climb — Joseph's eyeball read, quantified.
+- No health regression: kl 0.0128-0.0134, H 0.42-0.43, aux 0.61, critic acc
+  ~0.72 steady. In-scenario wr_script stable 0.59-0.61 (no measured skill
+  loss vs the 1.3 script where it still plays), wr_self 0.46-0.47 flat.
 
 ## Mechanism (why the h-anchors would stall)
 
@@ -38,10 +40,17 @@ was the design trade, and the anchors are behaving as the design predicts.
 
 ## Verdict + decision
 
-Joseph's read is directionally right but the size is ~0.5-0.8pp against a
-noise floor of ±0.6pp — stall, not damage. Options on the resume-tunable
-knob (`--scenario-selfplay`): hold 0.6 through the ~165-170k mine (self-play
-benefits are what the mine tests), or drop to 0.4-0.5 to tilt back toward
-script exposure if h1.3 growth is the priority this week. Recommended: hold
-until the mine unless the next ~10k its show post falling below pre-2
-(~0.70) — that would be actual regression, not stall.
+Real cost, correctly sized: −1.4pp step at the seam + growth rate halved
+(2.3→1.2pp/10k) on h1.3; all four anchors moved the same direction. The
+trade bought script-independent pressure whose value is only measurable at
+the mine. Options on the resume-tunable knob (`--scenario-selfplay`): hold
+0.6 through the ~165-170k mine, or drop to 0.4-0.5 to recover script
+exposure at reduced self-play share. Joseph's call — the cost side of the
+ledger is now quantified; the benefit side has no number until the mine.
+
+## Lesson (methodology)
+
+Never compare window means across a change boundary on a series with a
+known slope — fit the pre-trend (weighted by per-point n) and test the post
+window against the fitted level AND continuation. The window mean dilutes
+the trend and manufactures a "noise" narrative for the residual.

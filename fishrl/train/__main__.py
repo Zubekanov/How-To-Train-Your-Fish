@@ -118,6 +118,11 @@ def main():
     ap.add_argument("--scenario-weight", action="append", default=[], metavar="NAME=W",
                     help="override a scenario's PFSP prior weight (repeatable); e.g. "
                          "deckout=0.5 to stop a floored scenario from soaking the pool")
+    ap.add_argument("--scenario-selfplay", type=float, default=Config.scenario_selfplay_frac,
+                    help="probability a scenario game plays BOTH seats with the current "
+                         "policy instead of the v1.3 engine seat (both seats' transitions "
+                         "train; keep <1 — the script seat is the curriculum's external "
+                         "pressure). Runtime knob, resume-tunable.")
     ap.add_argument("--scenario-boost", type=float, default=Config.scenario_boost,
                     help="scenario-pool mode: flat multiplier on every scenario member's "
                          "PFSP weight (scenario episodes are short, so a >1 boost raises "
@@ -295,6 +300,7 @@ def main():
                   league_size=args.league_size, scenario_frac=args.scenario_frac,
                   scenarios_in_pool=args.scenario_pool, scenario_weights=scen_w,
                   scenario_boost=args.scenario_boost,
+                  scenario_selfplay_frac=args.scenario_selfplay,
                   p1_adv_weight=args.p1_adv_weight,
                   freeze_actor_iters=args.freeze_actor_iters,
                   kl_teacher_coef=args.kl_teacher_coef,

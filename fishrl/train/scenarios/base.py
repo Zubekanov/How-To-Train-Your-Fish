@@ -35,6 +35,41 @@ import random
 from fishrl.forgetful_fish.state import _serialize_rng
 from fishrl.train.scenarios.surgery import make_engine_heuristic
 
+# ── scenario self-play (2026-08-27, Joseph) ──────────────────────────────────
+# With the agent at ~0.64-0.70 vs the v1.3 script, scenario reps against the
+# script increasingly train script-exploits, and only the RESPONDER seat of
+# each constructed situation ever learns. With probability `frac`, a scenario
+# game skips `make_engine_heuristic` entirely — both seats become the current
+# policy (the base self-play contract) and BOTH seats' transitions train
+# (collect_games drives every surfacing AEC agent). Kept a MIX, not a
+# replacement: the scripted seat is the curriculum's only EXTERNAL pressure,
+# and the self-play-blind precedent (main-phase telegraphing: ~0 err in
+# mirror, 22.5% catastrophic vs 1.3) says never go 100%.
+# The roll is the FIRST draw of the episode rng, so (a) the constructed board
+# for a given seed is IDENTICAL whichever mode rolls (mode only flips is_ai),
+# and (b) the trainer can recompute the mode from the game seed alone
+# (`selfplay_mode`) for per-mode telemetry — no worker report-back needed.
+# Process-global, set from Config at trainer init + pcollect._winit (the
+# set_text_change_mode pattern).
+_SELFPLAY_FRAC = 0.0
+
+
+def set_scenario_selfplay(frac: float) -> None:
+    global _SELFPLAY_FRAC
+    _SELFPLAY_FRAC = min(1.0, max(0.0, float(frac)))
+
+
+def scenario_selfplay() -> float:
+    return _SELFPLAY_FRAC
+
+
+def selfplay_mode(seed, frac: float | None = None) -> bool:
+    """Recompute the mode a scenario game at `seed` rolled (trainer-side
+    telemetry): the roll is the first draw of default_rng(seed)."""
+    import numpy as np
+    f = _SELFPLAY_FRAC if frac is None else frac
+    return bool(np.random.default_rng(seed).random() < f)
+
 
 class Scenario:
     name = "base"
@@ -88,13 +123,15 @@ class Scenario:
     def sample(self, rng):
         """A fresh (deep-copied, independently mutable) start-state from the pool:
         transient per-turn scalars cleared, `_manufacture`d, engine PRNG reseeded,
-        with `engine_seat` (if any) handed to the heuristic AI."""
+        with `engine_seat` (if any) handed to the heuristic AI — unless this
+        episode rolls self-play (see the module-level _SELFPLAY_FRAC block)."""
+        selfplay = bool(rng.random() < _SELFPLAY_FRAC)   # FIRST draw (see selfplay_mode)
         self.ensure_pool()
         g = copy.deepcopy(self._pool[int(rng.integers(len(self._pool)))])
         self._reset_transient(g)           # clear per-turn scalars the manufacture won't rebuild
         self._manufacture(g, rng)          # rebuild the board (consumes `rng` — unchanged behavior)
         self._reseed_engine_rng(g, rng)    # after the board, so a fixed seed still builds it byte-identically
-        if self.engine_seat is not None:
+        if self.engine_seat is not None and not selfplay:
             make_engine_heuristic(g, self.engine_seat, self.engine_profile)
         for pid in g.players:              # the leak this guards against must stay closed
             assert not g.players[pid].land_played_this_turn and not g.players[pid].mana_pool, \

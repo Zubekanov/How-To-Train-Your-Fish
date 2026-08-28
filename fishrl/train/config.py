@@ -160,6 +160,16 @@ class Config:
     # pool_frac cap still bounds the whole pool slice, mirror self-play keeps the
     # rest. 1.0 restores the old behaviour.
     scenario_boost: float = 3.0
+    # Probability that a scenario game rolls SELF-PLAY: both seats the current
+    # policy (both seats' transitions train) instead of the v1.3 engine seat.
+    # 2026-08-27 (Joseph): at ~0.64-0.70 vs the script, scenario reps risk
+    # training script-exploits and only ever teach the responder side. Kept a
+    # MIX (never 1.0) — the scripted seat is the curriculum's only external
+    # pressure and the self-play-blind precedent (telegraphing) stands. The
+    # roll is the episode rng's first draw: same seed -> same board either
+    # mode, and the trainer recomputes the mode from the seed for per-mode
+    # telemetry (scenarios.selfplay_mode). Runtime knob (resume-tunable).
+    scenario_selfplay_frac: float = 0.0
 
     # PPO
     clip: float = 0.2

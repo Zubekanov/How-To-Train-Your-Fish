@@ -246,6 +246,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
     if cfg.critic_view in features.PUBLIC_FAMILY:
         features.set_public_view(cfg.critic_view)
     masking.set_text_change_mode(getattr(cfg, "text_change_mode", "full"))
+    from fishrl.train.scenarios import selfplay_mode, set_scenario_selfplay
+    set_scenario_selfplay(getattr(cfg, "scenario_selfplay_frac", 0.0))
     m = models or build_models(cfg)
 
     opt_ppo = torch.optim.Adam(list(m.actor.parameters()) + list(m.critic.parameters()), lr=cfg.lr_ppo)
@@ -284,6 +286,9 @@ def train(cfg: Config, models: Models | None = None, log=print,
     # episode lengths, forced-decision dilution, and the collect/update wall-clock split.
     GW_KEYS = ("games", "trunc", "draw",
                "mirror_dec", "mirror_p1", "scen_games", "scen_T",
+               # scenario games split by seat mode (scenario_selfplay_frac):
+               # decided games / p1 wins, self-play seats vs the v1.3 engine seat
+               "scen_self_g", "scen_self_w", "scen_scr_g", "scen_scr_w",
                "forced_steps", "collect_s", "update_s", "book_s")
     gwin = {k: 0.0 for k in GW_KEYS}
     # Per-report opponent composition: games played vs each opponent category, so the
@@ -587,6 +592,16 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 "opp_random": opp_mix["random"] / grand_total,
                 "opp_scenario": scen_total / grand_total,
                 "scenario_mix": {k: v / grand_total for k, v in sorted(scen_mix.items())},
+                # scenario seat-mode split (sparse: only when scenario games ran).
+                # wr_self = advantage-conversion in policy-vs-policy scenario games;
+                # wr_script = vs the v1.3 engine seat (the legacy scenario_wr sense).
+                **({"scenario_selfplay": {
+                        "frac": gwin["scen_self_g"] / max(gwin["scen_self_g"] + gwin["scen_scr_g"], 1),
+                        "n_self": int(gwin["scen_self_g"]),
+                        "wr_self": (gwin["scen_self_w"] / gwin["scen_self_g"]) if gwin["scen_self_g"] else None,
+                        "n_script": int(gwin["scen_scr_g"]),
+                        "wr_script": (gwin["scen_scr_w"] / gwin["scen_scr_g"]) if gwin["scen_scr_g"] else None}}
+                   if (gwin["scen_self_g"] or gwin["scen_scr_g"]) else {}),
                 # PFSP curriculum win-rate EMA per scenario (the sampler's difficulty
                 # signal, NOT a skill measure) — mirrors the [scenario] line's wr table
                 # so the website replica gets it over HTTP instead of journald.
@@ -650,7 +665,16 @@ def train(cfg: Config, models: Models | None = None, log=print,
                               for mm in scen_members)
             wrs = " ".join(f"{mm.name}={mm.wr:.2f}({mm.games})"
                            for mm in sorted(scen_members, key=lambda mm: mm.wr))
-            log(f"[scenario it={done}] games={scen_total} ({counts}) | wr {wrs}")
+            # per-seat-mode split (scenario_selfplay_frac): self-play wr = the
+            # constructed seat's advantage-conversion rate, script wr = vs v1.3
+            sg, ssg = int(gwin["scen_self_g"]), int(gwin["scen_scr_g"])
+            mode_str = ""
+            if sg or ssg:
+                w_self = gwin["scen_self_w"] / sg if sg else nan
+                w_scr = gwin["scen_scr_w"] / ssg if ssg else nan
+                mode_str = (f" | selfplay {sg / max(sg + ssg, 1):.2f} "
+                            f"wr self={w_self:.2f}({sg}) script={w_scr:.2f}({ssg})")
+            log(f"[scenario it={done}] games={scen_total} ({counts}) | wr {wrs}" + mode_str)
         for k in KEYS:
             acc[k] = 0.0
         win_iters = win_T = 0
@@ -849,7 +873,9 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     metas.append(("mirror", None, None))
                 elif member.kind == "scenario":
                     specs.append({"kind": "scenario", "name": member.name, "seed": oseed})
-                    metas.append(("pool_scen", member, "p1"))
+                    # scen metas carry the GAME SEED in the seat slot: the learner
+                    # seat is always p1, and the seed recomputes the self-play roll
+                    metas.append(("pool_scen", member, oseed))
                 elif member.kind.startswith("heuristic"):
                     specs.append({"kind": "heuristic", "profile": member.kind, "seed": oseed})
                     metas.append(("pool", member, "p1"))
@@ -867,7 +893,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     smember = scen_league.sample(scn_rng)
                     sseed = cfg.seed + 300_000 + done_it * cfg.games_per_iter + sidx * 31
                     specs.append({"kind": "scenario", "name": smember.name, "seed": sseed})
-                    metas.append(("carve_scen", smember, "p1"))
+                    metas.append(("carve_scen", smember, sseed))   # seed, not seat (see pool_scen)
             return specs, metas
 
         run_start = time.perf_counter()         # exclude warmup/resume setup from elapsed
@@ -965,6 +991,10 @@ def train(cfg: Config, models: Models | None = None, log=print,
                         if won in ("p1", "p2"):
                             (league if tag == "pool_scen" else scen_league).update(
                                 member, won == "p1")
+                            # lseat holds the GAME SEED for scen metas -> per-mode wr
+                            mk = "scen_self" if selfplay_mode(lseat) else "scen_scr"
+                            gwin[mk + "_g"] += 1
+                            gwin[mk + "_w"] += won == "p1"
                     else:                                   # pool game vs a league member
                         opp_mix["pastself" if member.kind == "self" else member.kind] += 1
                         if won in ("p1", "p2"):
@@ -1058,10 +1088,14 @@ def train(cfg: Config, models: Models | None = None, log=print,
                         gwin["scen_T"] += len(sbuf)       # scenario episode lengths
                         buf.merge(sbuf)
                         scen_mix[sname] = scen_mix.get(sname, 0) + 1
-                        # the learner is p1 (p2 is the engine bot); count the game even if
-                        # the learner never got a decision before it ended
+                        # the learner is p1 (p2 is the engine bot, or the policy when
+                        # the game rolled self-play); count the game even if the
+                        # learner never got a decision before it ended
                         if sbuf.games and sbuf.games[-1] in ("p1", "p2"):
                             scen_league.update(member, sbuf.games[-1] == "p1")
+                            mk = "scen_self" if selfplay_mode(sseed) else "scen_scr"
+                            gwin[mk + "_g"] += 1
+                            gwin[mk + "_w"] += sbuf.games[-1] == "p1"
             fill_critic_values(buf, m.critic, view=cfg.critic_view)
             # Window game telemetry from the merged buffer: how games ended (buf.meta),
             # forced-decision dilution (1-legal-action steps), collect wall-clock.

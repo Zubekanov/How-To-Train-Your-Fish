@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from fishrl.train.scenarios.base import (scenario_selfplay, selfplay_mode,
+                                          set_scenario_selfplay)
 from fishrl.train.scenarios.board_presence import BoardPresenceScenario
 from fishrl.train.scenarios.constructed import CONSTRUCTED
 from fishrl.train.scenarios.deckout import DeckoutScenario

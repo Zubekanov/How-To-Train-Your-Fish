@@ -113,6 +113,8 @@ def _winit(lite: dict) -> None:
     if lite.get("critic_view", "god") in features.PUBLIC_FAMILY:
         features.set_public_view(lite["critic_view"])
     masking.set_text_change_mode(lite.get("text_change_mode", "full"))
+    from fishrl.train.scenarios import set_scenario_selfplay
+    set_scenario_selfplay(lite.get("scenario_selfplay_frac", 0.0))
     features.set_count_block(lite.get("obs_counts", False))
     features.set_split_block(lite.get("obs_split", False))
     features.set_ctx_block(lite.get("obs_ctx", False))
@@ -554,6 +556,7 @@ class ParallelCollector:
                 "obs_split": bool(getattr(cfg, "obs_split", False)),
                 "obs_ctx": bool(getattr(cfg, "obs_ctx", False)),
                 "obs_tgt": bool(getattr(cfg, "obs_tgt", False)),
+                "scenario_selfplay_frac": float(getattr(cfg, "scenario_selfplay_frac", 0.0)),
                 "scenario_names": scen_names,
                 "owner_pid": os.getpid(),
                 "affinity": parse_affinity(getattr(cfg, "collect_affinity", ""))}

@@ -444,8 +444,13 @@ def train(cfg: Config, models: Models | None = None, log=print,
         # Window aggregate kept as a SEPARATE field (critic_turn_win): critic_turn and
         # the bucket keys stay last-batch (the streaky, per-360-game read Joseph wants
         # on the graph); the ~50k-game window arrays ride alongside for the rigorous view.
+        # The HEADLINE critic_acc/critic_brier switched to the window fold 2026-08-29
+        # (last-batch effective n is ~games, not decisions -> +-2pp flicker); the
+        # last-batch values keep riding as critic_acc_batch/critic_brier_batch.
         win_cal = (calib_from_sums(calib_turn, calib_bucket)
                    if calib_turn[0].sum() > 0 else None)
+        c_acc = (win_cal or est).get("critic_acc", float("nan"))
+        c_brier = (win_cal or est).get("critic_brier", float("nan"))
         gmae = (guesser_mae(m, last_batch)
                 if (last_batch is not None and m.guesser is not None) else float("nan"))
         v3 = cfg.critic_view in features.PUBLIC_FAMILY
@@ -521,8 +526,8 @@ def train(cfg: Config, models: Models | None = None, log=print,
             by_turn = "/".join(f"{est.get(f'critic_brier_{lbl}', nan):.2f}"
                                for lbl, _lo, _hi in features.TURN_BUCKETS)
             calib_str = (
-                f"calib critic(acc={est.get('critic_acc', nan):.2f},"
-                f"brier={est.get('critic_brier', nan):.2f}) "
+                f"calib critic(acc={c_acc:.2f},"
+                f"brier={c_brier:.2f}) "
                 f"aux={mean.get('deckout_aux_loss', nan):.3f} brier/t={by_turn} "
                 f"jump={est.get('critic_jump_mean', nan):.3f}/{est.get('critic_jump_p90', nan):.3f}"
             )
@@ -570,8 +575,11 @@ def train(cfg: Config, models: Models | None = None, log=print,
                 "entropy": mean["entropy"], "approx_kl": mean["approx_kl"],
                 # Era-keyed calibration block: v3 rows carry critic_* (+ the parity-aux
                 # loss); legacy rows keep the historic guesser/priv/pub/gmae fields.
-                **({"critic_acc": est.get("critic_acc"),
-                    "critic_brier": est.get("critic_brier"),
+                **({"critic_acc": c_acc,                 # window-pooled (2026-08-29)
+                    "critic_brier": c_brier,
+                    "critic_calib_n": (win_cal or {}).get("n"),
+                    "critic_acc_batch": est.get("critic_acc"),   # last-batch (legacy sense)
+                    "critic_brier_batch": est.get("critic_brier"),
                     "deckout_aux_loss": mean.get("deckout_aux_loss"),
                     # per-turn calibration buckets (pre-update, same forward)
                     **{k: est.get(k) for lbl, _lo, _hi in features.TURN_BUCKETS

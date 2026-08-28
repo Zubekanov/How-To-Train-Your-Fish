@@ -149,7 +149,17 @@ def calib_from_sums(turn_sums, bucket_sums) -> dict:
     pre-game decisions pool into slot 1 but are outside every bucket)."""
     from fishrl.data.features import TURN_BUCKETS
     n_t, sq_t, hit_t = turn_sums
-    out = {"critic_turn": {
+    # Overall fold across every turn cell (turn-0 pools into slot 1, TURN_MAX+
+    # into the last slot, so the cells partition ALL scored decisions): the
+    # window-pooled headline. One batch's ~360 games give only ~360-400
+    # effective samples for acc/brier -- decisions within a game share the
+    # outcome (ICC ~0.96) -- so the last-batch headline flickered +-2pp; the
+    # window pools every batch scored this report (~50k games, 2026-08-29).
+    n_all = float(sum(n_t))
+    out = {"n": int(n_all),
+           "critic_acc": float(sum(hit_t) / n_all) if n_all else float("nan"),
+           "critic_brier": float(sum(sq_t) / n_all) if n_all else float("nan"),
+           "critic_turn": {
         "n": [int(v) for v in n_t],
         "brier": [round(float(s / c), 4) if c > 0 else None for s, c in zip(sq_t, n_t)],
         "acc": [round(float(h / c), 4) if c > 0 else None for h, c in zip(hit_t, n_t)],

@@ -106,6 +106,11 @@ def test_calib_from_sums_matches_per_batch():
     cs = est["_calib_sums"]
     one = calib_from_sums(np.asarray(cs["turn"]), cs["bucket"])
     assert one["critic_turn"] == est["critic_turn"]
+    # the window-pooled HEADLINE (2026-08-29): one batch's fold reproduces the
+    # per-batch acc/brier exactly (turn cells partition all scored decisions)
+    assert one["n"] == est["n"] == n
+    assert abs(one["critic_acc"] - est["critic_acc"]) < 1e-6
+    assert abs(one["critic_brier"] - est["critic_brier"]) < 1e-6
     for lbl, _lo, _hi in TURN_BUCKETS:
         assert one[f"critic_n_{lbl}"] == est[f"critic_n_{lbl}"]
         assert abs(one[f"critic_brier_{lbl}"] - est[f"critic_brier_{lbl}"]) < 1e-6
@@ -116,6 +121,9 @@ def test_calib_from_sums_matches_per_batch():
                           {k: np.asarray(v) * 2 for k, v in cs["bucket"].items()})
     assert two["critic_turn"]["n"] == [2 * v for v in est["critic_turn"]["n"]]
     assert two["critic_turn"]["brier"] == est["critic_turn"]["brier"]
+    assert two["n"] == 2 * n
+    assert abs(two["critic_acc"] - est["critic_acc"]) < 1e-6
+    assert abs(two["critic_brier"] - est["critic_brier"]) < 1e-6
     for lbl, _lo, _hi in TURN_BUCKETS:
         assert two[f"critic_n_{lbl}"] == 2 * est[f"critic_n_{lbl}"]
         assert abs(two[f"critic_brier_{lbl}"] - est[f"critic_brier_{lbl}"]) < 1e-6

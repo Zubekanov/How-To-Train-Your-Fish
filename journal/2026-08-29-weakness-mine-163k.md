@@ -24,17 +24,29 @@ side-by-side against the 135k (pre-selfplay) mine files.
   mirror-collusion drift.
 - Critic sharper: decision Brier 0.165 → 0.151.
 
-## The warning sign (not scenario-shaped)
+## The "passivity blunders" — ADJUDICATED: mostly judge bias, not policy
 
-- Confirmed blunders 0.50 → **0.92/game**, almost entirely the passivity
-  family (pass/end-turn holding castable Dandâns; 670+591 cases, regret
-  ~0.22, turn ~16-17). Partly critic-sharpness inflation (both the drop and
-  the counterfactual are judged by a sharper, jumpier critic — cast-seam
-  |dV| 0.039→0.050), but directionally consistent with mirror-heavy
-  training: passivity is cheap vs yourself, punished by the script.
-- "Never reached v≥0.5" losses 2.8% → 8.0%.
-- Still unlearned: Mystical Tutor value-negative (−0.042, unchanged);
-  predict-name remains the top deckout endgame error (0.188, 38% err).
+First read: confirmed blunders 0.50 → 0.92/game, almost entirely
+pass/end-turn holding castable Dandâns. Joseph challenged the
+interpretation ("0.7 vs 1.3 is very strong — passivity looks intentional
+and learned"), and the outcome-calibration test he prompted settles it:
+
+- "Confirmed" means confirmed BY THE CRITIC's one-resolution counterfactual
+  (replay alternatives on the copied state, same judge) — not ground truth.
+- At the flagged pass/end-turn states, the critic's post-drop read is
+  P(win)=0.477 but the ACTUAL win rate from those states is **0.619**
+  (+14.2pp above the judge); at 135k the overshoot was +8.2pp. The
+  win-rate penalty of a flagged game SHRANK (−15.7pp → −8.9pp) while flags
+  doubled.
+- Verdict: the sharper hands-view critic over-penalizes holding patterns
+  (the known visible-hands cast-step bias — it prices "castable Dandân ⇒
+  should cast" into V), and it got MORE biased there, manufacturing most of
+  the doubling. The passes are largely fine → intentional, learned holding.
+  Reclassified from "policy hole" to CRITIC calibration issue at hold/cast
+  seams (same family as cast-seam |dV| 0.039→0.050).
+- Residual smaller flags: "never reached v≥0.5" losses 2.8% → 8.0%; still
+  unlearned: Mystical Tutor value-negative (−0.042), predict-name top
+  deckout endgame error (0.188, 38% err).
 
 ## Decision (Joseph, after AskUserQuestion)
 
@@ -46,11 +58,12 @@ anti-passivity question moves to the next mine's checklist.
 
 ## Next-mine checklist (~175-180k)
 
-- Blunders/omissions per game: did the passivity family grow further at
-  reduced script exposure? (0.92/g baseline, critic-sharpness caveat — also
-  record the per-era critic Brier next to it.)
-- h1.3 slope at the new mix (trend-fit, not window means).
-- Cast-seam |dV| (0.050 and rising → critic_consistency PAY_KINDS/lam shelf
-  tool is the designated fix).
+- CRITIC hold/cast bias: rerun the outcome-calibration test on flagged
+  pass/end-turn states (baseline: judge 0.477 vs actual 0.619, +14.2pp
+  overshoot). If it keeps widening, the fix is critic-side (the
+  visible-hands cast-step bias / critic_consistency PAY_KINDS shelf tool),
+  not curriculum.
+- h1.3 slope at the boost-2 mix (trend-fit, not window means).
+- Cast-seam |dV| (0.050 baseline).
 - Deckout losses vs 1.3 (69/2000 baseline), Day's blowups (12.7%),
-  fizzle-line occurrence (still ~0, watch only).
+  never-ahead losses (8.0%), fizzle-line occurrence (still ~0, watch only).

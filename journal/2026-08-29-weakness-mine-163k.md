@@ -71,6 +71,17 @@ Fixed by deleting the token from launch.sh (sed on the box; only
 scenario-boost removed, expandable_segments intact) + restart. Verified:
 live cmdline now carries a single `scenario-boost 2`.
 
+## Second cut same day: boost 0.5 (Joseph: "further shrinkage, 0.5 or 0.33")
+
+Deployed 77ddca5, box resumed it≈164,3xx. First window (it=164,425):
+scenario share **17.7%** (6,884/38,880; was 43.8% at boost 3, ~38% at
+boost 2) and past-self pool games more than DOUBLED (past n 5,968→13,766/w)
+— the full-game mix Joseph asked for. Share came in above the ~11-12%
+linear-C projection (PFSP priorities re-equilibrate as scenarios get
+sampled less; may settle lower). If still too high, boost 0.33 is one
+train.args edit. Watch per the mine checklist: h1.3 slope, critic
+hold/cast overshoot, deckout losses — vs-1.3 exposure now ~7% of games.
+
 ## Next-mine checklist (~175-180k)
 
 - CRITIC hold/cast bias: rerun the outcome-calibration test on flagged

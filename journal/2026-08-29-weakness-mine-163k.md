@@ -50,11 +50,26 @@ and learned"), and the outcome-calibration test he prompted settles it:
 
 ## Decision (Joseph, after AskUserQuestion)
 
-`--scenario-boost 5 → 2`, `--scenario-selfplay` STAYS 0.6. Scenario share
+`--scenario-boost → 2`, `--scenario-selfplay` STAYS 0.6. Scenario share
 ~43% → ~30% of games (full end-to-end games ~57% → ~70%); vs-1.3 exposure
-drops ~17% → ~12%. The recommended selfplay 0.4 pairing (holds vs-1.3
-exposure ≈ flat to keep punishing the passivity hole) was declined — the
-anti-passivity question moves to the next mine's checklist.
+drops ~17% → ~12%. The recommended selfplay 0.4 pairing was declined (and
+subsequently vindicated as unnecessary — see the adjudication above).
+
+## Deploy gotcha: launch.sh silently overrode train.args
+
+The first restart with `--scenario-boost 2` in train.args changed NOTHING
+(scenario share stayed 43.8%): the box-local `launch.sh` (NOT in the repo)
+appends its own `--scenario-boost 3` AFTER `$(cat deploy/train.args)`, and
+argparse takes the last occurrence. Consequences:
+- train.args' `--scenario-boost 5` was NEVER live — the run's entire
+  history has been boost 3. (The 43% scenario share is the boost-3
+  equilibrium; the mix math in this journal is stated against that.)
+- launch.sh also pins `--kl-teacher-iters 10000` (train.args says 30000)
+  and `--minibatch 1024` after train.args — audit launch.sh's trailing
+  block whenever a train.args knob "doesn't take".
+Fixed by deleting the token from launch.sh (sed on the box; only
+scenario-boost removed, expandable_segments intact) + restart. Verified:
+live cmdline now carries a single `scenario-boost 2`.
 
 ## Next-mine checklist (~175-180k)
 

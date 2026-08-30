@@ -82,6 +82,57 @@ def test_archives_are_permanent_and_survive_milestone_pruning(tmp_path):
     assert len(glob.glob(str(tmp_path / "step_*.pt"))) == 2
 
 
+def test_config_from_checkpoint_lr_and_league_every():
+    """lr_ppo / league_every are runtime knobs: legacy checkpoints (no keys) fall
+    back to the defaults, and CLI-derived overrides win -- the plumbing behind
+    --lr-ppo / --league-every being resume-tunable."""
+    from fishrl.train.train_loop import config_from_checkpoint
+    cd = {"encoders": {"actor": "flat", "critic": "flat"}}
+    cfg = config_from_checkpoint(cd)
+    assert cfg.lr_ppo == pytest.approx(3e-4)
+    assert cfg.league_every == 1
+    cfg2 = config_from_checkpoint(cd, lr_ppo=1.5e-4, league_every=8)
+    assert cfg2.lr_ppo == pytest.approx(1.5e-4)
+    assert cfg2.league_every == 8
+
+
+@slow
+def test_resume_reasserts_lr_ppo_onto_loaded_optimizer(tmp_path):
+    """The optimizer state_dict carries the launch-time LR; a resume must re-assert
+    the config's lr_ppo onto the loaded param_groups (otherwise --lr-ppo is inert
+    on every resumed lineage -- the 300h-at-3e-4 trap)."""
+    latest = ckpt.latest_path(str(tmp_path))
+    cfg = _cfg(iters=1, seed=5)
+    train(cfg, build_models(cfg), checkpoint_path=latest)
+    saved = ckpt.load_checkpoint(latest)["optim"]["ppo"]["param_groups"][0]["lr"]
+    assert saved == pytest.approx(cfg.lr_ppo)
+
+    cfg2 = _cfg(iters=2, seed=5, lr_ppo=1.5e-4)
+    train(cfg2, build_models(cfg2), resume_path=latest, checkpoint_path=latest)
+    resumed = ckpt.load_checkpoint(latest)["optim"]["ppo"]["param_groups"][0]["lr"]
+    assert resumed == pytest.approx(1.5e-4)
+
+
+@slow
+def test_league_every_spaces_past_self_snapshots(tmp_path):
+    """league_every=N takes a past-self snapshot only every Nth status report.
+    With report_every_seconds=0 every iteration reports, so over the same number
+    of iterations the spaced run must bank at most half the selves of the
+    every-report run (exact counts depend on the final flush emit)."""
+    def selves_after(league_every, subdir):
+        latest = ckpt.latest_path(str(tmp_path / subdir))
+        cfg = _cfg(iters=4, seed=5, report_every_seconds=0.0,
+                   report_winrate_games=0, league_size=8,
+                   league_every=league_every)
+        train(cfg, build_models(cfg), checkpoint_path=latest)
+        return len(ckpt.load_checkpoint(latest)["league"]["selves"])
+
+    dense = selves_after(1, "dense")
+    sparse = selves_after(3, "sparse")
+    assert dense >= 4                      # one per report (+ maybe the final emit)
+    assert 1 <= sparse <= (dense + 2) // 3  # only every 3rd report snapshots
+
+
 @slow
 def test_resume_continues_iteration_and_restores_state(tmp_path):
     latest = ckpt.latest_path(str(tmp_path))

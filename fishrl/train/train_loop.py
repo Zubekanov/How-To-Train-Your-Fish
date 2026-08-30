@@ -389,6 +389,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
         from fishrl.train.scenarios import scenario_names
         scen_league = PFSPLeague.scenario_league(cfg, scenario_names())
     run_start = last_report = last_ckpt = time.perf_counter()
+    report_n = 0                 # status reports emitted this PROCESS (league_every phase)
 
     def total_elapsed() -> float:
         return elapsed_offset + (time.perf_counter() - run_start)
@@ -434,7 +435,7 @@ def train(cfg: Config, models: Models | None = None, log=print,
                                 done, payload, cfg.keep_last_checkpoints)
 
     def emit(final: bool = False) -> None:
-        nonlocal frozen, frozen_it, win_iters, win_T, last_report, last_ckpt
+        nonlocal frozen, frozen_it, win_iters, win_T, last_report, last_ckpt, report_n
         now = time.perf_counter()
         n = max(win_iters, 1)
         mean = {k: acc[k] / n for k in KEYS}
@@ -765,7 +766,13 @@ def train(cfg: Config, models: Models | None = None, log=print,
         jwin["sum"] = 0.0
         jwin["hist"][:] = 0.0
         frozen = _snapshot(m)            # roll the anchor forward to the current policy
-        league.add_snapshot(m, done)     # add this report's policy as a past-self member
+        # Past-self snapshot every league_every-th report: spacing widens the ring's
+        # time horizon (8 x every-8th at a 15-min cadence spans ~16h instead of ~2h),
+        # so PFSP hard-mode has genuinely older selves to hold the line against.
+        # The counter is per-process; a restart just re-phases the spacing.
+        report_n += 1
+        if report_n % max(1, int(getattr(cfg, "league_every", 1))) == 0:
+            league.add_snapshot(m, done)  # add this report's policy as a past-self member
         frozen_it = done
         last_report = time.perf_counter()
         _checkpoint(milestone=True)      # report-time save carries a numbered milestone
@@ -847,6 +854,11 @@ def train(cfg: Config, models: Models | None = None, log=print,
                     "rebuild models with the saved encoders before resuming")
             _load_model_state(m, payload["models"])
             opt_ppo.load_state_dict(payload["optim"]["ppo"])
+            # load_state_dict restores the SAVED param_group hyperparams, which would
+            # pin the launch-time LR for the life of the lineage; the config (and so
+            # the --lr-ppo flag) is authoritative on every resume.
+            for _pg in opt_ppo.param_groups:
+                _pg["lr"] = cfg.lr_ppo
             if opt_g is not None and "g" in payload["optim"]:
                 opt_g.load_state_dict(payload["optim"]["g"])
             if opt_p is not None and "p" in payload["optim"]:

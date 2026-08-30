@@ -79,6 +79,11 @@ def main():
                          "'var' favours even matchups")
     ap.add_argument("--league-size", type=int, default=Config.league_size,
                     help="ring length of frozen past-self league members (0 = anchors only)")
+    ap.add_argument("--league-every", type=int, default=Config.league_every,
+                    help="take a past-self snapshot every Nth status report (default 1 = "
+                         "every report). At 1 the ring spans league_size reports (~2h), so "
+                         "past selves are near-clones; N>1 widens the population's time "
+                         "horizon so PFSP hard-mode can punish cycling. Resume-tunable.")
     ap.add_argument("--scenario-pool", action="store_true", default=Config.scenarios_in_pool,
                     help="fold the scenarios into the main PFSP league (their play rate "
                          "floats with difficulty within --pool-frac) instead of the fixed "
@@ -203,6 +208,13 @@ def main():
     ap.add_argument("--ent-start", type=float, default=Config.ent_start,
                     help="entropy coefficient at the START of the anneal (default 0.02). "
                          "Lower it for a warm-started policy that must not be re-inflated.")
+    ap.add_argument("--lr-ppo", type=float, default=Config.lr_ppo,
+                    help="Adam LR for the shared actor+critic PPO optimizer (default 3e-4). "
+                         "Resume-tunable: on --resume this value is re-asserted onto the "
+                         "loaded optimizer state, which otherwise pins the launch-time LR "
+                         "forever. The late-run plateau lever: with the GNS estimator "
+                         "saturated (gns_b=nan, B_crit >> batch) updates are noise-"
+                         "dominated and halving the LR ~doubles the effective batch.")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--ckpt-dir", default="checkpoints")
     ap.add_argument("--resume", action="store_true",
@@ -297,7 +309,8 @@ def main():
                   infer_server=args.infer_server,
                   warmup_games=args.warmup_games,
                   pool_frac=args.pool_frac, pfsp_mode=args.pfsp_mode,
-                  league_size=args.league_size, scenario_frac=args.scenario_frac,
+                  league_size=args.league_size, league_every=args.league_every,
+                  lr_ppo=args.lr_ppo, scenario_frac=args.scenario_frac,
                   scenarios_in_pool=args.scenario_pool, scenario_weights=scen_w,
                   scenario_boost=args.scenario_boost,
                   scenario_selfplay_frac=args.scenario_selfplay,
@@ -354,8 +367,9 @@ def main():
           f"actor_hidden={cfg.head_hidden('actor')} card_dim={cfg.card_dim} | "
           f"belief={cfg.belief_mode} critic_view={cfg.critic_view} "
           f"deckout_aux={cfg.critic_deckout_aux} critic_epochs={cfg.critic_epochs or cfg.ppo_epochs}/{cfg.ppo_epochs} td_mix={cfg.critic_td_mix} consist={cfg.critic_consistency} text_change={cfg.text_change_mode} | "
-          f"pool: {cfg.pool_frac:.2f} (pfsp={cfg.pfsp_mode}, league={cfg.league_size}) | "
-          f"p1_adv={cfg.p1_adv_weight:.2f} ent_end={cfg.ent_end:.3f} | "
+          f"pool: {cfg.pool_frac:.2f} (pfsp={cfg.pfsp_mode}, league={cfg.league_size}"
+          f"x{cfg.league_every}) | "
+          f"p1_adv={cfg.p1_adv_weight:.2f} ent_end={cfg.ent_end:.3f} lr={cfg.lr_ppo:g} | "
           f"resume: {resume} | ckpt: {latest}", flush=True)
 
     from fishrl.train.keepawake import keep_awake

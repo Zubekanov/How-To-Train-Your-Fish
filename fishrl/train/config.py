@@ -95,7 +95,11 @@ class Config:
     pool_frac: float = 0.25
     # League = scripted anchors (also the eval anchors) + a ring of frozen past-self
     # snapshots (true fictitious self-play). league_size is the past-self ring length
-    # (0 -> anchors only). A snapshot is appended every status report.
+    # (0 -> anchors only). A snapshot is appended every league_every-th status report:
+    # at 1 (legacy) the ring spans league_size reports (~2h at a 15-min cadence), so
+    # every "past self" is a near-clone; spacing the snapshots widens the population's
+    # time horizon, letting PFSP hard-mode punish cycling (an old self that beats the
+    # current policy gets upweighted until the regression is re-fixed).
     # "heuristic" is v1.0 — the eval anchor and the run's long-standing opponent;
     # "heuristic_1_1"/"heuristic_1_2" (frozen at their releases) and
     # "heuristic_1_3" (current testbench mainline, evaluator off) are POOL
@@ -104,6 +108,7 @@ class Config:
     pfsp_anchors: tuple = ("random", "attacker", "heuristic", "heuristic_1_1",
                            "heuristic_1_2", "heuristic_1_3")
     league_size: int = 8
+    league_every: int = 1
     # Opponent sampling priority over the learner's per-opponent win-rate `x`:
     #   "hard" -> (1-x)^pfsp_p  : focus on opponents you LOSE to (default)
     #   "var"  -> x*(1-x)       : focus on EVEN matchups (AlphaStar main-agent style)
@@ -194,6 +199,9 @@ class Config:
     # it only asks V to be flat across tap/float/pay/cast chains. 0 = off.
     critic_consistency: float = 0.0
     minibatch: int = 256
+    # Adam LR for the shared actor+critic PPO optimizer. Resume-tunable via --lr-ppo:
+    # the resume path re-asserts this value onto the loaded optimizer state's
+    # param_groups (which otherwise carry the LR the run was launched with forever).
     lr_ppo: float = 3e-4
     grad_clip: float = 1.0
     ent_start: float = 0.02

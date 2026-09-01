@@ -8,6 +8,17 @@ depend on.
 Everything below is stated against the code as of `02ac079`. File:line references are given so
 claims stay checkable — if this doc and the code disagree, the code wins and this doc is a bug.
 
+> **2026-09-02 — the run is over.** Training concluded at iteration 204,225
+> (~0.75 vs heuristic 1.3; final agent `checkpoints-v3/best.pt` @196,263). The
+> end-of-run record — full timeline, final benchmarks, the plateau playbook,
+> and the lessons ledger — is [`FINAL-REPORT.md`](FINAL-REPORT.md); it
+> supersedes this document's "current run" framing (Part 5) and any
+> status-flavoured statements below. Post-`02ac079` additions not described
+> here: window-pooled calibration/jump/scenario telemetry and full-population
+> game telemetry (2026-08-29), resume-tunable `--lr-ppo`, spaced past-self
+> snapshots (`--league-every`), `--ent-start` (the "no CLI flag" trap below is
+> fixed), and the PAY_KINDS-only `critic_consistency` era (lam 10→25).
+
 **Contents**
 - [Part 0 — The game, and why it is an interesting RL problem](#part-0)
 - [Part 1 — Theory and techniques](#part-1)

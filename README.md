@@ -2,6 +2,12 @@
 
 Adversarial machine learning agents for the game of Forgetful Fish aka Dandân.
 
+> **Status (2026-09-02): training concluded.** The final agent is
+> `checkpoints-v3/best.pt` (iteration 196,263; ~0.75 win-rate vs the v1.3
+> heuristic across 2,000-game benches). The full story — run history, final
+> benchmarks, lessons — is in [`docs/FINAL-REPORT.md`](docs/FINAL-REPORT.md).
+> The lineage remains locally resumable via `deploy\fishrl-pc.bat`.
+
 `fishrl` wraps a complete Forgetful Fish rules engine (vendored from the Website
 project under `fishrl/forgetful_fish/`, logic unmodified) as a **PettingZoo AEC**
 two-agent, imperfect-information self-play environment with a flat masked action

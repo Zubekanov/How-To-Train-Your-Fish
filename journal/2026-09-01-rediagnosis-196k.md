@@ -70,3 +70,12 @@ Each intervention now yields a one-time step, not a slope.
 
 Recommended now: 1+2 (two train.args edits, one restart). Read at ~210k,
 mine at ~215k with passcalib.py (+13.6pp baseline).
+
+## Deployed (Joseph: "Go for it")
+
+3f84286; box restarted at it=196,735. Verified live: banner consist=25.0
+(lr/league carried), cmdline carries --ent-anneal-iters 195000
+--ent-reheat-period 10000 --ent-reheat-peak 0.012; eval panel relaunched
+(--n-frozen 200). Reheat coef at restart ≈ 0.0118, decaying to 0.008 by
+~205k, then sawtoothing every 10k its. Read the h1.3 trend across WHOLE
+reheat cycles (a mild wobble at each peak is expected, not a regression).

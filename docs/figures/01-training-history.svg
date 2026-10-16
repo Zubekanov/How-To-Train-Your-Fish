@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3200" height="1890" viewBox="0 0 3200 1890"><title>01 · Training history</title><defs><marker id="arrow-2459ba" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#2459ba"/></marker><marker id="arrow-18805c" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#18805c"/></marker><marker id="arrow-7949b7" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#7949b7"/></marker><marker id="arrow-b85c12" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#b85c12"/></marker><marker id="arrow-52627b" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#52627b"/></marker><marker id="arrow-9d7115" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#9d7115"/></marker><marker id="arrow-10294e" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#10294e"/></marker><marker id="arrow-b3261e" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#b3261e"/></marker><marker id="arrow-142a44" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#142a44"/></marker></defs><rect width="3200" height="1890" fill="white"/><g font-family="Arial, Helvetica, sans-serif" id="figure-body"><g id="figure-header" font-family="Arial, Helvetica, sans-serif"><rect width="3200" height="240" fill="#10294e"/><text x="175" y="64" font-size="42" font-weight="800" fill="white" text-anchor="start" >HOW TO TRAIN YOUR FISH</text>
+<text x="3045" y="64" font-size="32" font-weight="600" fill="#91e0d0" text-anchor="end" >MASKED PPO SELF-PLAY · PFSP LEAGUE · SCENARIO CURRICULUM</text>
+<text x="175" y="147" font-size="58" font-weight="700" fill="white" text-anchor="start" >01 · TRAINING HISTORY</text>
+<text x="175" y="206" font-size="32" font-weight="400" fill="#dce6f4" text-anchor="start" >Three lineages, one warm start. The final agent is v3, which ran until the cloud credit ran out</text>
+</g>
+<text x="175" y="310" font-size="34" font-weight="800" fill="#10294e" text-anchor="start" >THREE LINEAGES · calendar, to scale</text>
+<path d="M 640,360 L 3045,360" fill="none" stroke="#c6d3e5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M640,360 V372" stroke="#52627b" stroke-width="2"/>
+<text x="640" y="348" font-size="24" font-weight="600" fill="#52627b" text-anchor="middle" >17 Jun</text>
+<path d="M1077,360 V372" stroke="#52627b" stroke-width="2"/>
+<text x="1077" y="348" font-size="24" font-weight="600" fill="#52627b" text-anchor="middle" >1 Jul</text>
+<path d="M1546,360 V372" stroke="#52627b" stroke-width="2"/>
+<text x="1546" y="348" font-size="24" font-weight="600" fill="#52627b" text-anchor="middle" >16 Jul</text>
+<path d="M2046,360 V372" stroke="#52627b" stroke-width="2"/>
+<text x="2046" y="348" font-size="24" font-weight="600" fill="#52627b" text-anchor="middle" >1 Aug</text>
+<path d="M2545,360 V372" stroke="#52627b" stroke-width="2"/>
+<text x="2545" y="348" font-size="24" font-weight="600" fill="#52627b" text-anchor="middle" >17 Aug</text>
+<path d="M3045,360 V372" stroke="#52627b" stroke-width="2"/>
+<text x="3045" y="348" font-size="24" font-weight="600" fill="#52627b" text-anchor="middle" >2 Sep</text>
+<text x="175" y="444" font-size="40" font-weight="800" fill="#2459ba" text-anchor="start" >v1</text>
+<text x="245" y="444" font-size="28" font-weight="600" fill="#2459ba" text-anchor="start" >flat network</text>
+<text x="175" y="476" font-size="22" font-weight="400" fill="#52627b" text-anchor="start" >fresh start</text>
+<rect x="640" y="430" width="906" height="46" rx="10" fill="#2459ba" stroke="none" stroke-width="0" />
+<circle cx="640" cy="453" r="14" fill="#2459ba" stroke="#2459ba" stroke-width="4"/>
+<text x="1576" y="444" font-size="32" font-weight="800" fill="#2459ba" text-anchor="start" >622 hours</text>
+<text x="1576" y="476" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >plateaued: the network could not use what it was shown</text>
+<text x="175" y="634" font-size="40" font-weight="800" fill="#7949b7" text-anchor="start" >v2</text>
+<text x="245" y="634" font-size="28" font-weight="600" fill="#7949b7" text-anchor="start" >entity network</text>
+<text x="175" y="666" font-size="22" font-weight="400" fill="#52627b" text-anchor="start" >fresh start, nothing kept from v1</text>
+<rect x="1546" y="620" width="999" height="46" rx="10" fill="#7949b7" stroke="none" stroke-width="0" />
+<circle cx="1546" cy="643" r="14" fill="#7949b7" stroke="#7949b7" stroke-width="4"/>
+<text x="2575" y="634" font-size="32" font-weight="800" fill="#7949b7" text-anchor="start" >382 hours</text>
+<text x="2575" y="666" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >stopped: its privileged critic and learned</text>
+<text x="2575" y="696" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >belief net were measured as paying nothing</text>
+<path d="M 2545,672 L 2545,852" fill="none" stroke="#18805c" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-18805c)" />
+<text x="2521" y="776" font-size="25" font-weight="700" fill="#18805c" text-anchor="end" >warm start: the policy network&#x27;s weights carried over,</text>
+<text x="2521" y="808" font-size="25" font-weight="400" fill="#142a44" text-anchor="end" >the critic and the belief model were rebuilt</text>
+<text x="175" y="884" font-size="40" font-weight="800" fill="#18805c" text-anchor="start" >v3</text>
+<text x="245" y="884" font-size="28" font-weight="600" fill="#18805c" text-anchor="start" >final lineage</text>
+<text x="175" y="916" font-size="22" font-weight="400" fill="#52627b" text-anchor="start" >warm start from v2</text>
+<rect x="2545" y="870" width="500" height="46" rx="10" fill="#18805c" stroke="none" stroke-width="0" />
+<circle cx="2545" cy="893" r="14" fill="#18805c" stroke="#18805c" stroke-width="4"/>
+<polygon points="2991.8,869.0 2998.1,884.3 3014.6,885.6 3002.0,896.3 3005.9,912.4 2991.8,903.8 2977.7,912.4 2981.5,896.3 2968.9,885.6 2985.4,884.3" fill="#9d7115" stroke="#10294e" stroke-width="3"/>
+<rect x="3037" y="860" width="16" height="66" fill="#18805c"/>
+<text x="3045" y="848" font-size="24" font-weight="400" fill="#52627b" text-anchor="end" >cloud credit ran out</text>
+<rect x="2608" y="924" width="437" height="8" rx="3" fill="#dce6f4" stroke="none" stroke-width="0" />
+<text x="2608" y="956" font-size="22" font-weight="400" fill="#52627b" text-anchor="start" >on a rented RTX 4090 from 19 Aug</text>
+<text x="2485" y="884" font-size="32" font-weight="800" fill="#18805c" text-anchor="end" >347 hours</text>
+<text x="2485" y="918" font-size="25" font-weight="400" fill="#142a44" text-anchor="end" >54.6M games · 12.6B decisions</text>
+<text x="2485" y="950" font-size="25" font-weight="400" fill="#142a44" text-anchor="end" >★ the released agent, iteration 196,263</text>
+<text x="175" y="1100" font-size="34" font-weight="800" fill="#10294e" text-anchor="start" >v3 BY ITERATION · win-rate vs the strongest scripted opponent</text>
+<rect x="640" y="1160" width="2405" height="500" rx="0" fill="#fbfcfe" stroke="#d6deea" stroke-width="1.5" />
+<path d="M640,1624 H3045" stroke="#e3e9f2" stroke-width="1.5"/>
+<text x="624" y="1633" font-size="24" font-weight="400" fill="#52627b" text-anchor="end" >0.2</text>
+<path d="M640,1553 H3045" stroke="#e3e9f2" stroke-width="1.5"/>
+<text x="624" y="1562" font-size="24" font-weight="400" fill="#52627b" text-anchor="end" >0.3</text>
+<path d="M640,1481 H3045" stroke="#e3e9f2" stroke-width="1.5"/>
+<text x="624" y="1490" font-size="24" font-weight="400" fill="#52627b" text-anchor="end" >0.4</text>
+<path d="M640,1410 H3045" stroke="#e3e9f2" stroke-width="1.5"/>
+<text x="624" y="1419" font-size="24" font-weight="400" fill="#52627b" text-anchor="end" >0.5</text>
+<path d="M640,1339 H3045" stroke="#e3e9f2" stroke-width="1.5"/>
+<text x="624" y="1348" font-size="24" font-weight="400" fill="#52627b" text-anchor="end" >0.6</text>
+<path d="M640,1267 H3045" stroke="#e3e9f2" stroke-width="1.5"/>
+<text x="624" y="1276" font-size="24" font-weight="400" fill="#52627b" text-anchor="end" >0.7</text>
+<path d="M640,1196 H3045" stroke="#e3e9f2" stroke-width="1.5"/>
+<text x="624" y="1205" font-size="24" font-weight="400" fill="#52627b" text-anchor="end" >0.8</text>
+<path d="M640,1410 H3045" stroke="#52627b" stroke-width="2" stroke-dasharray="8,8"/>
+<text x="656" y="1400" font-size="22" font-weight="400" fill="#52627b" text-anchor="start" >even</text>
+<path d="M640,1660 V1670" stroke="#52627b" stroke-width="2"/>
+<text x="640" y="1698" font-size="24" font-weight="400" fill="#52627b" text-anchor="middle" >0</text>
+<path d="M1229,1660 V1670" stroke="#52627b" stroke-width="2"/>
+<text x="1229" y="1698" font-size="24" font-weight="400" fill="#52627b" text-anchor="middle" >50k</text>
+<path d="M1818,1660 V1670" stroke="#52627b" stroke-width="2"/>
+<text x="1818" y="1698" font-size="24" font-weight="400" fill="#52627b" text-anchor="middle" >100k</text>
+<path d="M2406,1660 V1670" stroke="#52627b" stroke-width="2"/>
+<text x="2406" y="1698" font-size="24" font-weight="400" fill="#52627b" text-anchor="middle" >150k</text>
+<path d="M2995,1660 V1670" stroke="#52627b" stroke-width="2"/>
+<text x="2995" y="1698" font-size="24" font-weight="400" fill="#52627b" text-anchor="middle" >200k</text>
+<text x="3045" y="1730" font-size="22" font-weight="400" fill="#52627b" text-anchor="end" >iterations</text>
+<path d="M 817,1617 L 1186,1553 L 1909,1389 L 2085,1341 L 2236,1308 L 2558,1261 L 2808,1250 L 2951,1235" fill="none" stroke="#18805c" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+<circle cx="817" cy="1617" r="10" fill="#18805c" stroke="#18805c" stroke-width="4"/>
+<circle cx="1186" cy="1553" r="10" fill="#18805c" stroke="#18805c" stroke-width="4"/>
+<circle cx="1909" cy="1389" r="10" fill="#18805c" stroke="#18805c" stroke-width="4"/>
+<circle cx="2085" cy="1341" r="10" fill="#18805c" stroke="#18805c" stroke-width="4"/>
+<circle cx="2236" cy="1308" r="10" fill="#18805c" stroke="#18805c" stroke-width="4"/>
+<circle cx="2558" cy="1261" r="10" fill="#18805c" stroke="#18805c" stroke-width="4"/>
+<circle cx="2808" cy="1250" r="10" fill="#18805c" stroke="#18805c" stroke-width="4"/>
+<circle cx="2951" cy="1235" r="10" fill="#18805c" stroke="#18805c" stroke-width="4"/>
+<text x="837" y="1626" font-size="24" font-weight="600" fill="#52627b" text-anchor="start" >0.21</text>
+<polygon points="2951.2,1195.4 2958.1,1212.0 2976.0,1213.4 2962.4,1225.0 2966.5,1242.5 2951.2,1233.1 2936.0,1242.5 2940.1,1225.0 2926.5,1213.4 2944.4,1212.0" fill="#9d7115" stroke="#10294e" stroke-width="3"/>
+<text x="2915" y="1217" font-size="30" font-weight="800" fill="#10294e" text-anchor="end" >0.764 released</text>
+<path d="M817,1160 V1726" stroke="#52627b" stroke-width="2" stroke-dasharray="7,8" opacity="0.7"/>
+<path d="M807,1740 L827,1740 L817,1726 Z" fill="#52627b"/>
+<text x="817" y="1774" font-size="24" font-weight="700" fill="#52627b" text-anchor="middle" >moved to the rented GPU</text>
+<path d="M1200,1160 V1726" stroke="#7949b7" stroke-width="2" stroke-dasharray="7,8" opacity="0.7"/>
+<path d="M1190,1740 L1210,1740 L1200,1726 Z" fill="#7949b7"/>
+<text x="1200" y="1774" font-size="24" font-weight="700" fill="#7949b7" text-anchor="middle" >critic swapped in place</text>
+<path d="M2112,1160 V1726" stroke="#2459ba" stroke-width="2" stroke-dasharray="7,8" opacity="0.7"/>
+<path d="M2102,1740 L2122,1740 L2112,1726 Z" fill="#2459ba"/>
+<text x="2112" y="1774" font-size="24" font-weight="700" fill="#2459ba" text-anchor="middle" >inputs widened in place (+8 pp)</text>
+<path d="M2808,1160 V1726" stroke="#b85c12" stroke-width="2" stroke-dasharray="7,8" opacity="0.7"/>
+<path d="M2798,1740 L2818,1740 L2808,1726 Z" fill="#b85c12"/>
+<text x="2808" y="1774" font-size="24" font-weight="700" fill="#b85c12" text-anchor="middle" >learning rate halved,</text>
+<text x="2808" y="1804" font-size="24" font-weight="700" fill="#b85c12" text-anchor="middle" >league spaced out (+3 pp)</text>
+<text x="175" y="1850" font-size="25" font-weight="400" fill="#52627b" text-anchor="start" ></text>
+<text x="3045" y="1850" font-size="25" font-weight="400" fill="#52627b" text-anchor="end" >01 / 05</text>
+</g></svg>

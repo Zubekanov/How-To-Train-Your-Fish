@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3200" height="1940" viewBox="0 0 3200 1940"><title>03 · Training loop</title><defs><marker id="arrow-2459ba" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#2459ba"/></marker><marker id="arrow-18805c" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#18805c"/></marker><marker id="arrow-7949b7" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#7949b7"/></marker><marker id="arrow-b85c12" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#b85c12"/></marker><marker id="arrow-52627b" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#52627b"/></marker><marker id="arrow-9d7115" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#9d7115"/></marker><marker id="arrow-10294e" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#10294e"/></marker><marker id="arrow-b3261e" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#b3261e"/></marker><marker id="arrow-142a44" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#142a44"/></marker></defs><rect width="3200" height="1940" fill="white"/><g font-family="Arial, Helvetica, sans-serif" id="figure-body"><g id="figure-header" font-family="Arial, Helvetica, sans-serif"><rect width="3200" height="240" fill="#10294e"/><text x="175" y="64" font-size="42" font-weight="800" fill="white" text-anchor="start" >HOW TO TRAIN YOUR FISH</text>
+<text x="3045" y="64" font-size="32" font-weight="600" fill="#91e0d0" text-anchor="end" >MASKED PPO SELF-PLAY · PFSP LEAGUE · SCENARIO CURRICULUM</text>
+<text x="175" y="147" font-size="58" font-weight="700" fill="white" text-anchor="start" >03 · TRAINING LOOP</text>
+<text x="175" y="206" font-size="32" font-weight="400" fill="#dce6f4" text-anchor="start" >Where each iteration&#x27;s games come from, and the two places a weakness mine can feed back into</text>
+</g>
+<rect x="1100" y="300" width="1000" height="150" rx="18" fill="#f1f6ff" stroke="#2459ba" stroke-width="3" />
+<g transform="translate(1124,318) scale(0.9)" fill="white" stroke="#2459ba" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6,36 L22,6 L38,36 Z M6,36 L22,26 L38,36 M22,6 L22,26" fill="none" stroke-width="2"/><circle cx="6" cy="36" r="4.5"/><circle cx="22" cy="6" r="4.5"/><circle cx="38" cy="36" r="4.5"/><circle cx="22" cy="26" r="4.5"/></g>
+<text x="1176" y="346" font-size="34" font-weight="700" fill="#2459ba" text-anchor="start" >THE POLICY</text>
+<text x="1128" y="381" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >one network plays every learner seat</text>
+<rect x="175" y="540" width="2870" height="480" rx="20" fill="#f7f9fc" stroke="#c6d3e5" stroke-width="2" />
+<text x="205" y="590" font-size="34" font-weight="700" fill="#10294e" text-anchor="start" >GAMES PER ITERATION</text>
+<text x="767" y="646" font-size="30" font-weight="700" fill="#2459ba" text-anchor="middle" >40% self-play</text>
+<text x="2172" y="646" font-size="30" font-weight="700" fill="#18805c" text-anchor="middle" >60% against the league · opponents the policy loses to are picked more often</text>
+<path d="M205,660 H1323.0" stroke="#2459ba" stroke-width="4"/><path d="M1335.0,660 H3015" stroke="#18805c" stroke-width="4"/>
+<rect x="205" y="670" width="1118" height="230" rx="12" fill="#f1f6ff" stroke="#2459ba" stroke-width="3" />
+<text x="229" y="724" font-size="32" font-weight="700" fill="#2459ba" text-anchor="start" >policy vs itself</text>
+<text x="229" y="770" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >both seats learn</text>
+<rect x="1329" y="670" width="556" height="230" rx="12" fill="#eff9f3" stroke="#18805c" stroke-width="3" />
+<text x="1353" y="724" font-size="32" font-weight="700" fill="#18805c" text-anchor="start" >6 scripted bots</text>
+<text x="1353" y="770" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >random, attacker, four heuristics</text>
+<rect x="1891" y="670" width="556" height="230" rx="12" fill="#eff9f3" stroke="#18805c" stroke-width="3" />
+<text x="1915" y="724" font-size="32" font-weight="700" fill="#18805c" text-anchor="start" >8 past selves</text>
+<text x="1915" y="770" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >frozen snapshots, ~16 h apart</text>
+<rect x="2453" y="670" width="556" height="230" rx="12" fill="#eff9f3" stroke="#18805c" stroke-width="3" />
+<text x="2477" y="724" font-size="32" font-weight="700" fill="#18805c" text-anchor="start" >18 scenarios</text>
+<text x="2477" y="770" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >start mid-game in a known weak spot</text>
+<text x="2477" y="808" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >then play out normally</text>
+<text x="3015" y="950" font-size="22" font-weight="400" fill="#52627b" text-anchor="end" >league shares float with results; the three widths are not to scale</text>
+<rect x="1100" y="1110" width="1000" height="150" rx="18" fill="#f1f6ff" stroke="#2459ba" stroke-width="3" />
+<g transform="translate(1124,1128) scale(0.9)" fill="white" stroke="#2459ba" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M34,26 A14,14 0 1,1 30,12" fill="none" stroke-width="4"/><path d="M24,8 L31,13 L25,19" fill="none" stroke-width="4"/></g>
+<text x="1176" y="1156" font-size="34" font-weight="700" fill="#2459ba" text-anchor="start" >PPO UPDATE</text>
+<text x="1128" y="1191" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >learn from the learner seats&#x27; moves</text>
+<path d="M 1600,450 L 1600,540" fill="none" stroke="#2459ba" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-2459ba)" />
+<text x="1616" y="508" font-size="25" font-weight="600" fill="#2459ba" text-anchor="start" >plays</text>
+<path d="M 1610,1020 L 1600,1110" fill="none" stroke="#2459ba" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-2459ba)" />
+<text x="1626" y="1078" font-size="25" font-weight="600" fill="#2459ba" text-anchor="start" >games</text>
+<path d="M2100,1185.0 H3075 V375.0 H2100" fill="none" stroke="#2459ba" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-2459ba)"/>
+<text x="3060" y="1163" font-size="26" font-weight="700" fill="#2459ba" text-anchor="end" >every iteration</text>
+<text x="540" y="1350" font-size="30" font-weight="700" fill="#b85c12" text-anchor="start" >EVERY FEW DAYS · A WEAKNESS MINE</text>
+<rect x="175" y="1380" width="620" height="200" rx="18" fill="#ffffff" stroke="#52627b" stroke-width="3" />
+<g transform="translate(199,1398) scale(0.9)" fill="white" stroke="#52627b" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4,40 V4 M4,40 H40" fill="none"/><path d="M10,32 L18,22 L26,26 L38,10" fill="none" stroke-width="4"/></g>
+<text x="251" y="1426" font-size="30" font-weight="700" fill="#52627b" text-anchor="start" >EVALUATE</text>
+<text x="203" y="1460" font-size="24" font-weight="400" fill="#142a44" text-anchor="start" >an hourly panel against the scripted bots</text>
+<text x="203" y="1493" font-size="24" font-weight="400" fill="#142a44" text-anchor="start" >picks the best checkpoint</text>
+<rect x="855" y="1380" width="620" height="200" rx="18" fill="#fff6e9" stroke="#b85c12" stroke-width="3" />
+<g transform="translate(879,1398) scale(0.9)" fill="white" stroke="#b85c12" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M3,22 C10,10 34,10 41,22 C34,34 10,34 3,22 Z"/><circle cx="22" cy="22" r="6"/></g>
+<text x="931" y="1426" font-size="30" font-weight="700" fill="#b85c12" text-anchor="start" >MINE FOR WEAKNESSES</text>
+<text x="883" y="1460" font-size="24" font-weight="400" fill="#142a44" text-anchor="start" >2,000 fresh games, the critic flags the</text>
+<text x="883" y="1493" font-size="24" font-weight="400" fill="#142a44" text-anchor="start" >costly decisions</text>
+<path d="M1815.0,1380 L2095,1480.0 L1815.0,1580 L1535,1480.0 Z" fill="#fff6e9" stroke="#b85c12" stroke-width="3"/>
+<text x="1815" y="1460" font-size="26" font-weight="700" fill="#b85c12" text-anchor="middle" >Can the network</text>
+<text x="1815" y="1494" font-size="26" font-weight="700" fill="#b85c12" text-anchor="middle" >even see the mistake?</text>
+<rect x="2155" y="1380" width="890" height="220" rx="18" fill="#f6f1fd" stroke="#7949b7" stroke-width="3" />
+<text x="2183" y="1426" font-size="30" font-weight="700" fill="#7949b7" text-anchor="start" >NO → SHOW IT MORE</text>
+<text x="2183" y="1460" font-size="24" font-weight="400" fill="#142a44" text-anchor="start" >widen the network&#x27;s inputs in place, without restarting</text>
+<text x="2183" y="1493" font-size="24" font-weight="400" fill="#142a44" text-anchor="start" >training</text>
+<text x="2183" y="1527" font-size="24" font-weight="400" fill="#142a44" text-anchor="start" >the biggest single gain of the run came this way: +8 pp</text>
+<rect x="2155" y="1640" width="890" height="190" rx="18" fill="#eff9f3" stroke="#18805c" stroke-width="3" />
+<text x="2183" y="1686" font-size="30" font-weight="700" fill="#18805c" text-anchor="start" >YES → DRILL IT</text>
+<text x="2183" y="1720" font-size="24" font-weight="400" fill="#142a44" text-anchor="start" >add a scenario that starts in that spot to the league</text>
+<text x="2183" y="1753" font-size="24" font-weight="400" fill="#142a44" text-anchor="start" >its share shrinks on its own once the lesson is learned</text>
+<path d="M 795,1480 L 855,1480" fill="none" stroke="#52627b" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-52627b)" />
+<path d="M 1475,1480 L 1535,1480" fill="none" stroke="#b85c12" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-b85c12)" />
+<path d="M 2095,1480 L 2155,1490" fill="none" stroke="#7949b7" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-7949b7)" />
+<text x="2091" y="1464" font-size="26" font-weight="700" fill="#7949b7" text-anchor="end" >no</text>
+<path d="M1815.0,1580 V1735 H2155" fill="none" stroke="#18805c" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-18805c)"/>
+<text x="1829" y="1620" font-size="26" font-weight="700" fill="#18805c" text-anchor="start" >yes</text>
+<path d="M1100,1185.0 H485.0 V1380" fill="none" stroke="#52627b" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-52627b)"/>
+<text x="499" y="1275" font-size="25" font-weight="600" fill="#52627b" text-anchor="start" >checkpoints</text>
+<path d="M3045,1490 H3125 V335.0 H2100" fill="none" stroke="#7949b7" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-7949b7)"/>
+<text x="3115" y="315" font-size="26" font-weight="700" fill="#7949b7" text-anchor="end" >changes what the policy can see</text>
+<path d="M3045,1735 H3175 V610 H2975 V670" fill="none" stroke="#18805c" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-18805c)"/>
+<text x="3040" y="524" font-size="26" font-weight="700" fill="#18805c" text-anchor="end" >changes which games are played</text>
+<text x="175" y="1900" font-size="25" font-weight="400" fill="#52627b" text-anchor="start" ></text>
+<text x="3045" y="1900" font-size="25" font-weight="400" fill="#52627b" text-anchor="end" >03 / 05</text>
+</g></svg>

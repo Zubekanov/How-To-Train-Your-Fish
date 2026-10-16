@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3200" height="1780" viewBox="0 0 3200 1780"><title>02 · Architecture &amp; inference</title><defs><marker id="arrow-2459ba" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#2459ba"/></marker><marker id="arrow-18805c" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#18805c"/></marker><marker id="arrow-7949b7" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#7949b7"/></marker><marker id="arrow-b85c12" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#b85c12"/></marker><marker id="arrow-52627b" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#52627b"/></marker><marker id="arrow-9d7115" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#9d7115"/></marker><marker id="arrow-10294e" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#10294e"/></marker><marker id="arrow-b3261e" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#b3261e"/></marker><marker id="arrow-142a44" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#142a44"/></marker></defs><rect width="3200" height="1780" fill="white"/><g font-family="Arial, Helvetica, sans-serif" id="figure-body"><g id="figure-header" font-family="Arial, Helvetica, sans-serif"><rect width="3200" height="240" fill="#10294e"/><text x="175" y="64" font-size="42" font-weight="800" fill="white" text-anchor="start" >HOW TO TRAIN YOUR FISH</text>
+<text x="3045" y="64" font-size="32" font-weight="600" fill="#91e0d0" text-anchor="end" >MASKED PPO SELF-PLAY · PFSP LEAGUE · SCENARIO CURRICULUM</text>
+<text x="175" y="147" font-size="58" font-weight="700" fill="white" text-anchor="start" >02 · ARCHITECTURE &amp; INFERENCE</text>
+<text x="175" y="206" font-size="32" font-weight="400" fill="#dce6f4" text-anchor="start" >What one decision runs through at play time, and the critic that exists only in training</text>
+</g>
+<defs><pattern id="hatch" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="10" height="10" fill="white"/><rect width="4" height="10" fill="#b3261e"/></pattern></defs>
+<text x="175" y="310" font-size="34" font-weight="800" fill="#10294e" text-anchor="start" >PLAY TIME · one decision, left to right</text>
+<rect x="175" y="380" width="330" height="1020" rx="20" fill="#f7f9fc" stroke="#10294e" stroke-width="3" />
+<g transform="translate(197,400) scale(1.0)" fill="white" stroke="#10294e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M18,4 H26 L28,10 L34,12 L39,9 L43,16 L39,20 V24 L43,28 L39,35 L34,32 L28,34 L26,40 H18 L16,34 L10,32 L5,35 L1,28 L5,24 V20 L1,16 L5,9 L10,12 L16,10 Z"/><circle cx="22" cy="22" r="7"/></g>
+<text x="251" y="430" font-size="32" font-weight="700" fill="#10294e" text-anchor="start" >GAME ENGINE</text>
+<text x="201" y="480" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >rules, hidden information,</text>
+<text x="201" y="512" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >and which actions are legal</text>
+<rect x="540" y="400" width="560" height="520" rx="18" fill="#f1f6ff" stroke="#2459ba" stroke-width="3" />
+<g transform="translate(562,418) scale(0.9)" fill="white" stroke="#2459ba" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M3,22 C10,10 34,10 41,22 C34,34 10,34 3,22 Z"/><circle cx="22" cy="22" r="6"/></g>
+<text x="614" y="448" font-size="32" font-weight="700" fill="#2459ba" text-anchor="start" >WHAT THIS SEAT CAN SEE</text>
+<rect x="566.0" y="490" width="452.1" height="70" fill="#2459ba" stroke="white" stroke-width="2"/>
+<rect x="1018.1" y="490" width="5.1" height="70" fill="#10294e" stroke="white" stroke-width="2"/>
+<rect x="1023.3" y="490" width="50.7" height="70" fill="#7949b7" stroke="white" stroke-width="2"/>
+<text x="566" y="600" font-size="25" font-weight="700" fill="#2459ba" text-anchor="start" >146 card slots × 44 features</text>
+<text x="566" y="634" font-size="22" font-weight="400" fill="#52627b" text-anchor="start" >hand, battlefield, graveyard, exile, stack, library</text>
+<text x="566" y="682" font-size="25" font-weight="700" fill="#10294e" text-anchor="start" >+ 73 game-state values</text>
+<text x="566" y="716" font-size="22" font-weight="400" fill="#52627b" text-anchor="start" >life, lands, mana, turn, step, what is pending</text>
+<text x="566" y="764" font-size="25" font-weight="700" fill="#7949b7" text-anchor="start" >+ card counting</text>
+<text x="566" y="798" font-size="22" font-weight="400" fill="#52627b" text-anchor="start" >expected cards in the opponent&#x27;s hand, piles and</text>
+<text x="566" y="826" font-size="22" font-weight="400" fill="#52627b" text-anchor="start" >targets on the stack · pure arithmetic, no parameters</text>
+<text x="1074" y="894" font-size="30" font-weight="800" fill="#10294e" text-anchor="end" >7,218 numbers in</text>
+<path d="M 505,660 L 534,660" fill="none" stroke="#2459ba" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-2459ba)" />
+<rect x="1160" y="400" width="500" height="520" rx="18" fill="#f1f6ff" stroke="#2459ba" stroke-width="3" />
+<g transform="translate(1182,418) scale(0.9)" fill="white" stroke="#2459ba" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6,36 L22,6 L38,36 Z M6,36 L22,26 L38,36 M22,6 L22,26" fill="none" stroke-width="2"/><circle cx="6" cy="36" r="4.5"/><circle cx="22" cy="6" r="4.5"/><circle cx="38" cy="36" r="4.5"/><circle cx="22" cy="26" r="4.5"/></g>
+<text x="1234" y="448" font-size="32" font-weight="700" fill="#2459ba" text-anchor="start" >ENTITY ENCODER</text>
+<text x="1186" y="500" font-size="40" font-weight="800" fill="#2459ba" text-anchor="start" >→ 2,842</text>
+<text x="1186" y="535" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >one small shared network reads</text>
+<text x="1186" y="570" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >every card slot the same way,</text>
+<text x="1186" y="605" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >then pools each zone</text>
+<text x="1186" y="640" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >the game-state values and card</text>
+<text x="1186" y="675" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >counts join after pooling</text>
+<rect x="1690" y="400" width="340" height="520" rx="18" fill="#f1f6ff" stroke="#2459ba" stroke-width="3" />
+<g transform="translate(1712,418) scale(0.9)" fill="white" stroke="#2459ba" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6,36 L22,6 L38,36 Z M6,36 L22,26 L38,36 M22,6 L22,26" fill="none" stroke-width="2"/><circle cx="6" cy="36" r="4.5"/><circle cx="22" cy="6" r="4.5"/><circle cx="38" cy="36" r="4.5"/><circle cx="22" cy="26" r="4.5"/></g>
+<text x="1764" y="448" font-size="32" font-weight="700" fill="#2459ba" text-anchor="start" >POLICY HEAD</text>
+<text x="1716" y="500" font-size="40" font-weight="800" fill="#2459ba" text-anchor="start" >→ 285</text>
+<text x="1716" y="535" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >three dense layers</text>
+<text x="1716" y="570" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >768 → 768 → 384</text>
+<text x="1716" y="605" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >one score per action</text>
+<rect x="2060" y="400" width="310" height="520" rx="18" fill="#fff6e9" stroke="#b85c12" stroke-width="3" />
+<g transform="translate(2082,418) scale(0.9)" fill="white" stroke="#b85c12" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="36" height="36" rx="4"/><path d="M4,16 H40 M4,28 H40 M16,4 V40 M28,4 V40" fill="none"/><rect x="17" y="17" width="10" height="10" fill="#b85c12" stroke="none"/></g>
+<text x="2134" y="448" font-size="32" font-weight="700" fill="#b85c12" text-anchor="start" >MASK</text>
+<text x="2086" y="487" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >illegal actions</text>
+<text x="2086" y="522" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >are blanked out</text>
+<text x="2086" y="557" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >the engine&#x27;s only</text>
+<text x="2086" y="592" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >say in the choice</text>
+<rect x="2400" y="400" width="310" height="520" rx="18" fill="#eff9f3" stroke="#18805c" stroke-width="3" />
+<g transform="translate(2422,418) scale(0.9)" fill="white" stroke="#18805c" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="36" height="36" rx="6"/><circle cx="12" cy="12" r="3.5" fill="#18805c" stroke="none"/><circle cx="32" cy="12" r="3.5" fill="#18805c" stroke="none"/><circle cx="22" cy="22" r="3.5" fill="#18805c" stroke="none"/><circle cx="12" cy="32" r="3.5" fill="#18805c" stroke="none"/><circle cx="32" cy="32" r="3.5" fill="#18805c" stroke="none"/></g>
+<text x="2474" y="448" font-size="32" font-weight="700" fill="#18805c" text-anchor="start" >SAMPLE</text>
+<text x="2426" y="487" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >pick one action by</text>
+<text x="2426" y="522" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >its probability</text>
+<text x="2426" y="557" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >(not the</text>
+<text x="2426" y="592" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >best-scoring one)</text>
+<rect x="2740" y="400" width="305" height="520" rx="18" fill="#ffffff" stroke="#10294e" stroke-width="3" />
+<g transform="translate(2762,418) scale(0.9)" fill="white" stroke="#10294e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M18,4 H26 L28,10 L34,12 L39,9 L43,16 L39,20 V24 L43,28 L39,35 L34,32 L28,34 L26,40 H18 L16,34 L10,32 L5,35 L1,28 L5,24 V20 L1,16 L5,9 L10,12 L16,10 Z"/><circle cx="22" cy="22" r="7"/></g>
+<text x="2814" y="448" font-size="32" font-weight="700" fill="#10294e" text-anchor="start" >APPLY</text>
+<text x="2766" y="484" font-size="23" font-weight="400" fill="#142a44" text-anchor="start" >the engine plays it</text>
+<text x="2766" y="516" font-size="23" font-weight="400" fill="#142a44" text-anchor="start" >multi-step choices</text>
+<text x="2766" y="549" font-size="23" font-weight="400" fill="#142a44" text-anchor="start" >are built one</text>
+<text x="2766" y="581" font-size="23" font-weight="400" fill="#142a44" text-anchor="start" >sub-action at a time</text>
+<path d="M 1100,660 L 1154,660" fill="none" stroke="#10294e" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-10294e)" />
+<path d="M 1660,660 L 1684,660" fill="none" stroke="#2459ba" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-2459ba)" />
+<path d="M 2030,660 L 2054,660" fill="none" stroke="#2459ba" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-2459ba)" />
+<path d="M 2370,660 L 2394,660" fill="none" stroke="#b85c12" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-b85c12)" />
+<path d="M 2710,660 L 2734,660" fill="none" stroke="#18805c" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-18805c)" />
+<path d="M2892,400 V350 H340.0 V374" fill="none" stroke="#10294e" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-10294e)"/>
+<text x="2880" y="336" font-size="26" font-weight="700" fill="#10294e" text-anchor="end" >next decision</text>
+<path d="M505,975 H2215 V926" fill="none" stroke="#b85c12" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="14,12" marker-end="url(#arrow-b85c12)"/>
+<text x="2195" y="961" font-size="25" font-weight="600" fill="#b85c12" text-anchor="end" >which actions are legal right now</text>
+<text x="1160" y="1046" font-size="28" font-weight="800" fill="#10294e" text-anchor="start" >THE 285 ACTIONS</text>
+<text x="1430" y="1046" font-size="24" font-weight="400" fill="#52627b" text-anchor="start" >width = how many slots each kind has</text>
+<rect x="1160.0" y="1070" width="13.2" height="60" fill="#ffffff" stroke="#52627b" stroke-width="2"/>
+<path d="M1166.6,1130 V1148" stroke="#52627b" stroke-width="2"/>
+<text x="1167" y="1166" font-size="23" font-weight="600" fill="#52627b" text-anchor="middle" >pass</text>
+<rect x="1173.2" y="1070" width="238.1" height="60" fill="#f1f6ff" stroke="#2459ba" stroke-width="2"/>
+<text x="1292" y="1108" font-size="23" font-weight="600" fill="#2459ba" text-anchor="middle" >play from hand</text>
+<rect x="1411.3" y="1070" width="674.6" height="60" fill="#f1f6ff" stroke="#2459ba" stroke-width="2"/>
+<text x="1749" y="1108" font-size="23" font-weight="600" fill="#2459ba" text-anchor="middle" >use the battlefield</text>
+<rect x="2086.0" y="1070" width="39.7" height="60" fill="#fff6e9" stroke="#b85c12" stroke-width="2"/>
+<path d="M2105.8,1130 V1148" stroke="#b85c12" stroke-width="2"/>
+<text x="2098" y="1166" font-size="23" font-weight="600" fill="#b85c12" text-anchor="end" >pay</text>
+<rect x="2125.6" y="1070" width="39.7" height="60" fill="#ffffff" stroke="#52627b" stroke-width="2"/>
+<path d="M2145.5,1130 V1148" stroke="#52627b" stroke-width="2"/>
+<text x="2153" y="1166" font-size="23" font-weight="600" fill="#52627b" text-anchor="start" >setup</text>
+<rect x="2165.3" y="1070" width="165.4" height="60" fill="#f6f1fd" stroke="#7949b7" stroke-width="2"/>
+<text x="2248" y="1108" font-size="23" font-weight="600" fill="#7949b7" text-anchor="middle" >text change</text>
+<rect x="2330.7" y="1070" width="436.5" height="60" fill="#eff9f3" stroke="#18805c" stroke-width="2"/>
+<text x="2549" y="1108" font-size="23" font-weight="600" fill="#18805c" text-anchor="middle" >pick a target</text>
+<rect x="2767.2" y="1070" width="277.8" height="60" fill="#eff9f3" stroke="#18805c" stroke-width="2"/>
+<text x="2906" y="1108" font-size="23" font-weight="600" fill="#18805c" text-anchor="middle" >arrange / split</text>
+<rect x="2119.0" y="1070" width="6.6" height="60" fill="url(#hatch)" stroke="#b3261e" stroke-width="2"/>
+<rect x="2760.6" y="1070" width="6.6" height="60" fill="url(#hatch)" stroke="#b3261e" stroke-width="2"/>
+<text x="3045" y="1166" font-size="23" font-weight="400" fill="#b3261e" text-anchor="end" >hatched = the two &#x27;cancel&#x27; actions, never allowed (they taught stalling)</text>
+<text x="540" y="1245" font-size="34" font-weight="800" fill="#10294e" text-anchor="start" >3.2M parameters</text>
+<text x="876" y="1245" font-size="25" font-weight="400" fill="#52627b" text-anchor="start" >about 1 ms per decision on one CPU core · a fifth of decisions have one legal action and skip the network</text>
+<path d="M535,1310 H3045" fill="none" stroke="#52627b" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="14,12"/>
+<text x="3045" y="1296" font-size="30" font-weight="800" fill="#52627b" text-anchor="end" >TRAINING ONLY · never runs at play time</text>
+<rect x="540" y="1370" width="560" height="300" rx="18" fill="#f6f1fd" stroke="#7949b7" stroke-width="3" />
+<g transform="translate(562,1388) scale(0.9)" fill="white" stroke="#7949b7" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M3,22 C10,10 34,10 41,22 C34,34 10,34 3,22 Z"/><circle cx="22" cy="22" r="6"/></g>
+<text x="614" y="1418" font-size="32" font-weight="700" fill="#7949b7" text-anchor="start" >WHAT THE CRITIC SEES</text>
+<text x="566" y="1470" font-size="40" font-weight="800" fill="#7949b7" text-anchor="start" >6,846 numbers in</text>
+<text x="566" y="1505" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >both players&#x27; hands, nothing of the</text>
+<text x="566" y="1540" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >library order</text>
+<text x="566" y="1575" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >plus the same counting features</text>
+<path d="M 505,1520 L 534,1520" fill="none" stroke="#7949b7" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-7949b7)" />
+<rect x="1160" y="1370" width="500" height="300" rx="18" fill="#f6f1fd" stroke="#7949b7" stroke-width="3" />
+<g transform="translate(1182,1388) scale(0.9)" fill="white" stroke="#7949b7" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6,36 L22,6 L38,36 Z M6,36 L22,26 L38,36 M22,6 L22,26" fill="none" stroke-width="2"/><circle cx="6" cy="36" r="4.5"/><circle cx="22" cy="6" r="4.5"/><circle cx="38" cy="36" r="4.5"/><circle cx="22" cy="26" r="4.5"/></g>
+<text x="1234" y="1418" font-size="32" font-weight="700" fill="#7949b7" text-anchor="start" >ENTITY ENCODER</text>
+<text x="1186" y="1470" font-size="40" font-weight="800" fill="#7949b7" text-anchor="start" >→ 2,566</text>
+<text x="1186" y="1505" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >its own copy, same design</text>
+<rect x="1690" y="1370" width="340" height="300" rx="18" fill="#f6f1fd" stroke="#7949b7" stroke-width="3" />
+<g transform="translate(1712,1388) scale(0.9)" fill="white" stroke="#7949b7" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6,36 L22,6 L38,36 Z M6,36 L22,26 L38,36 M22,6 L22,26" fill="none" stroke-width="2"/><circle cx="6" cy="36" r="4.5"/><circle cx="22" cy="6" r="4.5"/><circle cx="38" cy="36" r="4.5"/><circle cx="22" cy="26" r="4.5"/></g>
+<text x="1764" y="1418" font-size="32" font-weight="700" fill="#7949b7" text-anchor="start" >VALUE HEAD</text>
+<text x="1716" y="1470" font-size="40" font-weight="800" fill="#7949b7" text-anchor="start" >→ 1</text>
+<text x="1716" y="1505" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >512 → 512 → 256</text>
+<rect x="2060" y="1370" width="650" height="300" rx="18" fill="#f6f1fd" stroke="#7949b7" stroke-width="3" />
+<g transform="translate(2082,1388) scale(0.9)" fill="white" stroke="#7949b7" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4,40 V4 M4,40 H40" fill="none"/><path d="M10,32 L18,22 L26,26 L38,10" fill="none" stroke-width="4"/></g>
+<text x="2134" y="1418" font-size="32" font-weight="700" fill="#7949b7" text-anchor="start" >P(player 1 wins)</text>
+<text x="2086" y="1457" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >used only to weight the policy&#x27;s updates:</text>
+<text x="2086" y="1492" font-size="25" font-weight="400" fill="#142a44" text-anchor="start" >it never touches a decision</text>
+<path d="M 1100,1520 L 1154,1520" fill="none" stroke="#7949b7" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-7949b7)" />
+<path d="M 1660,1520 L 1684,1520" fill="none" stroke="#7949b7" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-7949b7)" />
+<path d="M 2030,1520 L 2054,1520" fill="none" stroke="#7949b7" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-7949b7)" />
+<text x="2740" y="1430" font-size="34" font-weight="800" fill="#7949b7" text-anchor="start" >1.7M parameters</text>
+<text x="2740" y="1474" font-size="25" font-weight="400" fill="#52627b" text-anchor="start" >4.9M trained in total</text>
+<text x="2740" y="1510" font-size="22" font-weight="400" fill="#52627b" text-anchor="start" >no learned belief net, no attention,</text>
+<text x="2740" y="1540" font-size="22" font-weight="400" fill="#52627b" text-anchor="start" >no search on top</text>
+<text x="175" y="1740" font-size="25" font-weight="400" fill="#52627b" text-anchor="start" ></text>
+<text x="3045" y="1740" font-size="25" font-weight="400" fill="#52627b" text-anchor="end" >02 / 05</text>
+</g></svg>

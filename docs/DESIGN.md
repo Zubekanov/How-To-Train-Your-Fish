@@ -1,6 +1,6 @@
 # How To Train Your Fish — Design, Theory, and Telemetry
 
-An explanatory companion to the `README`. The README tells you **how to run** the stack; this
+An explanatory companion to [`RUNNING.md`](RUNNING.md), which tells you **how to run** the stack; this
 document explains **what it is doing and why**, and specifies the **telemetry contract** that
 downstream consumers (the dashboard, the website collector, the grapher agent, `backfill_stats`)
 depend on.

@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3200" height="2070" viewBox="0 0 3200 2070"><title>05 · Architectural mistakes &amp; changes</title><defs><marker id="arrow-2459ba" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#2459ba"/></marker><marker id="arrow-18805c" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#18805c"/></marker><marker id="arrow-7949b7" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#7949b7"/></marker><marker id="arrow-b85c12" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#b85c12"/></marker><marker id="arrow-52627b" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#52627b"/></marker><marker id="arrow-9d7115" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#9d7115"/></marker><marker id="arrow-10294e" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#10294e"/></marker><marker id="arrow-b3261e" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#b3261e"/></marker><marker id="arrow-142a44" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#142a44"/></marker></defs><rect width="3200" height="2070" fill="white"/><g font-family="Arial, Helvetica, sans-serif" id="figure-body"><g id="figure-header" font-family="Arial, Helvetica, sans-serif"><rect width="3200" height="240" fill="#10294e"/><text x="175" y="64" font-size="42" font-weight="800" fill="white" text-anchor="start" >HOW TO TRAIN YOUR FISH</text>
+<text x="3045" y="64" font-size="32" font-weight="600" fill="#91e0d0" text-anchor="end" >MASKED PPO SELF-PLAY · PFSP LEAGUE · SCENARIO CURRICULUM</text>
+<text x="175" y="147" font-size="58" font-weight="700" fill="white" text-anchor="start" >05 · ARCHITECTURAL MISTAKES &amp; CHANGES</text>
+<text x="175" y="206" font-size="32" font-weight="400" fill="#dce6f4" text-anchor="start" >Every clever part the project started with was measured, found to pay nothing, and replaced with something simpler</text>
+</g>
+<defs><pattern id="hatch5" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="12" height="12" fill="#f7f9fc"/><rect width="3" height="12" fill="#d6deea"/></pattern></defs>
+<rect x="620" y="330" width="340" height="46" rx="6" fill="#e9eef6" stroke="none" stroke-width="0" />
+<text x="790" y="361" font-size="24" font-weight="700" fill="#10294e" text-anchor="middle" >v1 · 622 h</text>
+<rect x="980" y="330" width="340" height="46" rx="6" fill="#e9eef6" stroke="none" stroke-width="0" />
+<text x="1150" y="361" font-size="24" font-weight="700" fill="#10294e" text-anchor="middle" >v2 · 382 h</text>
+<rect x="1340" y="330" width="1705" height="46" rx="6" fill="#e9eef6" stroke="none" stroke-width="0" />
+<text x="2192" y="361" font-size="24" font-weight="700" fill="#10294e" text-anchor="middle" >v3 · 347 h, by iteration</text>
+<path d="M1756,376 V388" stroke="#52627b" stroke-width="2"/>
+<text x="1756" y="412" font-size="20" font-weight="400" fill="#52627b" text-anchor="middle" >50k</text>
+<path d="M2172,376 V388" stroke="#52627b" stroke-width="2"/>
+<text x="2172" y="412" font-size="20" font-weight="400" fill="#52627b" text-anchor="middle" >100k</text>
+<path d="M2588,376 V388" stroke="#52627b" stroke-width="2"/>
+<text x="2588" y="412" font-size="20" font-weight="400" fill="#52627b" text-anchor="middle" >150k</text>
+<path d="M3003,376 V388" stroke="#52627b" stroke-width="2"/>
+<text x="3003" y="412" font-size="20" font-weight="400" fill="#52627b" text-anchor="middle" >200k</text>
+<rect x="175" y="440" width="2870" height="238" rx="10" fill="#fbfcfe" stroke="#e3e9f2" stroke-width="1.5" />
+<text x="195" y="484" font-size="24" font-weight="800" fill="#2459ba" text-anchor="start" >WHAT THE NETS SEE</text>
+<path d="M620,565 H3045.0" stroke="#c6d3e5" stroke-width="2"/>
+<rect x="175" y="690" width="2870" height="238" rx="10" fill="white" stroke="#e3e9f2" stroke-width="1.5" />
+<text x="195" y="734" font-size="24" font-weight="800" fill="#7949b7" text-anchor="start" >THE POLICY NET</text>
+<path d="M620,815 H3045.0" stroke="#c6d3e5" stroke-width="2"/>
+<rect x="175" y="940" width="2870" height="238" rx="10" fill="#fbfcfe" stroke="#e3e9f2" stroke-width="1.5" />
+<text x="195" y="984" font-size="24" font-weight="800" fill="#b85c12" text-anchor="start" >THE CRITIC</text>
+<path d="M620,1065 H3045.0" stroke="#c6d3e5" stroke-width="2"/>
+<rect x="175" y="1190" width="2870" height="238" rx="10" fill="white" stroke="#e3e9f2" stroke-width="1.5" />
+<text x="195" y="1234" font-size="24" font-weight="800" fill="#9d7115" text-anchor="start" >BELIEF ABOUT THE OPPONENT</text>
+<path d="M620,1315 H3045.0" stroke="#c6d3e5" stroke-width="2"/>
+<rect x="175" y="1440" width="2870" height="238" rx="10" fill="#fbfcfe" stroke="#e3e9f2" stroke-width="1.5" />
+<text x="195" y="1484" font-size="24" font-weight="800" fill="#18805c" text-anchor="start" >OPPONENTS &amp; CURRICULUM</text>
+<path d="M620,1565 H3045.0" stroke="#c6d3e5" stroke-width="2"/>
+<rect x="175" y="1690" width="2870" height="238" rx="10" fill="white" stroke="#e3e9f2" stroke-width="1.5" />
+<text x="195" y="1734" font-size="24" font-weight="800" fill="#b3261e" text-anchor="start" >THE OPTIMISER</text>
+<path d="M620,1815 H3045.0" stroke="#c6d3e5" stroke-width="2"/>
+<path d="M970,376 V1928" stroke="#10294e" stroke-width="7"/>
+<text x="970" y="316" font-size="22" font-weight="700" fill="#10294e" text-anchor="middle" >restart</text>
+<path d="M1330,376 V1928" stroke="#10294e" stroke-width="7"/>
+<text x="1330" y="316" font-size="22" font-weight="700" fill="#10294e" text-anchor="middle" >restart (warm)</text>
+<text x="630" y="483" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >a smooth &#x27;cards left&#x27; number;</text>
+<text x="630" y="511" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >piles, stack targets and search</text>
+<text x="630" y="539" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >lists not shown</text>
+<polygon points="936.551724137931,551 950.551724137931,565 936.551724137931,579 922.551724137931,565" fill="#2459ba" stroke="#2459ba" stroke-width="3.5"/>
+<text x="921" y="609" font-size="22" font-weight="400" fill="#142a44" text-anchor="end" >deckout clock added</text>
+<text x="921" y="637" font-size="22" font-weight="400" fill="#142a44" text-anchor="end" >mid-run: ignored</text>
+<text x="1150" y="609" font-size="22" font-weight="400" fill="#142a44" text-anchor="middle" >same clock, trained from</text>
+<text x="1150" y="637" font-size="22" font-weight="400" fill="#142a44" text-anchor="middle" >scratch: used</text>
+<polygon points="2379.6341463414633,551 2393.6341463414633,565 2379.6341463414633,579 2365.6341463414633,565" fill="#2459ba" stroke="#2459ba" stroke-width="3.5"/>
+<text x="2380" y="511" font-size="22" font-weight="400" fill="#142a44" text-anchor="middle" >inputs widened in place: piles,</text>
+<text x="2380" y="539" font-size="22" font-weight="400" fill="#142a44" text-anchor="middle" >targets, context</text>
+<text x="2380" y="609" font-size="22" font-weight="700" fill="#2459ba" text-anchor="middle" >+8 pp, the biggest gain of</text>
+<text x="2380" y="637" font-size="22" font-weight="700" fill="#2459ba" text-anchor="middle" >the run</text>
+<text x="630" y="761" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >flat network, 92% of its</text>
+<text x="630" y="789" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >weights in one input layer</text>
+<text x="992" y="859" font-size="22" font-weight="700" fill="#7949b7" text-anchor="start" >entity network: one shared card</text>
+<text x="992" y="887" font-size="22" font-weight="700" fill="#7949b7" text-anchor="start" >reader, pooled per zone</text>
+<circle cx="1150.0" cy="815" r="13" fill="white" stroke="#7949b7" stroke-width="3"/><path d="M1144.0,809 L1156.0,821 M1156.0,809 L1144.0,821" stroke="#7949b7" stroke-width="3"/>
+<text x="1150" y="761" font-size="22" font-weight="400" fill="#142a44" text-anchor="middle" >attention: no gain at 8×</text>
+<text x="1150" y="789" font-size="22" font-weight="400" fill="#142a44" text-anchor="middle" >the cost</text>
+<text x="630" y="1011" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >saw both hands and the</text>
+<text x="630" y="1039" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >hidden library order</text>
+<text x="992" y="1109" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >its edge over an honest</text>
+<text x="992" y="1137" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >critic shrank to nothing</text>
+<polygon points="1735.3770243902438,1051 1749.3770243902438,1065 1735.3770243902438,1079 1721.3770243902438,1065" fill="#b85c12" stroke="#b85c12" stroke-width="3.5"/>
+<text x="1751" y="1011" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >swapped for a critic that sees both</text>
+<text x="1751" y="1039" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >hands only, and does better</text>
+<circle cx="1994.5536585365853" cy="1065" r="13" fill="white" stroke="#b85c12" stroke-width="3"/><path d="M1988.5536585365853,1059 L2000.5536585365853,1071 M2000.5536585365853,1059 L1988.5536585365853,1071" stroke="#b85c12" stroke-width="3"/>
+<text x="2011" y="1109" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >heavy consistency loss</text>
+<text x="2011" y="1137" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >stalled the run</text>
+<polygon points="2870.823853658537,1051 2884.823853658537,1065 2870.823853658537,1079 2856.823853658537,1065" fill="#b85c12" stroke="#b85c12" stroke-width="3.5"/>
+<text x="2855" y="1011" font-size="22" font-weight="400" fill="#142a44" text-anchor="end" >a light consistency loss</text>
+<text x="2855" y="1039" font-size="22" font-weight="400" fill="#142a44" text-anchor="end" >on payment steps</text>
+<text x="630" y="1261" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >a learned net guessing the</text>
+<text x="630" y="1289" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >opponent&#x27;s hand</text>
+<circle cx="1150.0" cy="1315" r="13" fill="white" stroke="#9d7115" stroke-width="3"/><path d="M1144.0,1309 L1156.0,1321 M1156.0,1309 L1144.0,1321" stroke="#9d7115" stroke-width="3"/>
+<text x="1150" y="1359" font-size="22" font-weight="400" fill="#142a44" text-anchor="middle" >imitation learning: copies</text>
+<text x="1150" y="1387" font-size="22" font-weight="400" fill="#142a44" text-anchor="middle" >moves, still loses</text>
+<text x="1352" y="1261" font-size="22" font-weight="700" fill="#9d7115" text-anchor="start" >replaced by plain card counting:</text>
+<text x="1352" y="1289" font-size="22" font-weight="700" fill="#9d7115" text-anchor="start" >no parameters, a third faster</text>
+<text x="630" y="1455" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >7 hand-built scenarios in</text>
+<text x="630" y="1483" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >positions no real game</text>
+<text x="630" y="1511" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >reaches; past selves 2 h</text>
+<text x="630" y="1539" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >apart</text>
+<polygon points="1725.4381219512195,1551 1739.4381219512195,1565 1725.4381219512195,1579 1711.4381219512195,1565" fill="#18805c" stroke="#18805c" stroke-width="3.5"/>
+<text x="1741" y="1609" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >scenarios sampled from real</text>
+<text x="1741" y="1637" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >games, 10 → 18</text>
+<polygon points="2632.7226829268293,1551 2646.7226829268293,1565 2632.7226829268293,1579 2618.7226829268293,1565" fill="#18805c" stroke="#18805c" stroke-width="3.5"/>
+<text x="2617" y="1511" font-size="22" font-weight="400" fill="#142a44" text-anchor="end" >scenarios played against</text>
+<text x="2617" y="1539" font-size="22" font-weight="400" fill="#142a44" text-anchor="end" >itself, not a bot</text>
+<polygon points="2706.4951219512195,1551 2720.4951219512195,1565 2706.4951219512195,1579 2692.4951219512195,1565" fill="#18805c" stroke="#18805c" stroke-width="3.5"/>
+<text x="2722" y="1609" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >scenario share cut:</text>
+<text x="2722" y="1637" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >lessons learned</text>
+<polygon points="2870.823853658537,1551 2884.823853658537,1565 2870.823853658537,1579 2856.823853658537,1565" fill="#18805c" stroke="#18805c" stroke-width="3.5"/>
+<text x="2887" y="1511" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >past selves spaced</text>
+<text x="2887" y="1539" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >16 h apart</text>
+<text x="630" y="1761" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >one learning rate for 200k</text>
+<text x="630" y="1789" font-size="22" font-weight="400" fill="#142a44" text-anchor="start" >iterations, no schedule</text>
+<rect x="2604" y="1805" width="267" height="20" rx="6" fill="#fde3e1" stroke="none" stroke-width="0" />
+<text x="2614" y="1822" font-size="18" font-weight="600" fill="#b3261e" text-anchor="start" >30k iterations of churn</text>
+<polygon points="2870.823853658537,1801 2884.823853658537,1815 2870.823853658537,1829 2856.823853658537,1815" fill="#b3261e" stroke="#b3261e" stroke-width="3.5"/>
+<text x="2855" y="1761" font-size="22" font-weight="700" fill="#b3261e" text-anchor="end" >learning rate halved: +3</text>
+<text x="2855" y="1789" font-size="22" font-weight="700" fill="#b3261e" text-anchor="end" >pp with the league change</text>
+<circle cx="2976.259390243902" cy="1815" r="13" fill="white" stroke="#b3261e" stroke-width="3"/><path d="M2970.259390243902,1809 L2982.259390243902,1821 M2982.259390243902,1809 L2970.259390243902,1821" stroke="#b3261e" stroke-width="3"/>
+<text x="2960" y="1859" font-size="22" font-weight="400" fill="#142a44" text-anchor="end" >entropy reheat: no harm,</text>
+<text x="2960" y="1887" font-size="22" font-weight="400" fill="#142a44" text-anchor="end" >no gain</text>
+<g transform="translate(191,1976)"><polygon points="0,-14 14,0 0,14 -14,0" fill="#10294e" stroke="#10294e" stroke-width="3.5"/>
+</g>
+<text x="223" y="1984" font-size="24" font-weight="400" fill="#142a44" text-anchor="start" >changed in place, training continued</text>
+<g transform="translate(951,1976)"><path d="M0,-16 V16" stroke="#10294e" stroke-width="7"/></g>
+<text x="983" y="1984" font-size="24" font-weight="400" fill="#142a44" text-anchor="start" >restarted from scratch</text>
+<g transform="translate(1711,1976)"><circle cx="0" cy="0" r="13" fill="white" stroke="#10294e" stroke-width="3"/><path d="M-6,-6 L6,6 M6,-6 L-6,6" stroke="#10294e" stroke-width="3"/>
+</g>
+<text x="1743" y="1984" font-size="24" font-weight="400" fill="#142a44" text-anchor="start" >tried, measured, dropped</text>
+<text x="175" y="2030" font-size="25" font-weight="400" fill="#52627b" text-anchor="start" ></text>
+<text x="3045" y="2030" font-size="25" font-weight="400" fill="#52627b" text-anchor="end" >05 / 05</text>
+</g></svg>

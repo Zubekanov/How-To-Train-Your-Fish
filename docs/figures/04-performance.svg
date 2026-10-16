@@ -1,0 +1,164 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3200" height="1978" viewBox="0 0 3200 1978"><title>04 · Performance</title><defs><marker id="arrow-2459ba" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#2459ba"/></marker><marker id="arrow-18805c" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#18805c"/></marker><marker id="arrow-7949b7" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#7949b7"/></marker><marker id="arrow-b85c12" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#b85c12"/></marker><marker id="arrow-52627b" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#52627b"/></marker><marker id="arrow-9d7115" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#9d7115"/></marker><marker id="arrow-10294e" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#10294e"/></marker><marker id="arrow-b3261e" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#b3261e"/></marker><marker id="arrow-142a44" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#142a44"/></marker></defs><rect width="3200" height="1978" fill="white"/><g font-family="Arial, Helvetica, sans-serif" id="figure-body"><g id="figure-header" font-family="Arial, Helvetica, sans-serif"><rect width="3200" height="240" fill="#10294e"/><text x="175" y="64" font-size="42" font-weight="800" fill="white" text-anchor="start" >HOW TO TRAIN YOUR FISH</text>
+<text x="3045" y="64" font-size="32" font-weight="600" fill="#91e0d0" text-anchor="end" >MASKED PPO SELF-PLAY · PFSP LEAGUE · SCENARIO CURRICULUM</text>
+<text x="175" y="147" font-size="58" font-weight="700" fill="white" text-anchor="start" >04 · PERFORMANCE</text>
+<text x="175" y="206" font-size="32" font-weight="400" fill="#dce6f4" text-anchor="start" >How strong the released agent is, how it got there, and which habits it lost along the way</text>
+</g>
+<text x="175" y="310" font-size="34" font-weight="800" fill="#10294e" text-anchor="start" >WIN-RATE vs THE STRONGEST SCRIPTED OPPONENT, through the v3 run</text>
+<rect x="640" y="420" width="2405" height="580" rx="0" fill="#fbfcfe" stroke="#d6deea" stroke-width="1.5" />
+<path d="M640,959 H3045" stroke="#e3e9f2" stroke-width="1.5"/>
+<text x="624" y="968" font-size="24" font-weight="400" fill="#52627b" text-anchor="end" >0.2</text>
+<path d="M640,876 H3045" stroke="#e3e9f2" stroke-width="1.5"/>
+<text x="624" y="885" font-size="24" font-weight="400" fill="#52627b" text-anchor="end" >0.3</text>
+<path d="M640,793 H3045" stroke="#e3e9f2" stroke-width="1.5"/>
+<text x="624" y="802" font-size="24" font-weight="400" fill="#52627b" text-anchor="end" >0.4</text>
+<path d="M640,710 H3045" stroke="#e3e9f2" stroke-width="1.5"/>
+<text x="624" y="719" font-size="24" font-weight="400" fill="#52627b" text-anchor="end" >0.5</text>
+<path d="M640,627 H3045" stroke="#e3e9f2" stroke-width="1.5"/>
+<text x="624" y="636" font-size="24" font-weight="400" fill="#52627b" text-anchor="end" >0.6</text>
+<path d="M640,544 H3045" stroke="#e3e9f2" stroke-width="1.5"/>
+<text x="624" y="553" font-size="24" font-weight="400" fill="#52627b" text-anchor="end" >0.7</text>
+<path d="M640,461 H3045" stroke="#e3e9f2" stroke-width="1.5"/>
+<text x="624" y="470" font-size="24" font-weight="400" fill="#52627b" text-anchor="end" >0.8</text>
+<path d="M640,710 H3045" stroke="#52627b" stroke-width="2" stroke-dasharray="8,8"/>
+<text x="654" y="700" font-size="22" font-weight="400" fill="#52627b" text-anchor="start" >even</text>
+<path d="M640,1000 V1010" stroke="#52627b" stroke-width="2"/>
+<text x="640" y="1038" font-size="24" font-weight="400" fill="#52627b" text-anchor="middle" >0</text>
+<path d="M1213,1000 V1010" stroke="#52627b" stroke-width="2"/>
+<text x="1213" y="1038" font-size="24" font-weight="400" fill="#52627b" text-anchor="middle" >50k</text>
+<path d="M1785,1000 V1010" stroke="#52627b" stroke-width="2"/>
+<text x="1785" y="1038" font-size="24" font-weight="400" fill="#52627b" text-anchor="middle" >100k</text>
+<path d="M2358,1000 V1010" stroke="#52627b" stroke-width="2"/>
+<text x="2358" y="1038" font-size="24" font-weight="400" fill="#52627b" text-anchor="middle" >150k</text>
+<path d="M2930,1000 V1010" stroke="#52627b" stroke-width="2"/>
+<text x="2930" y="1038" font-size="24" font-weight="400" fill="#52627b" text-anchor="middle" >200k</text>
+<text x="3045" y="1070" font-size="22" font-weight="400" fill="#52627b" text-anchor="end" >iterations</text>
+<path d="M1184,420 V1000" stroke="#7949b7" stroke-width="2.5" stroke-dasharray="7,8" opacity="0.8"/>
+<circle cx="1184" cy="392" r="18" fill="#7949b7"/><text x="1184" y="400" font-size="22" font-weight="800" fill="white" text-anchor="middle" >1</text>
+<path d="M2072,420 V1000" stroke="#2459ba" stroke-width="2.5" stroke-dasharray="7,8" opacity="0.8"/>
+<circle cx="2072" cy="392" r="18" fill="#2459ba"/><text x="2072" y="400" font-size="22" font-weight="800" fill="white" text-anchor="middle" >2</text>
+<path d="M2420,420 V1000" stroke="#18805c" stroke-width="2.5" stroke-dasharray="7,8" opacity="0.8"/>
+<circle cx="2420" cy="392" r="18" fill="#18805c"/><text x="2420" y="400" font-size="22" font-weight="800" fill="white" text-anchor="middle" >3</text>
+<path d="M2748,420 V1000" stroke="#b85c12" stroke-width="2.5" stroke-dasharray="7,8" opacity="0.8"/>
+<circle cx="2748" cy="392" r="18" fill="#b85c12"/><text x="2748" y="400" font-size="22" font-weight="800" fill="white" text-anchor="middle" >4</text>
+<path d="M 812,950 L 1171,876 L 1875,685 L 2045,630 L 2192,592 L 2506,538 L 2748,524 L 2888,507" fill="none" stroke="#18805c" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+<circle cx="812" cy="950" r="10" fill="#18805c" stroke="#18805c" stroke-width="3"/>
+<circle cx="1171" cy="876" r="10" fill="#18805c" stroke="#18805c" stroke-width="3"/>
+<circle cx="1875" cy="685" r="10" fill="#18805c" stroke="#18805c" stroke-width="3"/>
+<circle cx="2045" cy="630" r="10" fill="#18805c" stroke="#18805c" stroke-width="3"/>
+<circle cx="2192" cy="592" r="10" fill="#18805c" stroke="#18805c" stroke-width="3"/>
+<circle cx="2506" cy="538" r="10" fill="#18805c" stroke="#18805c" stroke-width="3"/>
+<circle cx="2748" cy="524" r="10" fill="#18805c" stroke="#18805c" stroke-width="3"/>
+<circle cx="2888" cy="507" r="10" fill="#18805c" stroke="#18805c" stroke-width="3"/>
+<text x="834" y="959" font-size="24" font-weight="600" fill="#52627b" text-anchor="start" >0.21</text>
+<text x="2172" y="568" font-size="26" font-weight="800" fill="#2459ba" text-anchor="end" >+8 pp</text>
+<text x="2816" y="553" font-size="26" font-weight="800" fill="#b85c12" text-anchor="middle" >+3 pp</text>
+<circle cx="2888" cy="491" r="14" fill="#10294e" stroke="#10294e" stroke-width="3"/>
+<text x="2858" y="461" font-size="30" font-weight="800" fill="#10294e" text-anchor="end" >0.764 released</text>
+<text x="175" y="1130" font-size="34" font-weight="800" fill="#10294e" text-anchor="start" >THE RELEASED AGENT vs EACH OPPONENT</text>
+<text x="175" y="1164" font-size="24" font-weight="400" fill="#52627b" text-anchor="start" >win-rate with its 95% range</text>
+<rect x="640" y="1200" width="920" height="398" rx="0" fill="#fbfcfe" stroke="#d6deea" stroke-width="1.5" />
+<path d="M640,1200 V1598" stroke="#e3e9f2" stroke-width="1.5"/>
+<text x="640" y="1628" font-size="22" font-weight="400" fill="#52627b" text-anchor="middle" >0.4</text>
+<path d="M793,1200 V1598" stroke="#9fb0c8" stroke-width="2" stroke-dasharray="8,8"/>
+<text x="793" y="1628" font-size="22" font-weight="400" fill="#52627b" text-anchor="middle" >0.5</text>
+<path d="M947,1200 V1598" stroke="#e3e9f2" stroke-width="1.5"/>
+<text x="947" y="1628" font-size="22" font-weight="400" fill="#52627b" text-anchor="middle" >0.6</text>
+<path d="M1100,1200 V1598" stroke="#e3e9f2" stroke-width="1.5"/>
+<text x="1100" y="1628" font-size="22" font-weight="400" fill="#52627b" text-anchor="middle" >0.7</text>
+<path d="M1253,1200 V1598" stroke="#e3e9f2" stroke-width="1.5"/>
+<text x="1253" y="1628" font-size="22" font-weight="400" fill="#52627b" text-anchor="middle" >0.8</text>
+<path d="M1407,1200 V1598" stroke="#e3e9f2" stroke-width="1.5"/>
+<text x="1407" y="1628" font-size="22" font-weight="400" fill="#52627b" text-anchor="middle" >0.9</text>
+<path d="M1560,1200 V1598" stroke="#e3e9f2" stroke-width="1.5"/>
+<text x="1560" y="1628" font-size="22" font-weight="400" fill="#52627b" text-anchor="middle" >1.0</text>
+<text x="801" y="1226" font-size="20" font-weight="400" fill="#52627b" text-anchor="start" >even</text>
+<text x="622" y="1259" font-size="25" font-weight="400" fill="#142a44" text-anchor="end" >random play</text>
+<path d="M1451,1250 H1560 M1451,1243 V1257 M1560,1243 V1257" stroke="#18805c" stroke-width="3"/>
+<circle cx="1560" cy="1250" r="10" fill="#18805c" stroke="#18805c" stroke-width="3"/>
+<text x="1580" y="1259" font-size="26" font-weight="600" fill="#18805c" text-anchor="start" >1.00</text>
+<text x="622" y="1313" font-size="25" font-weight="400" fill="#142a44" text-anchor="end" >always attack</text>
+<path d="M1453,1304 H1552 M1453,1297 V1311 M1552,1297 V1311" stroke="#18805c" stroke-width="3"/>
+<circle cx="1529" cy="1304" r="10" fill="#18805c" stroke="#18805c" stroke-width="3"/>
+<text x="1580" y="1313" font-size="26" font-weight="600" fill="#18805c" text-anchor="start" >0.98</text>
+<text x="622" y="1367" font-size="25" font-weight="400" fill="#142a44" text-anchor="end" >heuristic v1.0</text>
+<path d="M1411,1358 H1488 M1411,1351 V1365 M1488,1351 V1365" stroke="#18805c" stroke-width="3"/>
+<circle cx="1456" cy="1358" r="10" fill="#18805c" stroke="#18805c" stroke-width="3"/>
+<text x="1580" y="1367" font-size="26" font-weight="600" fill="#18805c" text-anchor="start" >0.93</text>
+<text x="622" y="1421" font-size="25" font-weight="400" fill="#142a44" text-anchor="end" >heuristic v1.1</text>
+<path d="M1271,1412 H1379 M1271,1405 V1419 M1379,1405 V1419" stroke="#18805c" stroke-width="3"/>
+<circle cx="1330" cy="1412" r="10" fill="#18805c" stroke="#18805c" stroke-width="3"/>
+<text x="1580" y="1421" font-size="26" font-weight="600" fill="#18805c" text-anchor="start" >0.85</text>
+<text x="622" y="1475" font-size="25" font-weight="400" fill="#142a44" text-anchor="end" >heuristic v1.2</text>
+<path d="M1152,1466 H1276 M1152,1459 V1473 M1276,1459 V1473" stroke="#18805c" stroke-width="3"/>
+<circle cx="1218" cy="1466" r="10" fill="#18805c" stroke="#18805c" stroke-width="3"/>
+<text x="1580" y="1475" font-size="26" font-weight="600" fill="#18805c" text-anchor="start" >0.78</text>
+<text x="622" y="1529" font-size="25" font-weight="700" fill="#142a44" text-anchor="end" >heuristic v1.3 (strongest)</text>
+<path d="M1171,1520 H1224 M1171,1513 V1527 M1224,1513 V1527" stroke="#10294e" stroke-width="3"/>
+<circle cx="1198" cy="1520" r="12" fill="#10294e" stroke="#10294e" stroke-width="3"/>
+<text x="1580" y="1529" font-size="26" font-weight="800" fill="#10294e" text-anchor="start" >0.76</text>
+<text x="622" y="1583" font-size="25" font-weight="400" fill="#142a44" text-anchor="end" >an earlier copy of itself</text>
+<path d="M711,1574 H861 M711,1567 V1581 M861,1567 V1581" stroke="#18805c" stroke-width="3"/>
+<circle cx="786" cy="1574" r="10" fill="#18805c" stroke="#18805c" stroke-width="3"/>
+<text x="1580" y="1583" font-size="26" font-weight="600" fill="#18805c" text-anchor="start" >0.49</text>
+<text x="175" y="1688" font-size="24" font-weight="400" fill="#142a44" text-anchor="start" >Against itself it is seat-fair: 0.501 / 0.499 across 1,600 mirror games.</text>
+<text x="1728" y="1130" font-size="34" font-weight="800" fill="#10294e" text-anchor="start" >THREE HABITS IT LOST</text>
+<text x="1728" y="1164" font-size="24" font-weight="400" fill="#52627b" text-anchor="start" >same iteration axis as the curve above · each measured over 2,000 games</text>
+<rect x="1728" y="1200" width="1317" height="170" rx="0" fill="#fbfcfe" stroke="#d6deea" stroke-width="1.5" />
+<text x="1744" y="1232" font-size="25" font-weight="700" fill="#10294e" text-anchor="start" >throwing away a Fact-or-Fiction split (0–5)</text>
+<text x="3029" y="1232" font-size="22" font-weight="400" fill="#52627b" text-anchor="end" >% of splits</text>
+<path d="M2072,1200 V1370" stroke="#2459ba" stroke-width="2" stroke-dasharray="6,8" opacity="0.6"/>
+<path d="M2420,1200 V1370" stroke="#18805c" stroke-width="2" stroke-dasharray="6,8" opacity="0.6"/>
+<path d="M2748,1200 V1370" stroke="#b85c12" stroke-width="2" stroke-dasharray="6,8" opacity="0.6"/>
+<path d="M 1875,1264 L 2045,1266 L 2192,1345 L 2506,1346 L 2888,1346" fill="none" stroke="#18805c" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+<circle cx="1875" cy="1264" r="8" fill="#18805c" stroke="#18805c" stroke-width="2.5"/>
+<circle cx="2045" cy="1266" r="8" fill="#18805c" stroke="#18805c" stroke-width="2.5"/>
+<circle cx="2192" cy="1345" r="8" fill="#18805c" stroke="#18805c" stroke-width="2.5"/>
+<circle cx="2506" cy="1346" r="8" fill="#18805c" stroke="#18805c" stroke-width="2.5"/>
+<circle cx="2888" cy="1346" r="8" fill="#18805c" stroke="#18805c" stroke-width="2.5"/>
+<text x="1859" y="1273" font-size="24" font-weight="700" fill="#52627b" text-anchor="end" >17.4%</text>
+<text x="2906" y="1355" font-size="24" font-weight="700" fill="#18805c" text-anchor="start" >0.1%</text>
+<rect x="1728" y="1394" width="1317" height="170" rx="0" fill="#fbfcfe" stroke="#d6deea" stroke-width="1.5" />
+<text x="1744" y="1426" font-size="25" font-weight="700" fill="#10294e" text-anchor="start" >telegraphing a trick in the main phase</text>
+<text x="3029" y="1426" font-size="22" font-weight="400" fill="#52627b" text-anchor="end" >% of casts</text>
+<path d="M2072,1394 V1564" stroke="#2459ba" stroke-width="2" stroke-dasharray="6,8" opacity="0.6"/>
+<path d="M2420,1394 V1564" stroke="#18805c" stroke-width="2" stroke-dasharray="6,8" opacity="0.6"/>
+<path d="M2748,1394 V1564" stroke="#b85c12" stroke-width="2" stroke-dasharray="6,8" opacity="0.6"/>
+<path d="M 2045,1455 L 2192,1532 L 2506,1535 L 2748,1530 L 2888,1536" fill="none" stroke="#18805c" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+<circle cx="2045" cy="1455" r="8" fill="#18805c" stroke="#18805c" stroke-width="2.5"/>
+<circle cx="2192" cy="1532" r="8" fill="#18805c" stroke="#18805c" stroke-width="2.5"/>
+<circle cx="2506" cy="1535" r="8" fill="#18805c" stroke="#18805c" stroke-width="2.5"/>
+<circle cx="2748" cy="1530" r="8" fill="#18805c" stroke="#18805c" stroke-width="2.5"/>
+<circle cx="2888" cy="1536" r="8" fill="#18805c" stroke="#18805c" stroke-width="2.5"/>
+<text x="2029" y="1464" font-size="24" font-weight="700" fill="#52627b" text-anchor="end" >22.5%</text>
+<text x="2906" y="1545" font-size="24" font-weight="700" fill="#18805c" text-anchor="start" >1%</text>
+<rect x="1728" y="1588" width="1317" height="170" rx="0" fill="#fbfcfe" stroke="#d6deea" stroke-width="1.5" />
+<text x="1744" y="1620" font-size="25" font-weight="700" fill="#10294e" text-anchor="start" >losing by running out of cards</text>
+<text x="3029" y="1620" font-size="22" font-weight="400" fill="#52627b" text-anchor="end" >per 2,000 games</text>
+<path d="M2072,1588 V1758" stroke="#2459ba" stroke-width="2" stroke-dasharray="6,8" opacity="0.6"/>
+<path d="M2420,1588 V1758" stroke="#18805c" stroke-width="2" stroke-dasharray="6,8" opacity="0.6"/>
+<path d="M2748,1588 V1758" stroke="#b85c12" stroke-width="2" stroke-dasharray="6,8" opacity="0.6"/>
+<path d="M 2192,1649 L 2506,1688 L 2748,1680 L 2888,1687" fill="none" stroke="#18805c" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+<circle cx="2192" cy="1649" r="8" fill="#18805c" stroke="#18805c" stroke-width="2.5"/>
+<circle cx="2506" cy="1688" r="8" fill="#18805c" stroke="#18805c" stroke-width="2.5"/>
+<circle cx="2748" cy="1680" r="8" fill="#18805c" stroke="#18805c" stroke-width="2.5"/>
+<circle cx="2888" cy="1687" r="8" fill="#18805c" stroke="#18805c" stroke-width="2.5"/>
+<text x="2176" y="1658" font-size="24" font-weight="700" fill="#52627b" text-anchor="end" >127</text>
+<text x="2906" y="1696" font-size="24" font-weight="700" fill="#18805c" text-anchor="start" >70</text>
+<path d="M1785,1758 V1768" stroke="#52627b" stroke-width="2"/>
+<text x="1785" y="1794" font-size="22" font-weight="400" fill="#52627b" text-anchor="middle" >100k</text>
+<path d="M2358,1758 V1768" stroke="#52627b" stroke-width="2"/>
+<text x="2358" y="1794" font-size="22" font-weight="400" fill="#52627b" text-anchor="middle" >150k</text>
+<path d="M2930,1758 V1768" stroke="#52627b" stroke-width="2"/>
+<text x="2930" y="1794" font-size="22" font-weight="400" fill="#52627b" text-anchor="middle" >200k</text>
+<circle cx="193" cy="1840" r="18" fill="#7949b7"/><text x="193" y="1848" font-size="22" font-weight="800" fill="white" text-anchor="middle" >1</text>
+<text x="223" y="1848" font-size="24" font-weight="600" fill="#7949b7" text-anchor="start" >critic swapped</text>
+<circle cx="913" cy="1840" r="18" fill="#2459ba"/><text x="913" y="1848" font-size="22" font-weight="800" fill="white" text-anchor="middle" >2</text>
+<text x="943" y="1848" font-size="24" font-weight="600" fill="#2459ba" text-anchor="start" >inputs widened</text>
+<circle cx="1633" cy="1840" r="18" fill="#18805c"/><text x="1633" y="1848" font-size="22" font-weight="800" fill="white" text-anchor="middle" >3</text>
+<text x="1663" y="1848" font-size="24" font-weight="600" fill="#18805c" text-anchor="start" >scenario self-play</text>
+<circle cx="2353" cy="1840" r="18" fill="#b85c12"/><text x="2353" y="1848" font-size="22" font-weight="800" fill="white" text-anchor="middle" >4</text>
+<text x="2383" y="1848" font-size="24" font-weight="600" fill="#b85c12" text-anchor="start" >learning rate halved, league spaced</text>
+<text x="175" y="1908" font-size="28" font-weight="700" fill="#10294e" text-anchor="start" >54.6M games · 12.6B decisions · 347 hours · one rented RTX 4090</text>
+<text x="175" y="1938" font-size="25" font-weight="400" fill="#52627b" text-anchor="start" ></text>
+<text x="3045" y="1938" font-size="25" font-weight="400" fill="#52627b" text-anchor="end" >04 / 05</text>
+</g></svg>
